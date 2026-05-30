@@ -1,0 +1,124 @@
+{
+  "schema_version": "1.0",
+  "scene_name": "tread_track",
+  "producer": "terrain_authority (NumPy Tier-2 surrogate)",
+  "grid": {
+    "width": 256,
+    "height": 256,
+    "cell_m": 0.02,
+    "order": "row-major-C"
+  },
+  "world_bounds_m": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 5.12,
+    "y1": 5.12
+  },
+  "gravity_m_s2": 1.62,
+  "fields": {
+    "heightmap": {
+      "file": "heightmap.rf32",
+      "dtype": "<f4",
+      "units": "m"
+    },
+    "mass_areal": {
+      "file": "mass_areal.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^2"
+    },
+    "density": {
+      "file": "density.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^3"
+    },
+    "disturbance": {
+      "file": "disturbance.rf32",
+      "dtype": "<f4",
+      "units": "1 (normalized)"
+    },
+    "state_label": {
+      "file": "state_label.r8",
+      "dtype": "u1",
+      "enum": [
+        "VIRGIN",
+        "TREAD",
+        "EXCAVATED",
+        "SPOIL",
+        "COMPACTED_BERM"
+      ]
+    }
+  },
+  "ice_present": false,
+  "height_range_m": [
+    -0.07907,
+    0.06493
+  ],
+  "clasts": [],
+  "active_zone": {
+    "min_rc": [
+      44,
+      34
+    ],
+    "max_rc": [
+      216,
+      191
+    ]
+  },
+  "quadtree": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 256,
+      "label": "ROOT"
+    },
+    {
+      "level": 1,
+      "row0": 44,
+      "col0": 34,
+      "size": 172,
+      "label": "ACTIVE"
+    }
+  ],
+  "notes": "TIME SERIES (driven-rover tread track). A wheel footprint is advanced along a 2-segment path and rover.wheel_pass is applied incrementally per frame, laying a VIRGIN->TREAD compaction trail (density up toward RHO_DEEP, rut sinks via height=datum+mass/density, disturbance bumped). Each tNNN/ is a full snapshot; mass conserved across the series (pure compaction, spec \u00a76).",
+  "time_series": {
+    "frame_count": 32,
+    "frame_cadence_steps": 1,
+    "frame_dirs": [
+      "t000",
+      "t001",
+      "t002",
+      "t003",
+      "t004",
+      "t005",
+      "t006",
+      "t007",
+      "t008",
+      "t009",
+      "t010",
+      "t011",
+      "t012",
+      "t013",
+      "t014",
+      "t015",
+      "t016",
+      "t017",
+      "t018",
+      "t019",
+      "t020",
+      "t021",
+      "t022",
+      "t023",
+      "t024",
+      "t025",
+      "t026",
+      "t027",
+      "t028",
+      "t029",
+      "t030",
+      "t031"
+    ],
+    "mass_conserved_kg": 5622.170407,
+    "mass_drift_kg": 0.0
+  }
+}

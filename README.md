@@ -106,6 +106,12 @@ Outputs:
   filmstrip is float32 raster-**storage** quantization (it recomputes mass from the saved `.rf32`
   rasters across 100 frames) — shown deliberately, to be honest about the on-disk contract.
 - [`viz/out/caveins.gif`](viz/out/caveins.gif) — 30-frame animated version of the same slump.
+- [`viz/out/tread_track.gif`](viz/out/tread_track.gif) / [`tread_track_filmstrip.png`](viz/out/tread_track_filmstrip.png)
+  — **driven-rover tread track** (the path-dependent showpiece, spec §6 / §2.1): a wheel footprint advances
+  along a 2-segment path, laying a VIRGIN→TREAD compaction trail (598→2362 TREAD cells over 32 frames). Mass
+  is **exactly conserved** (5622 kg, zero drift) — `rover.wheel_pass` is pure compaction, so the denser
+  column thins and the rut sinks (`height = datum + mass/density`). `viz/tread_track.py`, 32-frame
+  `samples/tread_track/` time series.
 
 ### D4 — layer-toggle Godot render sidecar (headless)
 Compositor that renders lunar-lit views with toggleable diagnostic layers (`heightmap`, `state`,
@@ -137,10 +143,12 @@ Outputs (all 1024×768 unless noted):
   boulders together**: a Pike-class bowl (lit rim, black interior — the spec §8 grazing-light hazard)
   ringed by a Golombek boulder field (clasts excluded from the fresh bowl, surface-snapped).
 - [`godot_sidecar/out/crater_boulders_rover.png`](godot_sidecar/out/crater_boulders_rover.png) /
-  [`rover_on_terrain.png`](godot_sidecar/out/rover_on_terrain.png) — the **real EZ-RASSOR chassis**
-  (`base_unit`, MIT, vendored — see [`THIRD_PARTY.md`](THIRD_PARTY.md)) loaded at runtime via
-  `GLTFDocument`, surface-snapped at a crater rim / on rolling terrain. Chassis only (no
-  wheels/drums yet — see §4 #11).
+  [`rover_on_terrain.png`](godot_sidecar/out/rover_on_terrain.png) — the **articulated EZ-RASSOR**
+  (chassis + 4 wheels + 2 arms + 2 bucket drums, MIT, vendored — see [`THIRD_PARTY.md`](THIRD_PARTY.md))
+  assembled at runtime via `GLTFDocument` from the EZ-RASSOR xacro kinematic tree (joint origins/axes
+  transcribed, Z-up→Y-up, mesh-only 0.35 scale), root-snapped to the surface on the crater rim amid the
+  boulder field / on rolling terrain. Front drum lowered (digging), back drum raised (transport). Static
+  pose — joints are fixed constants, not physics-driven yet (§4 #11).
 
 > Terrain meshing note: the active-zone mesh samples the heightmap **bilinearly** (not nearest), and
 > the far-field LOD plane recomputes per-vertex normals from the height gradient — without these the
@@ -148,8 +156,11 @@ Outputs (all 1024×768 unless noted):
 > `terrain.gd` / `terrain_farfield.gdshader`.
 
 ### Sample scenes (`samples/`, the frozen-contract corpus)
-`flat_compact`, `rolling_hills`, `crater`, `boulder_field`, and `crater_caveins` (102-frame
-`t000…t101` time series). All 256×256 at 2 cm/cell. See each `metadata.json` for parameters and citations.
+`flat_compact`, `rolling_hills`, `crater`, `boulder_field`, `crater_boulders` (crater + Golombek boulder
+field together), and two time series: `crater_caveins` (102-frame `t000…t101` rim slump) and `tread_track`
+(32-frame `t000…t031` driven-rover compaction trail). All 256×256 at 2 cm/cell. Raw frames of the two time
+series are regenerable (`terrain_authority.scenes`) and git-excluded except their bookends; the motion ships
+as the `viz/out/*.gif`. See each `metadata.json` for parameters and citations.
 
 ---
 
@@ -175,6 +186,7 @@ Regenerate the authority corpus, tests, and all viewer outputs:
 .venv/bin/python viz/groundtruth_viz.py samples/crater --turntable
 .venv/bin/python viz/groundtruth_viz.py samples/boulder_field
 .venv/bin/python viz/variety_panel.py
+.venv/bin/python viz/tread_track.py                 # driven-rover tread-track gif + filmstrip
 
 # 3) Godot render sidecar (D2 + D4) — six diagnostic layers + headline boulder render
 cd godot_sidecar
@@ -188,7 +200,7 @@ done
 # real EZ-RASSOR chassis (one-time: convert the vendored MIT mesh DAE -> glb)
 ../.venv/bin/python ../scripts/convert_rover_mesh.py
 ./render_layers.sh -- --scene ../samples/crater_boulders --layers terrain,clasts,rover \
-    --pose 1.9,2.5,6.7,2.7,-0.1,2.56 --out crater_boulders_rover.png
+    --pose 1.7,1.05,1.5,3.7,0.05,3.2 --size 1024x768 --out crater_boulders_rover.png
 ```
 
 `terrain_authority.tests` is authoritative: 7/7 checks pass (total mass constant across cut→dump→relax,
@@ -215,7 +227,7 @@ paper that anchors the eventual fix. Cite by filename in `papers/` (do not bulk-
 | 8 | **No ROS2 bridge; Y-up/Z-up TF trap named, not solved.** `INTERFACE.md` §3 documents the Godot Y-up ↔ ROS Z-up (REP-103) mapping but defers it. | Both bridge options (compiled module vs. rosbridge) are third-party/low-bus-factor; out of weekend scope by charter. The trap is named so it isn't a silent bug later. | §11 | — |
 | 9 | **Clasts are metadata refs, not carved into mass.** Golombek-SFD boulder field lives in `metadata.clasts`; uncovered clasts become Chrono rigid bodies, not regolith. | Spec §6 explicitly: "rocks are not a soil problem" — rigid-body contact is Chrono-native; don't let rocks drag the design toward DEM. | §6 | `rock-size-freq_abstract.txt` (Golombek 2003) |
 | 10 | **Ice/volatile field optional and inert.** Schema slot exists; no sublimation/frost optics or regime-flag switching modeled. | PSR effects are throttled hard (insulating regolith, sub-mm desiccated lag crust → no dramatic venting) and are an *optics* effect, gated on a charter PSR flag. | §5.2, §8 | `geosciences-15-00207-v3.pdf`, `FULLTEXT01.pdf` |
-| 11 | **Rover mesh is the EZ-RASSOR `base_unit` chassis only** — static, no wheels/drums/arms assembled, no URDF kinematic tree, no articulation. | A real RASSOR silhouette on the terrain proves the asset/import path; full kinematic assembly from the EZ-RASSOR xacro (4 wheels + 2 counter-rotating bucket drums) and articulation is a known follow-on. | §2, §11 | `docs/ezrassor_assets.md` |
+| 11 | **Rover is the full EZ-RASSOR assembled in a *static* pose.** Chassis + 4 wheels + 2 arms + 2 bucket drums are placed from the xacro kinematic tree (correct joint origins/axes, Z-up→Y-up, mesh-only 0.35 scale), but joint angles are **fixed constants — not driven by physics/Chrono state**, and ground-snap samples terrain height at **one point** (no per-wheel terrain following). Counter-rotation is noted as a control-layer convention (opposite-sign drum commands), not modeled. | The asset + kinematic-assembly path is fully proven and yields a recognizable articulated RASSOR for renders; live articulation belongs to the Chrono::Vehicle joint state (row #2), and per-wheel contact to the deformable-terrain coupling. | §2, §11 | `docs/ezrassor_assets.md` |
 
 ---
 

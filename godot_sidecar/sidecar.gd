@@ -26,6 +26,46 @@ extends Node3D
 const DEFAULT_OUT := "res://out/sidecar.png"
 const DEFAULT_LAYERS := "terrain,clasts"
 
+# --- Articulated EZ-RASSOR assembly (README §4 #11 follow-on) -----------------
+# Kinematic tree transcribed from the EZ-RASSOR URDF (docs/ezrassor_assets.md §3),
+# Z-up(meters)->Y-up via (x,y,z)_zup -> (x,z,-y)_yup. The URDF scale=0.35 macro
+# applies ONLY to the MESH geometry (baked into the glbs by convert_rover_mesh.py),
+# NOT to joint <origin> positions -- those are absolute meters and are mapped Z-up->
+# Y-up with NO scale (standard URDF semantics). So 0.35-scaled meshes hang at the
+# full-meter joint origins, giving the real stance: track 0.57 m (wheels outboard of
+# the 0.34 m-wide body), wheelbase 0.40 m, drum arms reaching ~0.59 m fore/aft.
+# Every continuous joint (4 wheels, 2 arms, 2 drums) rotates about the SAME local
+# axis after the Y-up map: URDF (0,1,0)_zup -> (0,0,-1)_yup, i.e. local -Z.
+const ROVER_JOINT_AXIS := Vector3(0, 0, -1)        # local spin/pitch axis (Y-up)
+const ROVER_SCALE := 0.35                          # URDF mesh scale macro (mesh-only)
+
+# Wheel pivot origins (Y-up m, unscaled): X fwd/back, Z left/right. r ~ 0.18, bottom y=-0.179.
+const WHEEL_ORIGINS := {
+	"LF": Vector3(0.20, 0.0, -0.285),
+	"RF": Vector3(0.20, 0.0, 0.285),
+	"LB": Vector3(-0.20, 0.0, -0.285),
+	"RB": Vector3(-0.20, 0.0, 0.285),
+}
+# Arm pivot origins (Y-up m) at base_link +-0.20 zup-X -> +-0.20 yup-X.
+const ARM_FRONT_ORIGIN := Vector3(0.20, 0.0, 0.0)
+const ARM_BACK_ORIGIN := Vector3(-0.20, 0.0, 0.0)
+# Drum pivot origin RELATIVE to its arm pivot (Y-up m): 0.388245 zup-X -> yup-X.
+const DRUM_FRONT_REL := Vector3(0.388245, 0.0, 0.0)
+const DRUM_BACK_REL := Vector3(-0.388245, 0.0, 0.0)
+
+# Default recognizable pose (radians). Wheels resting; FRONT arm lowered so its
+# drum reaches down toward the surface (digging-approach), BACK arm raised clear
+# (transport) so the two arms read as independently articulated.
+# DRUM SPINS are opposite-signed: the RASSOR signature "counter-rotating buckets"
+# is NOT a kinematic property (both URDF drum axes are +Y) -- it is a CONTROL-LAYER
+# convention produced by commanding opposite-sign drum velocities (sim_drums_driver;
+# ezrassor_assets.md §3). We mirror it here purely as a pose so the buckets read.
+const WHEEL_SPIN := 0.0                 # wheels resting flat
+const ARM_FRONT_PITCH := 0.20           # front arm lowered ~11.5deg, drum near surface
+const ARM_BACK_PITCH := 0.65            # back arm raised ~37deg, drum lifted clear
+const DRUM_FRONT_SPIN := 0.5            # +  (counter-rotation convention)
+const DRUM_BACK_SPIN := -0.5            # -  (opposite sign = counter-rotating)
+
 # Preload sibling scripts explicitly. In headless ad-hoc scene loads the global
 # class_name registry is not always warm, so we do not rely on it; preload is
 # deterministic. (The class_name decls remain for editor/reviewer clarity.)
@@ -232,33 +272,180 @@ func _build_clasts() -> void:
 # (proxy for slip x load; spec §8 "tie dust emission to disturbed-mass-rate").
 # Basic version: emitters seeded at the most-disturbed cells, lofted upward,
 # falling back under lunar g in ballistic arcs (no drag).
-# Layer (asset) — the real RASSOR chassis mesh from EZ-RASSOR (base_unit, MIT,
-# vendored; see THIRD_PARTY.md), converted DAE->glb by scripts/convert_rover_mesh.py.
+# Layer (asset) — the real EZ-RASSOR rover (MIT, vendored; see THIRD_PARTY.md),
+# assembled from the converted DAE->glb sub-parts by scripts/convert_rover_mesh.py.
 # Loaded at RUNTIME via GLTFDocument so it works headless with no editor import step.
+#
+# DEFAULT path = the FULL ARTICULATED rover: a rover-root Node3D carrying the
+# chassis (rover_body.glb, native base_link origin) + 4 wheels + 2 arms, each arm
+# carrying a drum, all placed at the §3 joint origins (Y-up, in unscaled meters --
+# only the MESHES are 0.35-scaled; joint origins are absolute). If the sub-part
+# glbs are missing it FALLS BACK to the chassis-only path (rover_base.glb, the
+# prior README #11 behavior) so the layer never hard-fails.
 func _build_rover() -> void:
-	var res_path := "res://assets/rover_base.glb"
-	if not FileAccess.file_exists(res_path):
-		print("sidecar: rover layer requested but %s missing (run scripts/convert_rover_mesh.py)" % res_path)
+	var body_path := "res://assets/rover_body.glb"
+	var have_parts := FileAccess.file_exists(body_path) \
+		and FileAccess.file_exists("res://assets/wheel.glb") \
+		and FileAccess.file_exists("res://assets/drum.glb") \
+		and FileAccess.file_exists("res://assets/drum_arm.glb")
+	if not have_parts:
+		_build_rover_chassis_only()
 		return
+
+	# One faintly-metallic grey for the whole rover (the DAEs carried flat material
+	# colors, no per-vertex); reads as hardware against the matte regolith.
+	var rmat := StandardMaterial3D.new()
+	rmat.albedo_color = Color(0.62, 0.63, 0.66)
+	rmat.metallic = 0.35
+	rmat.roughness = 0.55
+
+	var root := Node3D.new()
+	root.name = "RASSOR"
+
+	# Chassis (base_link). rover_body.glb keeps its native origin so the body floats
+	# above the wheel centers exactly as the URDF intends (body bottom ~ -0.06 m).
+	var body := _load_rover_glb(body_path)
+	if body == null:
+		_build_rover_chassis_only()
+		return
+	body.name = "body"
+	root.add_child(body)
+
+	# 4 wheels — pivot Node3D at the joint origin, spin about local axis, mesh child.
+	for key in WHEEL_ORIGINS.keys():
+		var w := _make_joint("wheel_" + String(key), "res://assets/wheel.glb",
+			WHEEL_ORIGINS[key], Basis.IDENTITY, WHEEL_SPIN, Basis.IDENTITY)
+		if w != null:
+			root.add_child(w)
+
+	# 2 arms. URDF origin rpy bakes into the pivot's REST basis; the link's visual
+	# rpy bakes into the mesh-child basis (so the arm mesh points the right way).
+	#   front: origin rpy(pi,0,0) -> pivot rest Rx(pi); visual identity.
+	#   back : origin rpy(0,0,0)  -> pivot rest identity; visual rpy(pi,0,pi) -> Rz(pi)*Rx(pi).
+	var arm_front := _make_joint("arm_front", "res://assets/drum_arm.glb",
+		ARM_FRONT_ORIGIN, Basis(Vector3.RIGHT, PI), ARM_FRONT_PITCH, Basis.IDENTITY)
+	var arm_back := _make_joint("arm_back", "res://assets/drum_arm.glb",
+		ARM_BACK_ORIGIN, Basis.IDENTITY, ARM_BACK_PITCH, Basis(Vector3(0, 0, 1), PI) * Basis(Vector3.RIGHT, PI))
+
+	# 2 drums — children of their arm pivot, at the arm-relative joint origin.
+	#   front drum: rel basis Rx(pi); visual identity.
+	#   back  drum: rel basis Rx(pi); visual rpy(pi,0,pi) -> Rz(pi)*Rx(pi).
+	if arm_front != null:
+		var drum_front := _make_joint("drum_front", "res://assets/drum.glb",
+			DRUM_FRONT_REL, Basis(Vector3.RIGHT, PI), DRUM_FRONT_SPIN, Basis.IDENTITY)
+		if drum_front != null:
+			arm_front.add_child(drum_front)
+		root.add_child(arm_front)
+	if arm_back != null:
+		var drum_back := _make_joint("drum_back", "res://assets/drum.glb",
+			DRUM_BACK_REL, Basis(Vector3.RIGHT, PI), DRUM_BACK_SPIN, Basis(Vector3(0, 0, 1), PI) * Basis(Vector3.RIGHT, PI))
+		if drum_back != null:
+			arm_back.add_child(drum_back)
+		root.add_child(arm_back)
+
+	_apply_material_recursive(root, rmat)
+
+	# Place on the surface, offset from the active-zone center so it sits on the
+	# plain/rim (not down a crater bowl), plus a yaw to show the 3/4 silhouette.
+	var ext: Vector2 = sf.extent_m()
+	var rx: float = sf.world_min.x + ext.x * 0.5 + ext.x * 0.22
+	var rz: float = sf.world_min.y + ext.y * 0.5 + ext.y * 0.12
+	var u: float = clampf((rx - sf.world_min.x) / ext.x, 0.0, 1.0)
+	var v: float = clampf((rz - sf.world_min.y) / ext.y, 0.0, 1.0)
+	var surf_y: float = sf.height_uv(u, v)
+	var yaw := Basis(Vector3.UP, deg_to_rad(35.0))
+
+	# GROUND-SNAP ONCE AT THE ROOT: orient (yaw) first, then measure the assembled
+	# world AABB and offset so the LOWEST point (wheel bottoms) rests at surf_y. Do
+	# NOT snap parts individually -- the wheels are the contact, drums hover above.
+	root.transform = Transform3D(yaw, Vector3(rx, surf_y, rz))
+	add_child(root)
+	var aabb := _node_world_aabb(root)
+	var drop := surf_y - aabb.position.y      # lift so min.y == surf_y
+	root.position.y += drop
+	print("sidecar: assembled articulated EZ-RASSOR (MIT) at (%.2f,%.2f,%.2f); " % [rx, root.position.y, rz],
+		"AABB size=(%.2f,%.2f,%.2f) lowest_y=%.3f snapped_to=%.3f" % [
+			aabb.size.x, aabb.size.y, aabb.size.z, aabb.position.y, surf_y])
+
+# Build one revolute-joint subtree: a pivot Node3D at `origin` whose REST basis is
+# `rest_basis`, rotated by `angle` about ROVER_JOINT_AXIS (the continuous joint),
+# carrying a single mesh child with local basis `mesh_basis` (the link visual rpy).
+# Returns the pivot, or null if the glb failed to load.
+func _make_joint(node_name: String, glb_res: String, origin: Vector3,
+		rest_basis: Basis, angle: float, mesh_basis: Basis) -> Node3D:
+	var mesh := _load_rover_glb(glb_res)
+	if mesh == null:
+		return null
+	var pivot := Node3D.new()
+	pivot.name = node_name
+	var spun := rest_basis * Basis(ROVER_JOINT_AXIS, angle)
+	pivot.transform = Transform3D(spun, origin)
+	mesh.transform = Transform3D(mesh_basis, Vector3.ZERO)
+	pivot.add_child(mesh)
+	return pivot
+
+# Load a converted rover .glb at runtime (headless-safe, no editor import). Returns
+# the generated scene root, or null on failure.
+func _load_rover_glb(res_path: String) -> Node3D:
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
 	var err := doc.append_from_file(ProjectSettings.globalize_path(res_path), state)
 	if err != OK:
-		push_warning("sidecar: rover glTF load failed (%d)" % err)
+		push_warning("sidecar: rover glTF load failed for %s (%d)" % [res_path, err])
+		return null
+	var scene := doc.generate_scene(state)
+	if scene == null:
+		push_warning("sidecar: generate_scene returned null for %s" % res_path)
+		return null
+	return scene as Node3D
+
+# World-space AABB enclosing every MeshInstance3D mesh under `node` (recursive),
+# using each mesh's own AABB transformed by its global transform. Used for the
+# single root ground-snap (wheel bottoms -> surface).
+func _node_world_aabb(node: Node) -> AABB:
+	var acc := AABB()
+	var first := true
+	for mi: MeshInstance3D in _collect_mesh_instances(node):
+		if mi.mesh == null:
+			continue
+		var local: AABB = mi.mesh.get_aabb()
+		var gx: Transform3D = mi.global_transform
+		# Transform all 8 corners; union into world AABB.
+		for ci in range(8):
+			var corner := local.position + Vector3(
+				local.size.x if (ci & 1) else 0.0,
+				local.size.y if (ci & 2) else 0.0,
+				local.size.z if (ci & 4) else 0.0)
+			var wc: Vector3 = gx * corner
+			if first:
+				acc = AABB(wc, Vector3.ZERO); first = false
+			else:
+				acc = acc.expand(wc)
+	return acc
+
+func _collect_mesh_instances(node: Node) -> Array:
+	var out: Array = []
+	if node is MeshInstance3D:
+		out.append(node)
+	for ch in node.get_children():
+		out.append_array(_collect_mesh_instances(ch))
+	return out
+
+# Chassis-only fallback (the prior README #11 behavior): the EZ-RASSOR base_unit
+# chassis, ground-re-origined glb snapped straight to the terrain height.
+func _build_rover_chassis_only() -> void:
+	var res_path := "res://assets/rover_base.glb"
+	if not FileAccess.file_exists(res_path):
+		print("sidecar: rover layer requested but %s missing (run scripts/convert_rover_mesh.py)" % res_path)
 		return
-	var rover := doc.generate_scene(state)
+	var rover := _load_rover_glb(res_path)
 	if rover == null:
-		push_warning("sidecar: rover generate_scene returned null")
 		return
-	# The DAE carried material colors (not per-vertex); give the whole body one
-	# faintly-metallic grey so it reads as hardware against the matte regolith.
 	var rmat := StandardMaterial3D.new()
 	rmat.albedo_color = Color(0.62, 0.63, 0.66)
 	rmat.metallic = 0.35
 	rmat.roughness = 0.55
 	_apply_material_recursive(rover, rmat)
-	# Place on the surface, offset from the active-zone center so it sits on the
-	# plain/rim (not down a crater bowl). Snap Y to the terrain height.
 	var ext: Vector2 = sf.extent_m()
 	var rx: float = sf.world_min.x + ext.x * 0.5 + ext.x * 0.22
 	var rz: float = sf.world_min.y + ext.y * 0.5 + ext.y * 0.12
@@ -268,7 +455,7 @@ func _build_rover() -> void:
 	var basis := Basis(Vector3.UP, deg_to_rad(35.0))
 	rover.transform = Transform3D(basis, Vector3(rx, ry, rz))
 	add_child(rover)
-	print("sidecar: placed RASSOR rover (EZ-RASSOR base_unit, MIT) at (%.2f,%.2f,%.2f)" % [rx, ry, rz])
+	print("sidecar: placed RASSOR chassis-only (EZ-RASSOR base_unit, MIT) at (%.2f,%.2f,%.2f)" % [rx, ry, rz])
 
 # Override the material on every MeshInstance3D under a node (the imported glTF tree).
 func _apply_material_recursive(node: Node, mat: Material) -> void:

@@ -15,6 +15,9 @@ Scenes:
     boulder_field/   rolling terrain + Golombek clasts in metadata (k=0.1).
     crater_caveins/  TIME SERIES t000..t0NN: a crater wall over-steepened by deposit(),
                      then relax_to_rest() snapshots — the cave-in showpiece.
+    tread_track/     TIME SERIES t000..t0NN: a rover wheel footprint advanced along a
+                     2-segment path, laying a VIRGIN->TREAD compaction trail incrementally
+                     (path-dependent terrain change). Mass conserved (pure compaction).
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from . import constants as K
 from . import procgen
 from .column_state import ColumnState
 from .io_fields import save_scene, write_hillshade_png, write_preview_png
+from .rover import straight_path, wheel_pass
 from .sandpile import Sandpile
 
 # Grid (INTERFACE.md §5 example / spec §4 resolution anchors).
@@ -287,6 +291,122 @@ def build_crater_caveins() -> None:
           f"drift={abs(mass_after-mass_before):.2e} kg")
 
 
+def build_tread_track() -> None:
+    """TIME SERIES: a rover drives a 2-segment path, laying down a compaction tread trail.
+
+    The headline "path-dependent terrain change" capability (README §4 row #3, §5 bullet 2):
+    a wheel footprint is advanced along the path and ``rover.wheel_pass`` is applied
+    INCREMENTALLY, one path-chunk per frame, so the track is laid down progressively over
+    time. Each frame is a full contract scene (tNNN/). Over the series you watch, ALONG the
+    wheel track only: VIRGIN -> TREAD relabel, density rising toward RHO_DEEP (compaction),
+    the surface dipping slightly (the rut, because height = datum + mass/density and mass is
+    untouched, so a denser column is thinner — spec §6), and a disturbance bump.
+
+    MASS is CONSERVED across the whole track: wheel_pass is pure compaction (density-only
+    redistribution capped at RHO_DEEP), it never removes or adds grid mass. The drum
+    inventory is never touched here. So total_mass(first) == total_mass(last) to float64
+    round-off (asserted/printed below; rover.py docstring + spec §6).
+    """
+    name = "tread_track"
+    cr0, cc0, cr1, cc1, cr2, cc2 = _tread_path_endpoints()
+
+    frames, mass_before, mass_after = _replay_tread_track()
+
+    scene_dir = os.path.join(SAMPLES_DIR, name)
+    os.makedirs(scene_dir, exist_ok=True)
+
+    # Active zone tightly bounds the driven corridor so the downstream wireframe/Godot
+    # loader focuses the fine-solve patch on the track (spec §4 "under wheels" patch).
+    rmin = max(0, min(cr0, cr1, cr2) - 12)
+    cmin = max(0, min(cc0, cc1, cc2) - 12)
+    rmax = min(HEIGHT, max(cr0, cr1, cr2) + 12)
+    cmax = min(WIDTH, max(cc0, cc1, cc2) + 12)
+    az = {"min_rc": [rmin, cmin], "max_rc": [rmax, cmax]}
+    qt = _default_quadtree(active_row0=rmin, active_col0=cmin,
+                           active_size=max(rmax - rmin, cmax - cmin))
+
+    for i, frame_cs in enumerate(frames):
+        tdir = os.path.join(scene_dir, f"t{i:03d}")
+        meta = _base_metadata(
+            name, active_zone=az, quadtree=qt, height_range=_height_range(frame_cs),
+            notes=f"tread-track frame {i}/{len(frames)-1}; rover wheel footprint advancing "
+                  f"along a 2-segment path, laying VIRGIN->TREAD compaction (density up, "
+                  f"rut sinks, disturbance bumped). Mass conserved — pure compaction "
+                  f"(spec §6; rover.py).")
+        meta["frame_index"] = i
+        save_scene(tdir, frame_cs.fields_dict(), meta)
+
+    # First/last-frame previews at the parent level (mirrors crater_caveins).
+    _write_previews(os.path.join(scene_dir, "t000"), frames[0], name + "_t000")
+    last = len(frames) - 1
+    _write_previews(os.path.join(scene_dir, f"t{last:03d}"), frames[-1],
+                    name + f"_t{last:03d}")
+
+    parent_meta = _base_metadata(
+        name, active_zone=az, quadtree=qt, height_range=_height_range(frames[-1]),
+        notes="TIME SERIES (driven-rover tread track). A wheel footprint is advanced along "
+              "a 2-segment path and rover.wheel_pass is applied incrementally per frame, "
+              "laying a VIRGIN->TREAD compaction trail (density up toward RHO_DEEP, rut "
+              "sinks via height=datum+mass/density, disturbance bumped). Each tNNN/ is a "
+              "full snapshot; mass conserved across the series (pure compaction, spec §6).")
+    parent_meta["time_series"] = {
+        "frame_count": len(frames),
+        "frame_cadence_steps": 1,  # one path-chunk advance per frame
+        "frame_dirs": [f"t{i:03d}" for i in range(len(frames))],
+        "mass_conserved_kg": round(mass_after, 6),
+        "mass_drift_kg": round(abs(mass_after - mass_before), 9),
+    }
+    import json
+    with open(os.path.join(scene_dir, "metadata.json"), "w") as fh:
+        json.dump(parent_meta, fh, indent=2)
+    print(f"  wrote {name}  frames={len(frames)}  "
+          f"mass_before={mass_before:.4f} mass_after={mass_after:.4f} kg "
+          f"drift={abs(mass_after-mass_before):.2e} kg")
+
+
+def _tread_path_endpoints() -> tuple[int, int, int, int, int, int]:
+    """The 2-segment drive path (row,col) waypoints: start -> mid bend -> end."""
+    # Drive diagonally across the field with a gentle bend at the middle, staying clear of
+    # the borders so the full wheel disc footprint lands on-grid.
+    cr0, cc0 = int(0.22 * HEIGHT), int(0.18 * WIDTH)   # start (lower-left-ish)
+    cr1, cc1 = int(0.50 * HEIGHT), int(0.52 * WIDTH)   # bend (center)
+    cr2, cc2 = int(0.80 * HEIGHT), int(0.70 * WIDTH)   # end (upper-right-ish)
+    return cr0, cc0, cr1, cc1, cr2, cc2
+
+
+def _replay_tread_track() -> tuple[list[ColumnState], float, float]:
+    """Deterministically rebuild the tread track; return (frames, mass_before, mass_after).
+
+    Builds the full (row,col) path, splits it into ~N_FRAMES contiguous chunks, and applies
+    wheel_pass to one chunk per frame so the trail is laid progressively. A ColumnState
+    clone is captured per frame (frame 0 is the pristine pre-drive surface).
+    """
+    cs = procgen.rolling_hills(WIDTH, HEIGHT, CELL_M, seed=11, amplitude_m=0.12,
+                               base_cells=3)
+    mass_before = cs.total_mass()
+
+    cr0, cc0, cr1, cc1, cr2, cc2 = _tread_path_endpoints()
+    # Dense path (step_cells=1) so consecutive wheel discs overlap into a continuous rut.
+    path = straight_path(cr0, cc0, cr1, cc1, step_cells=1)
+    path += straight_path(cr1, cc1, cr2, cc2, step_cells=1)[1:]  # drop duplicate bend point
+
+    n_motion = 31  # motion frames; + the pristine t000 -> 32 total (modest, gitignored raw)
+    chunks = np.array_split(np.arange(len(path)), n_motion)
+
+    frames: list[ColumnState] = [_clone(cs)]  # t000 = pristine, pre-drive
+    for chunk in chunks:
+        if len(chunk) == 0:
+            continue
+        sub = [path[k] for k in chunk]
+        # Wider-than-default contact patch (~22 cm) and a firm per-pass compaction so the
+        # VIRGIN->TREAD relabel + rut read clearly on the rolling-hills base.
+        wheel_pass(cs, sub, wheel_width_m=0.22, compaction=0.16)
+        frames.append(_clone(cs))
+
+    mass_after = cs.total_mass()
+    return frames, mass_before, mass_after
+
+
 def _replay_caveins(diameter_m: float, cr: int, cc: int) -> list[ColumnState]:
     """Deterministically rebuild the cave-in and return a ColumnState clone per frame."""
     cs = procgen.rolling_hills(WIDTH, HEIGHT, CELL_M, seed=5, amplitude_m=0.04,
@@ -327,6 +447,7 @@ def main() -> int:
     build_boulder_field()
     build_crater_boulders()
     build_crater_caveins()
+    build_tread_track()
     print("done.")
     return 0
 

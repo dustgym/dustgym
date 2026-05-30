@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "scene_name": "tread_track",
+  "producer": "terrain_authority (NumPy Tier-2 surrogate)",
+  "grid": {
+    "width": 256,
+    "height": 256,
+    "cell_m": 0.02,
+    "order": "row-major-C"
+  },
+  "world_bounds_m": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 5.12,
+    "y1": 5.12
+  },
+  "gravity_m_s2": 1.62,
+  "fields": {
+    "heightmap": {
+      "file": "heightmap.rf32",
+      "dtype": "<f4",
+      "units": "m"
+    },
+    "mass_areal": {
+      "file": "mass_areal.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^2"
+    },
+    "density": {
+      "file": "density.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^3"
+    },
+    "disturbance": {
+      "file": "disturbance.rf32",
+      "dtype": "<f4",
+      "units": "1 (normalized)"
+    },
+    "state_label": {
+      "file": "state_label.r8",
+      "dtype": "u1",
+      "enum": [
+        "VIRGIN",
+        "TREAD",
+        "EXCAVATED",
+        "SPOIL",
+        "COMPACTED_BERM"
+      ]
+    }
+  },
+  "ice_present": false,
+  "height_range_m": [
+    -0.05507,
+    0.06493
+  ],
+  "clasts": [],
+  "active_zone": {
+    "min_rc": [
+      44,
+      34
+    ],
+    "max_rc": [
+      216,
+      191
+    ]
+  },
+  "quadtree": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 256,
+      "label": "ROOT"
+    },
+    {
+      "level": 1,
+      "row0": 44,
+      "col0": 34,
+      "size": 172,
+      "label": "ACTIVE"
+    }
+  ],
+  "notes": "tread-track frame 0/31; rover wheel footprint advancing along a 2-segment path, laying VIRGIN->TREAD compaction (density up, rut sinks, disturbance bumped). Mass conserved \u2014 pure compaction (spec \u00a76; rover.py).",
+  "frame_index": 0
+}

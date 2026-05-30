@@ -30,3 +30,12 @@ papers/*
 samples/crater_caveins/t*/
 !samples/crater_caveins/t000/
 !samples/crater_caveins/t101/
+
+# ── tread_track raw time series (~35 MB, regenerable) ──
+# 32-frame float32 raster sequence, deterministically rebuilt by
+# `python -m terrain_authority.scenes` (build_tread_track, seed=11).
+# Commit only the bookend frames (t000, t031) + previews; the motion is already
+# captured by viz/out/tread_track.gif and tread_track_filmstrip.png.
+samples/tread_track/t*/
+!samples/tread_track/t000/
+!samples/tread_track/t031/
