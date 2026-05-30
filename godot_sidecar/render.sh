@@ -8,5 +8,8 @@ GODOT="${GODOT:-$(dirname "$(readlink -f "$0")")/../.tools/godot/Godot_v4.6.3-st
 PROJECT_DIR="$(dirname "$(readlink -f "$0")")"
 
 cd "$PROJECT_DIR"
-exec xvfb-run -a --server-args="-screen 0 1280x720x24" \
+# Virtual screen must be >= the requested --size, else the window (and render) is clamped.
+# Default 1920x1080 so 1080p renders fit; override with XVFB_SCREEN for larger.
+XVFB_SCREEN="${XVFB_SCREEN:-1920x1080x24}"
+exec xvfb-run -a --server-args="-screen 0 ${XVFB_SCREEN}" \
     "$GODOT" --rendering-driver vulkan "$@"

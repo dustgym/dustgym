@@ -52,3 +52,17 @@ samples/tread_track_4wheel/t*/
 !samples/tread_track_4wheel/t018/
 samples/tread_track_4wheel/t018/tiles/
 # (excavation_marks is only 2 frames — committed in full, not ignored.)
+
+# ── tread_track_4wheel_1cm fly-through SHOWCASE raw frames (regenerable) ──
+# 25-frame global-1 cm drive (512x512 @ 0.01 m = 5.12 m), rebuilt by
+# scripts/build_flythrough_1cm.py. Commit only the bookends t000 (pristine) + t024 (final);
+# the motion frames (~125 MB of 512^2 rasters) are regenerable.
+samples/tread_track_4wheel_1cm/t*/
+!samples/tread_track_4wheel_1cm/t000/
+!samples/tread_track_4wheel_1cm/t024/
+
+# ── Godot fly-through frame PNGs (regenerable) ──
+# The numbered per-frame renders from `sidecar.gd --sequence`; deterministically rebuilt by
+# `render.sh -- --sequence ...`. Commit only the assembled quadtree_flythrough.gif (the
+# deliverable); the individual frames are heavy at 1080p and regenerable.
+godot_sidecar/out/quadtree_flythrough_*.png

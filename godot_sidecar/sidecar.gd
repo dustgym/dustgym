@@ -26,6 +26,14 @@ extends Node3D
 const DEFAULT_OUT := "res://out/sidecar.png"
 const DEFAULT_LAYERS := "terrain,clasts"
 
+# Trailing chase-camera framing (sequence/fly-through mode). Behind + above the rover, offset
+# to one side for a 3/4 view; tighter than the whole-field shot so the rover + its fresh track
+# read clearly while the quadtree LOD cluster stays in frame.
+const TRAIL_M := 3.0          # meters behind the rover (along -forward)
+const TRAIL_SIDE_M := 1.6     # meters to one side (3/4 view, so the track + LOD cluster show)
+const TRAIL_HEIGHT_M := 2.1   # meters above the local surface (elevated, sees the ground around)
+const TRAIL_FOV := 50.0       # tighter than the 55deg whole-field default
+
 # --- Articulated EZ-RASSOR assembly (README §4 #11 follow-on) -----------------
 # Kinematic tree transcribed from the EZ-RASSOR URDF (docs/ezrassor_assets.md §3),
 # Z-up(meters)->Y-up via (x,y,z)_zup -> (x,z,-y)_yup. The URDF scale=0.35 macro
@@ -198,6 +206,10 @@ func _run_sequence() -> void:
 		_rover_rc_override = rc
 		_rover_yaw = _heading_yaw(all_rc, idx)
 
+		# Trailing chase camera follows the rover each frame (unless --pose pinned it).
+		if not _has_pose:
+			_update_trailing_camera(rc, _rover_yaw)
+
 		# Rebuild only the per-frame layer nodes (terrain/active-window/overlay/rover).
 		_clear_frame_nodes()
 		_build_layers()
@@ -248,7 +260,11 @@ func _peek_rover_rc(fdir: String) -> Vector2i:
 
 # Local path-heading yaw (radians about +Y) at frame index i, from the rover_rc
 # delta (col->+X, row->+Z). Looks ahead to the next valid rc; falls back to the
-# previous one; default faces +Z. atan2(dx, dz) gives yaw where 0 faces +Z.
+# previous one. The rover's FORWARD axis is local +X (front wheels LF/RF sit at +X,
+# the gauge runs along Z, wheels spin about Z) -> yaw must point +X along travel.
+# Basis(UP, yaw) maps local +X to (cos yaw, 0, -sin yaw); aligning that to the travel
+# vector (dx along +X, dz along +Z) gives yaw = atan2(-dz, dx). (The old atan2(dx, dz)
+# oriented a +Z-forward model, so the rover slid 90deg sideways across its path.)
 func _heading_yaw(all_rc: Array, i: int) -> float:
 	var here: Vector2i = all_rc[i]
 	var nxt := Vector2i(-1, -1)
@@ -270,7 +286,7 @@ func _heading_yaw(all_rc: Array, i: int) -> float:
 	var dz := float(b.x - a.x)   # row delta -> +Z
 	if absf(dx) < 1e-6 and absf(dz) < 1e-6:
 		return 0.0
-	return atan2(dx, dz)
+	return atan2(-dz, dx)        # point rover forward (+X) along travel (see header)
 
 # Camera that frames the whole driven path (diagonal across the field), oblique 3/4.
 func _setup_camera_for_drive() -> void:
@@ -291,6 +307,23 @@ func _setup_camera_for_drive() -> void:
 	_cam_pos = Vector3(cx + ext.x * 0.30, maxf(ext.x, ext.y) * 0.95, cz + ext.y * 0.85)
 	_cam_target = Vector3(cx, sf.height_range.x, cz)
 	_cam.look_at_from_position(_cam_pos, _cam_target, Vector3.UP)
+
+# Per-frame trailing chase camera (sequence mode): sit behind + above the rover, offset to
+# one side for a 3/4 view, looking just past it. The rover's FORWARD is local +X under the
+# yaw basis (front wheels LF/RF at +X), so -forward is "behind". Follows rover_rc + heading.
+func _update_trailing_camera(rc: Vector2i, yaw: float) -> void:
+	var u: float = clampf(float(rc.y) / float(sf.width - 1), 0.0, 1.0)
+	var v: float = clampf(float(rc.x) / float(sf.height - 1), 0.0, 1.0)
+	var rover_pos := Vector3(sf.world_min.x + rc.y * sf.cell_m,
+							 sf.height_uv(u, v),
+							 sf.world_min.y + rc.x * sf.cell_m)
+	var fwd := (Basis(Vector3.UP, yaw) * Vector3(1, 0, 0)).normalized()  # world forward (+X)
+	var side := Vector3(-fwd.z, 0.0, fwd.x)                              # perpendicular in XZ
+	var cam_pos: Vector3 = rover_pos - fwd * TRAIL_M + side * TRAIL_SIDE_M \
+		+ Vector3(0.0, TRAIL_HEIGHT_M, 0.0)
+	var look_at: Vector3 = rover_pos + fwd * 0.10 + Vector3(0.0, 0.25, 0.0)
+	_cam.fov = TRAIL_FOV
+	_cam.look_at_from_position(cam_pos, look_at, Vector3.UP)
 
 # Remove only the per-frame layer nodes (terrain/clasts/rover/overlay) between
 # sequence frames, leaving the sun + WorldEnvironment + camera in place.

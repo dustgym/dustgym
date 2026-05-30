@@ -295,14 +295,17 @@ func _surf_point(row: int, col: int, lift: float) -> Vector3:
 	var h: float = sf.height_uv(u, v) + lift
 	return Vector3(sf.world_min.x + col * sf.cell_m, h, sf.world_min.y + row * sf.cell_m)
 
-# Unshaded, vertex-colored, depth-test-disabled line material so the overlay
-# reads as a HUD-style wireframe over the lit terrain (always visible).
+# Unshaded, vertex-colored line material for the quadtree wireframe. Depth-TESTED so the
+# boxes are drawn ON the terrain (lifted a hair above the surface, see _emit_box_outline)
+# and are correctly OCCLUDED by whatever is in front of them -- crucially the rover, which
+# now draws ON TOP of the lines instead of having the wireframe painted across it.
+# (Previously no_depth_test made it a HUD overlay that drew over the robot.)
 func _overlay_line_mat() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.vertex_color_use_as_albedo = true
 	m.albedo_color = Color(1, 1, 1, 1)
-	m.no_depth_test = true        # draw over the terrain so boxes never hide in ruts
+	m.no_depth_test = false       # depth-tested: lines sit on the terrain; the rover occludes them
 	return m
 
 # Per-vertex normals via cross products of triangle edges, averaged.

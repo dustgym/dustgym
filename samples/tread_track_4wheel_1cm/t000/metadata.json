@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0",
+  "scene_name": "tread_track_4wheel_1cm",
+  "producer": "scripts/build_flythrough_1cm.py (NumPy Tier-2 surrogate, global 1 cm)",
+  "grid": {
+    "width": 512,
+    "height": 512,
+    "cell_m": 0.01,
+    "order": "row-major-C"
+  },
+  "world_bounds_m": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 5.12,
+    "y1": 5.12
+  },
+  "gravity_m_s2": 1.62,
+  "fields": {
+    "heightmap": {
+      "file": "heightmap.rf32",
+      "dtype": "<f4",
+      "units": "m"
+    },
+    "mass_areal": {
+      "file": "mass_areal.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^2"
+    },
+    "density": {
+      "file": "density.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^3"
+    },
+    "disturbance": {
+      "file": "disturbance.rf32",
+      "dtype": "<f4",
+      "units": "1 (normalized)"
+    },
+    "state_label": {
+      "file": "state_label.r8",
+      "dtype": "u1",
+      "enum": [
+        "VIRGIN",
+        "TREAD",
+        "EXCAVATED",
+        "SPOIL",
+        "COMPACTED_BERM"
+      ]
+    }
+  },
+  "ice_present": false,
+  "height_range_m": [
+    -0.05999,
+    0.06001
+  ],
+  "clasts": [],
+  "active_zone": {
+    "min_rc": [
+      88,
+      68
+    ],
+    "max_rc": [
+      433,
+      382
+    ]
+  },
+  "quadtree": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 512,
+      "label": "ROOT"
+    },
+    {
+      "level": 1,
+      "row0": 88,
+      "col0": 68,
+      "size": 345,
+      "label": "ACTIVE"
+    }
+  ],
+  "frame_index": 0,
+  "notes": "GLOBAL 1 cm fly-through frame 0; four-wheel drive over a 5.12 m patch at 0.01 m/cell. Mass-conserving compaction; render-fidelity shaders.",
+  "active_leaves": [],
+  "quadtree_nodes": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 512,
+      "leaf": true
+    }
+  ],
+  "touched_leaves": [],
+  "rover_rc": null,
+  "quadtree_lod": {
+    "min_leaf": 16,
+    "refine_factor": 0.5,
+    "footprint_radius_cells": 11.0,
+    "field_size": 512
+  }
+}
