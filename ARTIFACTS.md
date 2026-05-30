@@ -1,127 +1,121 @@
-# foss_ipex — Artifact Manifest & Independent Verification
+# foss_ipex — Artifact Manifest & Verification
 
-**Verified:** 2026-05-30 (independent end-to-end re-run from the repo, assuming nothing works
-until proven). Every documented command was executed from a clean state. Outputs that are
-machine-generated (samples rasters, viz PNGs, Godot PNGs) were moved aside or checksummed
-first to prove they are *freshly* produced by the command, not stale.
+**Verified:** 2026-05-30, end-to-end from the committed repo (commit `197f771`).
+The **authority + all matplotlib viz consumers were re-run from clean this pass** and their
+exit codes / numbers below are from that run. **Godot:** three representative renders were
+re-run this pass (crater terrain layer, the articulated-rover hero, and the 15-frame quadtree
+fly-through sequence) — all exit 0 and **byte-identical** to the committed PNGs (the headless
+Vulkan renders are reproducibly deterministic here); the remaining layer renders were produced
+and verified earlier this session by the build + adversarial-verify workflows. **Chrono** Path A
+was executed per [`docs/chrono_bringup_log.md`](docs/chrono_bringup_log.md) in a separate conda
+env (not the project `.venv`), so it is recorded, not re-run here.
 
-**Verdict: ALL GREEN.** 7/7 conservation tests pass; all 5 scenes re-export with masses
-matching the manifest; both matplotlib consumers and all 6 Godot layers + headline render
-+ smoke test produce non-black, varied PNGs. One cosmetic precision note (caveins on-disk
-float32 mass drift) is documented below — not a defect.
+**Verdict: ALL GREEN.** 10/10 conservation + quadtree tests pass; all **7** scenes re-export
+deterministically with masses matching; all **5** matplotlib consumers and the full Godot layer
+set + rover + fly-through produce non-black, varied PNGs; PyChrono 10.0.0 runs an SCM rover at
+lunar g and a partial contract exporter round-trips through the frozen `io_fields`.
+
+This manifest is a verification snapshot; [`README.md`](README.md) is the authoritative
+description of the system and what is papered over.
 
 ---
 
-## Commands run (exact, with exit codes)
+## Commands run this pass (exact, cwd = repo root unless noted)
 
-| # | Command (cwd = repo root `/home/john/Development/foss_ipex`) | Exit | Result |
+| # | Command | Exit | Result |
 |---|---|---|---|
-| 1 | `.venv/bin/python -m terrain_authority.tests` | 0 | **7/7 checks PASS** |
-| 2 | `.venv/bin/python -m terrain_authority.scenes` | 0 | Re-wrote 5 scenes (masses match), deterministic (crater md5 identical pre/post) |
-| 3 | `.venv/bin/python -m terrain_authority.hexviz samples/crater` | 0 | Terminal ASCII crater bowl; min=-0.14434 max=0.1089 m. No file output (by design). |
-| 4 | `.venv/bin/python viz/groundtruth_viz.py samples/crater` | 0 | wrote `viz/out/groundtruth_crater.png` |
-| 4 | `.venv/bin/python viz/groundtruth_viz.py samples/boulder_field` | 0 | wrote `viz/out/groundtruth_boulder_field.png` |
-| 5 | `.venv/bin/python viz/variety_panel.py` | 0 | wrote variety_panel.png + caveins_filmstrip.png + caveins.gif |
-| 6 | `godot_sidecar/render_layers.sh -- --scene ../samples/crater --layers terrain,clasts --pose 2.56,3.0,6.4,2.56,-0.1,2.56 --size 1024x768 --out layer_3_terrain.png` | 0 | wrote layer_3_terrain.png (logged "0 clasts") |
-| 6 | `... --scene ../samples/boulder_field --layers terrain,clasts ... --out boulder_terrain_clasts.png` | 0 | "placed 186 clasts"; wrote boulder_terrain_clasts.png |
-| 6 | `... --scene ../samples/crater --layers heightmap ... --out layer_1_heightmap.png` | 0 | false-color heightmap |
-| 6 | `... --layers state ... --out layer_2_state.png` | 0 | false-color state enum |
-| 6 | `... --layers terrain,clasts ... --out layer_4_clasts.png` (crater) | 0 | "0 clasts" -> equals terrain (documented) |
-| 6 | `... --layers terrain,dust ... --out layer_5_dust.png` | 0 | "8 dust emitters at disturbed cells" |
-| 6 | `... --layers terrain,distortion ... --out layer_6_distortion.png` | 0 | "Brown-Conrady radial" post-process |
-| 6 | `godot_sidecar/render.sh render_test.tscn` (smoke test, must stay intact) | 0 | wrote cube_on_plane.png — **smoke test still works** |
+| 1 | `.venv/bin/python -m terrain_authority.tests` | 0 | **10/10 checks PASS** (7 conservation + 3 quadtree) |
+| 2 | `.venv/bin/python -m terrain_authority.scenes` | 0 | Re-wrote **7** scenes; deterministic (crater + tread_track bookend md5 identical pre/post) |
+| 3 | `.venv/bin/python viz/variety_panel.py` | 0 | variety_panel.png + caveins_filmstrip.png + caveins.gif |
+| 4 | `.venv/bin/python viz/groundtruth_viz.py samples/{crater,boulder_field}` | 0 | groundtruth_*.png |
+| 5 | `.venv/bin/python viz/tread_track.py` | 0 | tread_track.gif + tread_track_filmstrip.png |
+| 6 | `.venv/bin/python viz/quadtree_demo.py` | 0 | quadtree_demo.gif + quadtree_demo_filmstrip.png |
+| 7 | `render_layers.sh -- --scene ../samples/crater --layers terrain,clasts ... --out layer_3_terrain.png` | 0 | lit crater (byte-identical to committed) |
+| 8 | `render_layers.sh -- --scene ../samples/crater_boulders --layers terrain,clasts,rover --pose 1.7,1.05,1.5,3.7,0.05,3.2 ... --out crater_boulders_rover.png` | 0 | "placed 143 clasts"; "assembled articulated EZ-RASSOR ... AABB (1.83,0.66,1.70)"; byte-identical to committed |
+| 9 | `render_layers.sh -- --sequence ../samples/tread_track --stride 2 --layers terrain,quadtree,rover` | 0 | wrote 15 fly-through frames; log shows rover_rc advancing + active_leaves per frame + yaw turning at the bend |
 
-Notes on Godot stderr: every Godot invocation prints benign ALSA/audio-driver-failed
-warnings (headless box has no sound device; Godot falls back to the dummy audio driver).
-These do not affect rendering and the process still exits 0.
+Godot stderr prints benign ALSA "all audio drivers failed → dummy driver" warnings (headless box,
+no sound device); rendering is unaffected and every process exits 0.
 
 ---
 
-## D1a — Foundation: physics authority + state-field producer
+## Foundation — physics authority + state-field producer
 
-Pure NumPy Tier-2 surrogate emitting the frozen INTERFACE.md on-disk contract.
+Pure-NumPy Tier-2 surrogate (`terrain_authority/`, **11 modules**: constants, io_fields, column_state,
+procgen, sandpile, rover, **quadtree**, hexviz, scenes, tests, `__init__`) emitting the frozen
+`INTERFACE.md` contract (now **v1.0.1** — additive optional quadtree metadata; rasters unchanged).
 
-| Artifact | Size | Producing command | Description | Status |
+| Scene (`samples/`) | Frames | Total mass | Notes | Status |
 |---|---|---|---|---|
-| `terrain_authority/` (10 modules) | — | (source) | constants, io_fields, column_state, procgen, sandpile, rover, hexviz, scenes, tests | GREEN |
-| `samples/flat_compact/` | 1.39 MB | `python -m terrain_authority.scenes` | 256x256, total_mass **6298.5 kg** (exp ~6298). VIRGIN only, near-zero relief. | GREEN |
-| `samples/rolling_hills/` | 1.45 MB | scenes | total_mass **6500.8 kg** (exp ~6501). fbm loose top, disturbance≤0.02. | GREEN |
-| `samples/crater/` | 1.30 MB | scenes | total_mass **4606.2 kg** (exp ~4606). EXCAVATED bowl (label 0..2), disturbance to 0.508. | GREEN |
-| `samples/boulder_field/` | 1.48 MB | scenes | total_mass **5819.2 kg** (exp ~5819). **186** Golombek-SFD clasts in metadata. | GREEN |
-| `samples/crater_caveins/` | 109 MB | scenes | **102** frame snapshots (t000..t101), cadence 4 steps. Ridge slumps peak **+1.90 m -> +0.25 m** at repose. | GREEN |
-| `samples/*/preview_*.png` | 21–123 KB ea | scenes | Optional human previews (hillshade/height/state/disturbance); not in Godot hot path. Verified varied. | GREEN |
-| Terminal hexviz (no file) | — | `python -m terrain_authority.hexviz samples/crater` | Dependency-free ASCII heightmap; crater bowl clearly legible. | GREEN |
+| `flat_compact` | 1 | **6298.481 kg** | dense, near-zero relief, VIRGIN only (low-albedo proxy) | GREEN |
+| `rolling_hills` | 1 | **6500.812 kg** | fbm loose top, disturbance ≤ 0.02 | GREEN |
+| `crater` | 1 | **4606.247 kg** | Pike-class EXCAVATED bowl (labels 0..2) | GREEN |
+| `boulder_field` | 1 | **5819.188 kg** | **186** Golombek-SFD clasts in metadata | GREEN |
+| `crater_boulders` | 1 | **4840.711 kg** | crater + **143** clasts (excluded from fresh bowl, surface-snapped) | GREEN |
+| `crater_caveins` | **102** (t000..t101) | drift **0.00e+00 kg** (4525.5909) | 400-step rim slump; raw frames git-excluded except bookends | GREEN |
+| `tread_track` | **32** (t000..t031) | drift **0.00e+00 kg** (5622.1704) | driven-rover VIRGIN→TREAD trail; per-frame quadtree metadata (active last=36, touched=208); raw frames git-excluded except bookends | GREEN |
 
-**Conservation invariants (spec §10), independently re-confirmed:**
-- Total mass constant across cut->dump->relax, rel_drift **2.99e-16**.
-- `height == datum + mass_areal/density` after every op, in-memory max_err **0.0**; on the
-  re-exported on-disk rasters the (h - mass/density) spread is **≤6e-8 m** (float32 precision).
-- Sandpile relaxation conserves mass (rel_drift 1.75e-16) and leaves all loose slopes
-  ≤ θ_r (max 35.57° vs 35.00°, within 1° tol).
+Each committed scene carries the 5 contract rasters (`heightmap`/`mass_areal`/`density`/`disturbance`
+`.rf32` + `state_label.r8`) + `metadata.json` + 4 `preview_*.png`. Terminal `hexviz` (no file output)
+renders any field as dependency-free ASCII.
+
+**Conservation invariants (spec §10), re-confirmed this pass:**
+- Total mass constant across cut→dump→relax, rel_drift **2.99e-16**.
+- `height == datum + mass/density` after every op (cut/dump/relax/procgen/crater/wheel_pass): max_err **0.0**.
+- Rover single pass preserves mass (density-only compaction; rut sinks): m0 == m1, **0.0** drift.
+- Sandpile relaxation conserves mass (rel_drift **1.75e-16**) and leaves all loose slopes ≤ θ_r (35.57° vs 35.00°, within 1°).
 - save/load round-trip preserves dims/dtype/row-major.
+- **Quadtree:** leaves tile the field exactly once (65536/65536, no gaps/overlap); promotion monotone toward the rover (rover leaf size 8 fine, far leaf size 64 coarse); active-leaf count bounded (peak 36 of 64) and the active cluster tracks the rover across all 32 frames.
 
-## D1b — Native matplotlib 3D ground-truth visualizer
+## Native viz consumers (matplotlib, pure `load_scene` readers)
 
-| Artifact | Size | Producing command | Description | Status |
-|---|---|---|---|---|
-| `viz/groundtruth_viz.py` | 13 KB | (source) | 3D bar3d cuboids by state_label + quadtree wireframes + clast scatter. Pure consumer (imports `io_fields.load_scene`). | GREEN |
-| `viz/out/groundtruth_crater.png` | 282 KB | `viz/groundtruth_viz.py samples/crater` | Crater bowl, EXCAVATED-vs-VIRGIN coloring, quadtree boxes, legend. extrema full 0..255. | GREEN |
-| `viz/out/groundtruth_boulder_field.png` | 392 KB | `viz/groundtruth_viz.py samples/boulder_field` | VIRGIN cuboids + 186 clast spheres + quadtree. extrema full. | GREEN |
-| `viz/out/groundtruth_crater_turn0.png` | 229 KB | (prior `--turntable` run; not regenerated this pass) | Turntable azim -80. Varied. | GREEN |
-| `viz/out/groundtruth_crater_turn1.png` | 282 KB | (prior `--turntable` run) | Turntable azim -55. Varied. | GREEN |
-| `viz/out/groundtruth_crater_turn2.png` | 288 KB | (prior `--turntable` run) | Turntable azim -30. Varied. | GREEN |
+| Artifact | Size | Description | Status |
+|---|---|---|---|
+| `viz/out/variety_panel.png` | 1.18 MB | 2×2 grazing-sun hillshade: flat_compact / rolling_hills / crater / boulder_field | GREEN |
+| `viz/out/caveins_filmstrip.png` / `caveins.gif` | 372 KB / 867 KB | 6-frame + 30-frame rim-slump cave-in | GREEN |
+| `viz/out/groundtruth_crater.png` (+ `_turn0..2`) | 282 KB | D1b 3D bar3d cuboids by state_label + quadtree wireframes + clast scatter + turntable | GREEN |
+| `viz/out/groundtruth_boulder_field.png` | 392 KB | VIRGIN cuboids + 186 clast spheres + quadtree | GREEN |
+| `viz/out/tread_track.gif` / `tread_track_filmstrip.png` | 735 KB / 540 KB | driven-rover VIRGIN→TREAD compaction trail (mass conserved, rut via height=mass/density) | GREEN |
+| `viz/out/quadtree_demo.gif` / `quadtree_demo_filmstrip.png` | 4.49 MB / 549 KB | **interaction-keyed quadtree**: active leaves (red) track the rover, touched trail (amber), coarse far (blue), under VIRGIN→TREAD + hillshade rut | GREEN |
 
-## D2 — Godot render-only sidecar (lunar-lit terrain + clasts)
+## Godot render sidecar (headless Vulkan; D2 + D4)
 
-| Artifact | Size | Producing command | Description | Status |
-|---|---|---|---|---|
-| `godot_sidecar/` (gd + gdshader + tscn + sh) | — | (source) | INTERFACE.md GDScript loader, ArrayMesh active-zone + far-field LOD, lit regolith shader. | GREEN |
-| `godot_sidecar/out/layer_3_terrain.png` | 221 KB | render_layers.sh `--layers terrain,clasts` (crater) | Lit crater under ~5° sun, deep shadow + cast rim shadow. extrema 0..225/216/206. | GREEN |
-| `godot_sidecar/out/boulder_terrain_clasts.png` | 323 KB | render_layers.sh `--layers terrain,clasts` (boulder_field) | **Headline:** 186 sphere clasts, long grazing-sun shadows. "placed 186 clasts". extrema full. | GREEN |
-| `godot_sidecar/out/cube_on_plane.png` | 22 KB | `render.sh render_test.tscn` | Pre-existing smoke test, **left intact, re-confirmed exit 0**. | GREEN |
+`godot_sidecar/` — GDScript `INTERFACE.md` loader (`state_fields.gd`, now parses the v1.0.1 optional
+keys), fine active-zone `ArrayMesh` + far-field LOD plane (`terrain.gd`), lit regolith / false-color /
+dust / distortion shaders, articulated rover assembly + quadtree overlay + `--sequence` mode (`sidecar.gd`).
 
-## D3 — Procgen variety panel + cave-in showpiece
+| Artifact | Size | Description | Status |
+|---|---|---|---|
+| `out/layer_1_heightmap.png` | 130 KB | unlit false-color elevation ramp | GREEN |
+| `out/layer_2_state.png` | 6.3 KB | false-color state enum (grey VIRGIN + amber EXCAVATED; flat regions compress) | GREEN |
+| `out/layer_3_terrain.png` | 254 KB | lit crater under ~5° sun, deep + cast rim shadow (re-run this pass) | GREEN |
+| `out/layer_4_clasts.png` | 254 KB | crater has 0 clasts → equals terrain (documented; real demo below) | GREEN |
+| `out/layer_5_dust.png` | 261 KB | ballistic GPUParticles3D, lunar g, soft-haze puffs | GREEN |
+| `out/layer_6_distortion.png` | 223 KB | Brown-Conrady radial barrel-warp post-process (stub) | GREEN |
+| `out/boulder_terrain_clasts.png` | 315 KB | 186 sphere clasts, long grazing-sun shadows | GREEN |
+| `out/crater_boulders.png` | 359 KB | crater + Golombek boulder field together | GREEN |
+| `out/crater_boulders_rover.png` / `rover_on_terrain.png` | 241 KB / 253 KB | **articulated EZ-RASSOR** (chassis + 4 wheels + 2 arms + 2 drums, MIT) on crater rim / rolling hills (re-run this pass; AABB 1.83×0.66×1.70 m, ground-snapped) | GREEN |
+| `out/quadtree_flythrough.gif` (+ 8 key frames `_000..014`) | 1.05 MB | **D4 headline**: rover drives the tread_track path while the fine active-mesh window + quadtree LOD overlay follow it, consuming per-frame `active_leaves` (re-run this pass, 15 frames) | GREEN |
+| `out/cube_on_plane.png` | 22 KB | original smoke test, intact | GREEN |
 
-| Artifact | Size | Producing command | Description | Status |
-|---|---|---|---|---|
-| `viz/variety_panel.py` | 14 KB | (source) | Generator (matplotlib Agg). Pure consumer via `load_scene`. | GREEN |
-| `viz/out/variety_panel.png` | 1.18 MB | `viz/variety_panel.py` | 2x2 grazing-sun hillshade: flat_compact / rolling_hills / crater / boulder_field (186 clast markers). | GREEN |
-| `viz/out/caveins_filmstrip.png` | 372 KB | `viz/variety_panel.py` | 6-frame slump filmstrip, cadence from parent metadata; ridge +1.90 -> +0.25 m, mass conserved. | GREEN |
-| `viz/out/caveins.gif` | 867 KB | `viz/variety_panel.py` | Optional 30-frame animated GIF of the relaxation. | GREEN |
+## Chrono Path A (executed; separate conda env — `docs/chrono_bringup_log.md`)
 
-## D4 — Godot layer-toggle compositor (diagnostic layers)
+| Item | Result | Status |
+|---|---|---|
+| conda `chrono` env + **PyChrono 10.0.0** (`py312h98ab86c_677`) | installed; GDAL `.so.37` soname blocker resolved via `libgdal=3.11` | GREEN |
+| stock `SCMTerrain` demo, headless, lunar g | 300 steps, `GetModifiedNodes`→261 nodes, exit 0 | GREEN |
+| `scripts/chrono_scm_rover.py` | 400 steps, real 13.4 mm rut, 918 deformed nodes read back | GREEN |
+| `scripts/chrono_scm_export.py` (+`_demo`) → INTERFACE | **PARTIAL**: heightmap + disturbance Chrono-sourced; mass_areal/density honest surrogate placeholders; round-trips via `io_fields`; `height = mass/density` invariant holds to **3.98e-08** | PARTIAL (by design) |
 
-Same crater camera pose `2.56,3.0,6.4,2.56,-0.1,2.56`, 1024x768, unless noted.
+## Honest caveats (not defects)
 
-| Artifact | Size | Producing command | Description | Status |
-|---|---|---|---|---|
-| `godot_sidecar/sidecar.gd` / `sidecar.tscn` / `render_layers.sh` | — | (source) | `--scene/--pose/--layers/--out/--size` CLI; composes 6 layers. | GREEN |
-| `godot_sidecar/out/layer_1_heightmap.png` | 130 KB | `--layers heightmap` | Unlit false-color elevation ramp. extrema 0..255/255/242. | GREEN |
-| `godot_sidecar/out/layer_2_state.png` | 6.3 KB | `--layers state` | False-color enum: grey VIRGIN + amber EXCAVATED. Small (flat enum regions compress hard) but **3 distinct color regions present** (extrema 3..253 / 3..242 / 4..188), semantically correct. | GREEN |
-| `godot_sidecar/out/layer_3_terrain.png` | 221 KB | `--layers terrain,clasts` | (see D2) Lit terrain. | GREEN |
-| `godot_sidecar/out/layer_4_clasts.png` | 221 KB | `--layers terrain,clasts` (crater) | Crater has **0 clasts** in metadata, so this correctly equals terrain (sidecar logs "0 clasts"). The real clast demo is `boulder_terrain_clasts.png`. **Expected, documented behavior.** | GREEN |
-| `godot_sidecar/out/layer_5_dust.png` | 230 KB | `--layers terrain,dust` | Ballistic GPUParticles3D, lunar g. "8 dust emitters at disturbed cells". | GREEN |
-| `godot_sidecar/out/layer_6_distortion.png` | 190 KB | `--layers terrain,distortion` | Brown-Conrady radial barrel-warp post-process. | GREEN |
+1. **`crater_caveins` / `tread_track` on-disk mass.** The "drift 0.0" figure is the in-memory float64
+   invariant. The `.rf32` contract stores `<f4`, so recomputing mass from the saved rasters shows
+   float32 storage quantization (~1e-7 relative) — storage precision, not a conservation error.
+2. **Rover is a static pose** (joints are fixed constants, not physics-driven; single-point ground-snap) — README §4 #11.
+3. **Quadtree manages render/space LOD, not solve cost** (the physics grid is still uniform-fine) — README §4 #4.
+4. **Chrono is bootstrapped, not the live authority**; the exporter is partial (no §4.4 mass-hybrid; bare test cylinder, not a Chrono::Vehicle) — README §4 #2.
+5. **`layer_4_clasts.png` == `layer_3_terrain.png`** on the crater scene (0 clasts there); the genuine clast demos are `boulder_terrain_clasts.png` / `crater_boulders.png`.
 
----
-
-## PNG sanity (PIL getextrema + non-black fraction)
-
-Every produced PNG was loaded with PIL, converted RGB, and checked: **none has all-constant
-channels**; all have meaningful non-black content (47%–100%). No black/uniform frames.
-
-## Issues found
-
-1. **(Cosmetic, NOT a defect) caveins on-disk mass drift.** The test/manifest report
-   "mass_drift 0.00e+00" — that is the *in-memory float64* drift. On the re-exported
-   *on-disk float32* rasters, `t000` mass = 4525.5913 kg vs `t101` = 4525.5903 kg, i.e.
-   **9.8e-4 kg (~1 mg) over 4525 kg = rel 2.2e-7**. This is exactly float32 storage
-   precision (the `.rf32` contract stores `<f4`), not a conservation-logic error. The
-   in-memory invariant is genuinely 0. Worth a one-line note in the parent metadata so the
-   "drift 0.0" claim is unambiguous about which representation it describes.
-2. **layer_4_clasts.png on the crater scene is identical to layer_3_terrain** because the
-   crater scene has 0 clasts. This is documented and the sidecar logs it; the genuine
-   186-clast demo is `boulder_terrain_clasts.png`. Flagged only so a reviewer isn't
-   surprised by the duplicate.
-
-No blocking issues. All documented commands run clean from a fresh checkout.
+No blocking issues. Every command above runs clean from the committed repo (`.venv` + the vendored
+Godot binary for the renders; the `chrono` conda env for the Chrono scripts).
