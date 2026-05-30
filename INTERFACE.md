@@ -1,4 +1,4 @@
-# foss_ipex — State-Field Interface Contract (v1.0, FROZEN; v1.0.1 additive note)
+# foss_ipex — State-Field Interface Contract (v1.0, FROZEN; v1.0.1 + v1.0.2 additive notes)
 
 This is the **decoupling seam** of the architecture (spec §2, §4). The physics authority
 *produces* a directory of state fields; renderers and visualizers *consume* it. Producer and
@@ -143,6 +143,104 @@ so the trap is named, not so it is solved this weekend. Cite spec §11.
   `< refine_factor * size`. Distance-graded LOD: fine near the rover, coarse far.
 - The parent `tread_track/metadata.json` advertises this under `quadtree_lod.per_frame_keys`.
 
+### 5.2 OPTIONAL additive keys — per-wheel tracks & excavation marks (v1.0.2)
+
+> **ADDITIVE, backward-compatible** (rasters unchanged; `schema_version` stays `"1.0"`). NEW
+> OPTIONAL per-frame `metadata.json` keys that let a consumer orient and phase **track and
+> teeth-mark detail in the shader** without resolving it in the heightfield (design:
+> `docs/render_fidelity_spec.md`). **Consumers MAY ignore all of these** and render exactly as
+> v1.0.1. No raster, dtype, endianness, or existing key changes.
+
+```jsonc
+{
+  "wheel_tracks": {                        // the four wheels' ground contact THIS frame
+    "LF": { "points": [[r,c], ...],        // contact-center polyline, [row,col] in BASE cells
+            "heading_rad": 1.5708,         // travel dir in field space: 0=+col/+X, +pi/2=+row/+Z
+            "slip": 0.05,                  // [0,1] slip ratio (modulates smear), OPTIONAL
+            "width_m": 0.18 },             // contact band width
+    "RF": { ... }, "LB": { ... }, "RB": { ... }
+  },
+  "drum_marks": [                          // zero or more ACTIVE excavation drums this frame
+    { "drum": "front",                     // "front" | "back"
+      "swath": [[r,c], ...],               // dug-band centerline, [row,col] in BASE cells
+      "depth_m": 0.03, "width_m": 0.20,
+      "teeth_count": 8, "teeth_pitch_m": 0.025, "phase": 0.0 }  // periodic teeth params
+  ]
+}
+```
+
+- `points`/`swath` use the same `[row,col]` row-major indexing and `[r0,c0,r1,c1]` half-open box
+  convention as §2/§3/§5.1. `heading_rad` orients the (transverse) cleat/teeth ridge pattern.
+- These pair with `state_label` (TREAD → cleat marks; EXCAVATED/SPOIL → teeth marks) and
+  `disturbance` (detail strength), which already exist — the new data only adds **direction +
+  phase + periodicity**. The renderer bakes them into a derived track-direction field
+  (consumer-side; **not** a new on-disk raster).
+- **Per-frame, not cumulative:** `points`/`swath` are the contact samples for THIS frame only;
+  reconstruct a trail by concatenating frames. A single point is allowed (point contact); ≥2
+  points define orientation in addition to `heading_rad`. These are PER-FRAME keys (on
+  `tNNN/metadata.json`).
+- **Units:** all `*_m` fields (`width_m`, `depth_m`, `teeth_pitch_m`) are **SI metres in world
+  space** (§4), NOT cells; only `points`/`swath` are `[row,col]` base cells (convert via `cell_m`).
+
+### 5.3 OPTIONAL additive keys — variable-resolution refinement / tiles (v1.0.2)
+
+> **ADDITIVE, backward-compatible.** The BASE rasters at `grid.cell_m` are still REQUIRED and
+> fully describe the scene. Refinement adds OPTIONAL finer-resolution **tiles** over the
+> rover-interacted corridor (design + mass-conservation operators: `docs/render_fidelity_spec.md`
+> §2). A consumer that ignores `tiles[]`/`tiles/` renders the base (coarser in the corridor,
+> still correct). When `refinement.enabled=false` the scene is uniform base resolution =
+> identical to v1.0.
+
+```jsonc
+{
+  "refinement": {
+    "enabled": true,
+    "base_cell_m": 0.02, "fine_cell_m": 0.01,
+    "refine_where": "touched",     // "active" | "touched" | "none"
+    "fine_min_leaf": 4
+  },
+  "tiles": [                        // each tile is a normal raster bundle at fine_cell_m
+    { "id": 7,
+      "region_rc": [120, 128, 136, 144],   // base-cell-aligned region [r0,c0,r1,c1] half-open
+      "cell_m": 0.01,
+      "dir": "tiles/tile_0007" }            // subdir holding heightmap.rf32 etc. @ cell_m
+  ]
+}
+```
+
+- **Storage:** `samples/<scene>/<tNNN>/tiles/tile_<id>/` holds the same 5 REQUIRED rasters at
+  `cell_m`. `region_rc` is in BASE cells and MUST be base-cell-aligned (an integer block).
+  `k = base_cell_m / cell_m` MUST be a positive integer; the tile raster dims MUST equal
+  `(r1-r0)*k × (c1-c0)*k`.
+- **Tile set:** `id` is unique within a frame; tile `region_rc` regions are pairwise DISJOINT
+  (no base cell under more than one tile); gaps are allowed (uncovered base cells render at base
+  resolution). Producers MUST NOT emit overlapping tiles; a consumer that finds overlap MAY
+  render either and SHOULD warn.
+- **Robustness:** a consumer that finds a tile violating base-alignment, the dimension relation,
+  or integer-`k` MUST ignore that tile and fall back to the base rasters for its region (never
+  crash) — the base rasters always fully describe the scene, so dropping a bad tile is safe.
+- **Relation to §5.1:** the refined region is the union of the §5.1 leaves selected by
+  `refine_where` — `"active"` → `active_leaves`, `"touched"` → `touched_leaves`,
+  `"none"`/`enabled:false` → no tiles. `fine_min_leaf` is the leaf size tiles are stored at (may
+  be `< quadtree_lod.min_leaf`); `tiles[]` is thus the refined subset of the §5.1 leaf set.
+- **Placement:** `tiles[]` is a PER-FRAME key (on `tNNN/metadata.json`); `refinement` appears on
+  BOTH the parent `metadata.json` (scene-level policy) and per-frame as emitted.
+- **Discoverability (optional):** a producer MAY add an informational top-level
+  `"contract_revision": "1.0.2"` and/or `"features": [...]`; these are ignorable and do NOT change
+  `schema_version` (still `"1.0"`). Consumers MUST feature-detect by key presence, not by
+  `contract_revision`.
+- **CONSERVATION INVARIANT (normative):** for any base cell overlapped by a tile, the base
+  raster value MUST equal the **mass-conserving coarsen()** of that tile's fine cells:
+  `mass_areal_base = mean(mass_areal_fine)`; `density_base = mass_areal_base /
+  mean(mass_areal_fine/density_fine)` (the mass-weighted harmonic mean — chosen so base height =
+  area-mean of child heights; **NOT** `Σ(mass·ρ)/Σmass`, which would break the height invariant);
+  `datum_base = mean(datum_fine)`; `state_label_base` = highest-priority child label by
+  **EXCAVATED > SPOIL > COMPACTED_BERM > TREAD > VIRGIN**; `disturbance_base = mean`. I.e. the
+  base raster is always a valid mass-conserving down-sample of the finest data present. The full
+  refine/coarsen operators (drift 0, `height = datum + mass_areal/density` preserved, zero-mass
+  branch, integer-`k` precondition) are specified in `docs/render_fidelity_spec.md` §2.4 and
+  asserted in `terrain_authority/tests.py`.
+
 ## 6. Producer & consumer responsibilities
 
 | Producer (terrain_authority / Chrono) MUST | Consumer (Godot / native viz) MAY ASSUME |
@@ -168,3 +266,11 @@ interaction-keyed quadtree keys in §5.1 (`rover_rc`, `active_leaves`, `touched_
 or existing metadata key changed; `schema_version` stays `"1.0"` because the on-disk raster
 contract is unchanged and consumers may ignore the new keys. Bump `schema_version` only on a
 BREAKING change.*
+
+*v1.0.2 (2026-05-30): ADDITIVE only — added OPTIONAL §5.2 (`wheel_tracks`, `drum_marks` for
+shader-driven per-wheel track & drum teeth-mark detail) and §5.3 (`refinement`, `tiles[]` for
+variable-resolution corridor refinement with a normative mass-conserving base↔tile invariant).
+Base rasters, dtypes, endianness, and all existing keys are unchanged; `tiles/` sub-bundles are
+themselves standard v1.0 raster bundles. Consumers may ignore every v1.0.2 key and render
+identically to v1.0.1; `schema_version` stays `"1.0"`. Design + operators:
+`docs/render_fidelity_spec.md`.*
