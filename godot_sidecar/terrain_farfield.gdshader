@@ -31,6 +31,15 @@ uniform float macro_scale_m = 0.42;
 uniform sampler2D state_tex : filter_nearest;          // R = label/255 (0..4)
 uniform sampler2D disturbance_tex : filter_linear;     // R = [0,1]
 
+// Cut-depth / exposed-sublayer albedo (mirror of terrain.gdshader; render_fidelity). Gated
+// by cut_depth_enabled (uniform-mantle scenes only) so it is fully additive.
+uniform bool cut_depth_enabled = false;
+uniform sampler2D mass_areal_tex : filter_linear;      // R = kg/m^2 (raw)
+uniform float mantle_areal_m0 = 156.0;
+uniform float surface_density_cd = 1300.0;
+uniform float cut_depth_full_m = 0.08;
+uniform float fresh_albedo_gain = 1.5;
+
 varying vec2 fuv;   // UV (0..1 across the field) carried to the fragment stage
 
 // --- cheap hash / value noise (verbatim mirror of terrain.gdshader §4.2.2) ---
@@ -86,7 +95,7 @@ void fragment() {
 		col *= 0.82;
 		rough = 0.90;
 	} else if (lbl == 2) {     // EXCAVATED: fresh firm sublayer -> brighter
-		col *= 1.30;
+		if (!cut_depth_enabled) { col *= 1.30; }   // cut-depth owns the brightening when on
 		rough = 0.92;
 	} else if (lbl == 3) {     // SPOIL: loose pile -> slightly darker, very rough
 		col *= 0.90;
@@ -94,6 +103,18 @@ void fragment() {
 	} else if (lbl == 4) {     // COMPACTED_BERM: packed mound -> a touch brighter
 		col *= 1.12;
 		rough = 0.92;
+	}
+
+	// Cut-depth / exposed-sublayer albedo (continuous; mirror of terrain.gdshader).
+	if (cut_depth_enabled) {
+		float ma = texture(mass_areal_tex, fuv).r;
+		float removed_m = max(mantle_areal_m0 - ma, 0.0) / max(surface_density_cd, 1.0);
+		float expo = clamp(removed_m / max(cut_depth_full_m, 1e-4), 0.0, 1.0);
+		vec3 fresh = col * fresh_albedo_gain;
+		float g = dot(fresh, vec3(0.3333));
+		fresh = mix(fresh, vec3(g), 0.18 * expo);
+		col = mix(col, fresh, expo);
+		rough = mix(rough, 0.90, 0.4 * expo);
 	}
 
 	ALBEDO = col;

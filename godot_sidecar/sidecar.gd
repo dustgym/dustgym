@@ -94,6 +94,15 @@ var _cam_pos := Vector3(2.56, 2.2, 5.6)
 var _cam_target := Vector3(2.56, -0.1, 2.56)
 var _has_pose := false
 
+# Sun direction (degrees). Defaults to the ~5deg grazing lunar sun (spec §8); overridable via
+# --sun-elev / --sun-azim for INSPECTION renders (e.g. lighting an excavated floor that the
+# grazing sun self-shadows). Elevation is the angle ABOVE the horizon; azimuth the compass dir.
+var _sun_elev_deg := 5.0
+var _sun_azim_deg := 215.0
+# Tonemap exposure. Default tuned for the grazing sun; lower it for raised-sun inspection
+# renders so a fully-lit surface doesn't clip to white (which flattens albedo differences).
+var _exposure := 1.2
+
 var sf                       # StateFields instance (preloaded script)
 var _cam: Camera3D
 
@@ -373,6 +382,12 @@ func _parse_args() -> void:
 					_cam_pos = Vector3(float(p[0]), float(p[1]), float(p[2]))
 					_cam_target = Vector3(float(p[3]), float(p[4]), float(p[5]))
 					_has_pose = true
+			"--sun-elev":
+				i += 1; _sun_elev_deg = float(args[i])
+			"--sun-azim":
+				i += 1; _sun_azim_deg = float(args[i])
+			"--exposure":
+				i += 1; _exposure = float(args[i])
 			_:
 				push_warning("sidecar: unknown arg '%s'" % a)
 		i += 1
@@ -392,9 +407,10 @@ func _has(layer: String) -> bool:
 func _setup_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	# ~5deg elevation grazing sun (spec §8 "0-7deg polar; grazing -> extreme shadows").
-	# Azimuth chosen to rake across the camera-facing terrain so relief reads,
-	# while the far crater wall stays in deep shadow (the perception hazard).
-	sun.rotation_degrees = Vector3(-5.0, 215.0, 0.0)
+	# Azimuth chosen to rake across the camera-facing terrain so relief reads, while the far
+	# crater wall stays in deep shadow (the perception hazard). Overridable via --sun-elev /
+	# --sun-azim for INSPECTION renders (the grazing default self-shadows excavated floors).
+	sun.rotation_degrees = Vector3(-_sun_elev_deg, _sun_azim_deg, 0.0)
 	sun.light_energy = 3.0   # bright disc; vacuum has no scatter to fill shadows
 	# The Sun subtends ~0.5deg from the Moon. A non-zero angular size turns on Godot's
 	# PCSS-style penumbra: shadow edges stay crisp at the occluder and soften with distance
@@ -422,7 +438,7 @@ func _setup_environment() -> void:
 	e.glow_enabled = false
 	e.ssao_enabled = false
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC  # tame extreme dynamic range
-	e.tonemap_exposure = 1.2
+	e.tonemap_exposure = _exposure
 	we.environment = e
 	add_child(we)
 

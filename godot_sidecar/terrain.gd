@@ -73,6 +73,14 @@ func _build_far_field(mode: int) -> void:
 		# geometric groove. render_fidelity track fix.
 		sm.set_shader_parameter("state_tex", sf.tex_state())
 		sm.set_shader_parameter("disturbance_tex", sf.tex_disturbance())
+		# Cut-depth albedo on the far field too (so the excavated swath reads fresh across the
+		# whole patch, not just under the active window). Same gate/uniforms as the active mat.
+		sm.set_shader_parameter("mass_areal_tex", sf.tex_mass_areal())
+		sm.set_shader_parameter("cut_depth_enabled", sf.has_uniform_mantle)
+		sm.set_shader_parameter("mantle_areal_m0", sf.mantle_areal_m0)
+		sm.set_shader_parameter("surface_density_cd", sf.mantle_surface_density)
+		sm.set_shader_parameter("cut_depth_full_m", sf.cut_depth_full_m)
+		sm.set_shader_parameter("fresh_albedo_gain", sf.maturity_albedo_ratio)
 		_far_mi.material_override = sm
 	else:
 		# In false-color modes the far plane just uses the active material look;
@@ -194,6 +202,16 @@ func _build_active_zone(mode: int) -> void:
 		# (INTERFACE.md §1/§3): span = width * cell_m. Lets the in-shader noise/cleat/
 		# teeth periods be real metres regardless of field size.
 		sm.set_shader_parameter("field_span_m", float(sf.width) * sf.cell_m)
+		# Cut-depth / exposed-sublayer albedo (render_fidelity). Fresh-cut regolith reads
+		# brighter than the space-weathered surface, graded by EXCAVATED areal-mass deficit
+		# (M0 - mass_areal). Enabled only when the scene declares the uniform-mantle model, so
+		# this is additive: scenes without it render exactly as before.
+		sm.set_shader_parameter("mass_areal_tex", sf.tex_mass_areal())
+		sm.set_shader_parameter("cut_depth_enabled", sf.has_uniform_mantle)
+		sm.set_shader_parameter("mantle_areal_m0", sf.mantle_areal_m0)
+		sm.set_shader_parameter("surface_density_cd", sf.mantle_surface_density)
+		sm.set_shader_parameter("cut_depth_full_m", sf.cut_depth_full_m)
+		sm.set_shader_parameter("fresh_albedo_gain", sf.maturity_albedo_ratio)
 		_active_mi.material_override = sm
 	else:
 		_active_mi.material_override = _make_falsecolor_mat(mode)

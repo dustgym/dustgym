@@ -74,9 +74,25 @@ var _img_track_dir: Image
 
 # --- per-field Images (kept so we can both sample CPU-side and build textures) ---
 var img_height: Image
+var img_mass_areal: Image
 var img_density: Image
 var img_disturbance: Image
 var img_state: Image
+
+# --- OPTIONAL regolith model (INTERFACE.md additive; render_fidelity cut-depth albedo) ---
+# When a scene declares the "uniform mantle" model (datum carries macro topography, a uniform
+# regolith mantle of areal mass M0 sits on top), the renderer can compute a CUT-DEPTH /
+# exposed-sublayer signal as the excavated areal-mass deficit (M0 - mass_areal): immune to
+# compaction (which leaves mass_areal untouched) and to natural topography (which lives in
+# datum). Absent => has_uniform_mantle=false and the cut-depth term is OFF (identical to before).
+var has_uniform_mantle: bool = false
+var mantle_areal_m0: float = 156.0        # Z_T(0.12 m) * RHO_SURFACE(1300) = pristine mantle kg/m^2
+var mantle_surface_density: float = 1300.0
+var cut_depth_full_m: float = 0.08        # removed thickness that maps to full fresh-albedo
+# Fresh/mature reflectance ratio = albedo multiplier at full exposure. A SOURCED radiometric
+# input (lunar soil maturity: immature/fresh soil is brighter than space-weathered; OMAT,
+# Lucey et al.; Hapke 2001), NOT a look knob. Conservative default in the measured ~1.3-1.8 band.
+var maturity_albedo_ratio: float = 1.4
 
 # raw float views for CPU sampling (e.g. mesh vertex displacement, clast snap)
 var _height_data: PackedFloat32Array
@@ -137,6 +153,9 @@ func load_scene(dir_path: String) -> bool:
 	# --- rasters ---
 	var fields: Dictionary = meta.get("fields", {})
 	img_height = _load_rf(dir, _file_of(fields, "heightmap", "heightmap.rf32"))
+	# mass_areal is OPTIONAL for the consumer (older renders never sampled it); load it when
+	# present for the cut-depth term, but do NOT fail the scene if it is missing.
+	img_mass_areal = _load_rf(dir, _file_of(fields, "mass_areal", "mass_areal.rf32"))
 	img_density = _load_rf(dir, _file_of(fields, "density", "density.rf32"))
 	img_disturbance = _load_rf(dir, _file_of(fields, "disturbance", "disturbance.rf32"))
 	img_state = _load_r8(dir, _file_of(fields, "state_label", "state_label.r8"))
@@ -188,6 +207,19 @@ func _parse_per_frame_keys() -> void:
 
 	_parse_track_keys()
 	_parse_refinement_keys()
+	_parse_regolith_model()
+
+# --- OPTIONAL uniform-mantle regolith model (cut-depth albedo). Feature-detect by the
+# "regolith_model": {"uniform_mantle": true, ...} block; absent => term stays OFF. ---
+func _parse_regolith_model() -> void:
+	has_uniform_mantle = false
+	var rm = meta.get("regolith_model", null)
+	if typeof(rm) == TYPE_DICTIONARY and bool(rm.get("uniform_mantle", false)):
+		has_uniform_mantle = true
+		mantle_areal_m0 = float(rm.get("mantle_areal_kg_m2", 156.0))
+		mantle_surface_density = float(rm.get("surface_density", 1300.0))
+		cut_depth_full_m = float(rm.get("cut_depth_full_m", 0.08))
+		maturity_albedo_ratio = float(rm.get("maturity_albedo_ratio", 1.4))
 
 # --- OPTIONAL v1.0.2 per-wheel tracks & drum marks (INTERFACE.md §5.2) ---
 # Feature-detect by key presence. has_track_dir becomes true only if at least one
@@ -397,6 +429,14 @@ func world_pos(row: int, col: int) -> Vector3:
 
 # Build an ImageTexture for shader sampling.
 func tex_height() -> ImageTexture: return ImageTexture.create_from_image(img_height)
+# mass_areal as an FP texture for the cut-depth term. If the raster was absent, return a 1x1
+# texture holding a huge areal mass so (M0 - mass_areal) < 0 -> zero exposure (safely neutral).
+func tex_mass_areal() -> ImageTexture:
+	if img_mass_areal == null:
+		var im := Image.create(1, 1, false, Image.FORMAT_RF)
+		im.set_pixel(0, 0, Color(1.0e9, 0.0, 0.0, 1.0))
+		return ImageTexture.create_from_image(im)
+	return ImageTexture.create_from_image(img_mass_areal)
 func tex_density() -> ImageTexture: return ImageTexture.create_from_image(img_density)
 func tex_disturbance() -> ImageTexture: return ImageTexture.create_from_image(img_disturbance)
 func tex_state() -> ImageTexture: return ImageTexture.create_from_image(img_state)

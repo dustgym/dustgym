@@ -63,6 +63,18 @@ uniform vec3 base_albedo : source_color = vec3(0.46, 0.43, 0.40);
 uniform float macro_albedo_amp = 0.13;
 uniform float macro_scale_m = 0.42;
 
+// Cut-depth / exposed-sublayer albedo (render_fidelity). Fresh-cut regolith reads brighter
+// and slightly less reddened than the space-weathered surface; the brightening is graded by
+// the EXCAVATED areal-mass deficit -> removed thickness (M0 - mass_areal)/surface_density [m].
+// Immune to compaction (which leaves mass_areal untouched) and to natural topography (which
+// lives in datum). Gated by cut_depth_enabled (uniform-mantle scenes only) -> fully additive.
+uniform bool cut_depth_enabled = false;
+uniform sampler2D mass_areal_tex : filter_linear;   // R = kg/m^2 (raw)
+uniform float mantle_areal_m0 = 156.0;              // pristine mantle areal mass (kg/m^2)
+uniform float surface_density_cd = 1300.0;          // density of the removed surface material
+uniform float cut_depth_full_m = 0.08;              // removed thickness mapping to full fresh
+uniform float fresh_albedo_gain = 1.5;              // albedo multiplier at full exposure
+
 // --- detail pass tunables (render_fidelity_spec.md §4.2/§8 open params) ----------
 // World metres spanned by the field UV (0..1) — terrain.gd sets it from grid extent
 // so the in-shader noise/cleat periods are in real metres regardless of field size.
@@ -153,8 +165,11 @@ void fragment() {
 		rough = mix(rough, 0.80, 0.6);
 	} else if (lbl == 2) {
 		// EXCAVATED: fresh firm sublayer -> brighter + denser-looking. spec §6/§8.
-		// Brighten and tint toward the denser-material look; modulate by density.
-		col = mix(col, base_albedo * 1.45, 0.65 + 0.35 * dens_n);
+		// When cut-depth albedo is active it OWNS the brightening (continuous, depth-graded,
+		// applied below); otherwise keep the legacy flat tint so non-mantle scenes are unchanged.
+		if (!cut_depth_enabled) {
+			col = mix(col, base_albedo * 1.45, 0.65 + 0.35 * dens_n);
+		}
 		rough = mix(rough, 0.88, 0.5);
 	} else if (lbl == 3) {
 		// SPOIL: loose dumped pile -> slightly darker, very rough.
@@ -166,6 +181,20 @@ void fragment() {
 		rough = mix(rough, 0.85, 0.5);
 	}
 	// (lbl == 0 VIRGIN: untouched base look.)
+
+	// --- cut-depth / exposed-sublayer albedo (continuous; render_fidelity) ---
+	// Removed thickness from the areal-mass deficit; brighten + slightly desaturate toward
+	// fresh regolith, scaled by exposure. VIRGIN (mass_areal == M0) -> expo 0 -> no change.
+	if (cut_depth_enabled) {
+		float ma = texture(mass_areal_tex, field_uv).r;
+		float removed_m = max(mantle_areal_m0 - ma, 0.0) / max(surface_density_cd, 1.0);
+		float expo = clamp(removed_m / max(cut_depth_full_m, 1e-4), 0.0, 1.0);
+		vec3 fresh = col * fresh_albedo_gain;                 // brighter fresh sublayer
+		float g = dot(fresh, vec3(0.3333));
+		fresh = mix(fresh, vec3(g), 0.18 * expo);             // ... and slightly less reddened
+		col = mix(col, fresh, expo);
+		rough = mix(rough, 0.90, 0.4 * expo);                 // fresh firm cut: a touch less rough
+	}
 
 	// =====================================================================
 	// DETAIL NORMAL PASS (render_fidelity_spec.md §4.2). All ADDITIVE: with
