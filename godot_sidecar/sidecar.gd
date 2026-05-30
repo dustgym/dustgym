@@ -13,6 +13,9 @@ extends Node3D
 #   --layers a,b,c            comma list of layers to enable (default terrain,clasts)
 #   --out    <png>            output path (default res://out/sidecar.png)
 #   --size   WxH              viewport size (default 1024x768)
+#   --sun-elev / --sun-azim   sun elevation/azimuth deg (inspection; default grazing 5/215)
+#   --exposure <f>            filmic tonemap exposure (default 1.2)
+#   --brdf   hapke|lambert    terrain BRDF: Hapke/Lommel-Seeliger (default) or Lambert baseline
 #
 # LAYERS (each toggled on/off by presence in --layers):
 #   heightmap  : unlit false-color ramp by elevation        (layer 1)
@@ -102,6 +105,9 @@ var _sun_azim_deg := 215.0
 # Tonemap exposure. Default tuned for the grazing sun; lower it for raised-sun inspection
 # renders so a fully-lit surface doesn't clip to white (which flattens albedo differences).
 var _exposure := 1.2
+# Photometry / BRDF (render_fidelity). Hapke / Lommel-Seeliger is ON by default (every scene gets
+# the airless-regolith BRDF); --brdf lambert flips it to the Lambert baseline for the A/B render.
+var _brdf_hapke := true
 
 var sf                       # StateFields instance (preloaded script)
 var _cam: Camera3D
@@ -388,6 +394,8 @@ func _parse_args() -> void:
 				i += 1; _sun_azim_deg = float(args[i])
 			"--exposure":
 				i += 1; _exposure = float(args[i])
+			"--brdf":
+				i += 1; _brdf_hapke = (String(args[i]).strip_edges().to_lower() != "lambert")
 			_:
 				push_warning("sidecar: unknown arg '%s'" % a)
 		i += 1
@@ -459,6 +467,10 @@ func _setup_camera() -> void:
 
 # ---------------------------------------------------------------------------
 func _build_layers() -> void:
+	# Photometry toggle (render_fidelity; --brdf lambert|hapke) flows into the terrain materials
+	# via sf. Set here so it applies on every (re)build, including each --sequence frame.
+	if sf != null:
+		sf.hapke_enabled = _brdf_hapke
 	# Terrain-family layers are mutually informative; precedence:
 	# heightmap / state false-color override the lit terrain look if requested.
 	# The "quadtree" layer is an additive wireframe LOD overlay (built inside the
@@ -501,10 +513,18 @@ func _build_clasts() -> void:
 	sphere.height = 2.0          # unit sphere; per-instance scale sets radius
 	sphere.radial_segments = 16
 	sphere.rings = 8
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.55, 0.52, 0.49)  # rock slightly brighter than fines
-	mat.roughness = 0.92
-	mat.metallic = 0.0
+	# Hapke / Lommel-Seeliger BRDF, the SAME airless-regolith photometry as the terrain
+	# (clast.gdshader), so the boulders read as lit rock rather than blown-white Lambert blobs.
+	# The --brdf flag (sf.hapke_enabled, set in _build_layers) drives them in lockstep with the
+	# terrain for the A/B comparison; params come from sf (literature defaults / scene override).
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://clast.gdshader")
+	mat.set_shader_parameter("hapke_enabled", sf.hapke_enabled)
+	mat.set_shader_parameter("hapke_b", sf.hapke_b)
+	mat.set_shader_parameter("hapke_c", sf.hapke_c)
+	mat.set_shader_parameter("hapke_B0", sf.hapke_B0)
+	mat.set_shader_parameter("hapke_h", sf.hapke_h)
+	mat.set_shader_parameter("hapke_gain", sf.hapke_gain)
 	sphere.material = mat
 
 	var mm := MultiMesh.new()

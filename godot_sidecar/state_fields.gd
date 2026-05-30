@@ -94,6 +94,22 @@ var cut_depth_full_m: float = 0.08        # removed thickness that maps to full 
 # Lucey et al.; Hapke 2001), NOT a look knob. Conservative default in the measured ~1.3-1.8 band.
 var maturity_albedo_ratio: float = 1.4
 
+# --- OPTIONAL photometry / BRDF (render_fidelity; Hapke / Lommel-Seeliger). These are PHYSICAL
+# CONSTANTS of lunar regolith, not scene geometry, so they default to literature values and apply
+# to EVERY scene (additive: existing scenes just get the correct airless-surface BRDF in place of
+# Lambert). hapke_enabled is flipped to false by the sidecar --brdf lambert flag for the A/B
+# comparison render. A scene MAY override the parameters via a "photometric_model" metadata block
+# (e.g. highlands vs mare). Sources: Sato et al. 2014 (LROC-derived global Hapke maps, 643 nm) for
+# the 2-term Henyey-Greenstein b,c; Hapke 2002 for the shadow-hiding opposition B0,h; Hapke
+# 1981/2012 for the IMSA framework. The shader (terrain.gdshader light()) uses the per-texel
+# ALBEDO as the single-scattering albedo w. See papers/CITATIONS.md.
+var hapke_enabled: bool = true
+var hapke_b: float = 0.26          # 2-term HG lobe width (mare, 643 nm; Sato et al. 2014)
+var hapke_c: float = 0.08          # 2-term HG back/forward partition (mare; Sato et al. 2014)
+var hapke_B0: float = 1.0          # shadow-hiding opposition amplitude (Hapke 2002, lunar)
+var hapke_h: float = 0.06          # shadow-hiding opposition angular width [rad] (Hapke 2002)
+var hapke_gain: float = 1.4        # radiance calibration -> Lambert-comparable mid-tone (documented; not a look knob)
+
 # raw float views for CPU sampling (e.g. mesh vertex displacement, clast snap)
 var _height_data: PackedFloat32Array
 var _state_data: PackedByteArray
@@ -208,6 +224,7 @@ func _parse_per_frame_keys() -> void:
 	_parse_track_keys()
 	_parse_refinement_keys()
 	_parse_regolith_model()
+	_parse_photometric_model()
 
 # --- OPTIONAL uniform-mantle regolith model (cut-depth albedo). Feature-detect by the
 # "regolith_model": {"uniform_mantle": true, ...} block; absent => term stays OFF. ---
@@ -220,6 +237,18 @@ func _parse_regolith_model() -> void:
 		mantle_surface_density = float(rm.get("surface_density", 1300.0))
 		cut_depth_full_m = float(rm.get("cut_depth_full_m", 0.08))
 		maturity_albedo_ratio = float(rm.get("maturity_albedo_ratio", 1.4))
+
+# --- OPTIONAL photometric override (render_fidelity; Hapke). Lets a scene specify highlands- vs
+# mare-specific Hapke parameters (else the literature mare defaults stand). hapke_enabled is NOT
+# touched here -- the sidecar --brdf flag owns it. Feature-detect by a "photometric_model" dict. ---
+func _parse_photometric_model() -> void:
+	var pm = meta.get("photometric_model", null)
+	if typeof(pm) == TYPE_DICTIONARY:
+		hapke_b = float(pm.get("hg_b", hapke_b))
+		hapke_c = float(pm.get("hg_c", hapke_c))
+		hapke_B0 = float(pm.get("opposition_b0", hapke_B0))
+		hapke_h = float(pm.get("opposition_h", hapke_h))
+		hapke_gain = float(pm.get("radiance_gain", hapke_gain))
 
 # --- OPTIONAL v1.0.2 per-wheel tracks & drum marks (INTERFACE.md §5.2) ---
 # Feature-detect by key presence. has_track_dir becomes true only if at least one

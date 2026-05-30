@@ -34,9 +34,10 @@ shader_type spatial;
 // is needed. When track_dir_tex is neutral the cleat/teeth contributions vanish.
 //
 // Lunar surface: no atmospheric scatter, near-black shadows, high specular-less
-// roughness — a Lambertian-ish dusty surface (spec §8).
+// roughness. Diffuse is owned by the custom light() below — a Hapke / Lommel-Seeliger
+// BRDF for the airless, backscattering regolith (render_fidelity), NOT Lambert (spec §8).
 
-render_mode specular_disabled, diffuse_lambert;
+render_mode specular_disabled;
 
 uniform sampler2D disturbance_tex : source_color, filter_linear;  // R = [0,1]
 uniform sampler2D state_tex : filter_nearest;                     // R = label/255
@@ -74,6 +75,31 @@ uniform float mantle_areal_m0 = 156.0;              // pristine mantle areal mas
 uniform float surface_density_cd = 1300.0;          // density of the removed surface material
 uniform float cut_depth_full_m = 0.08;              // removed thickness mapping to full fresh
 uniform float fresh_albedo_gain = 1.5;              // albedo multiplier at full exposure
+
+// --- PHOTOMETRY: Hapke bidirectional reflectance (render_fidelity; replaces Lambert) ---
+// Lunar regolith is a backscattering, airless granular surface; Lambert (cos i) is wrong at
+// the grazing/low-sun angles the IPEx POLAR mission cares about — it crushes low-incidence
+// slopes to black. Lighting is owned by light() (below) using the Hapke IMSA model (isotropic
+// multiple-scattering approximation), built up from the Lommel-Seeliger single-scattering core
+// so each physical term stays legible. The single-scattering albedo w is the per-texel ALBEDO
+// computed above (macro mottle + state tints + cut-depth all flow in as a spatially/chromatically
+// varying w — standard Hapke usage). See the light() block for the full equation + sources.
+//   hapke_enabled : false => Lambert fallback (the A/B comparison baseline; --brdf lambert).
+//   b, c          : 2-term Henyey-Greenstein phase params, lunar MARE @643 nm
+//                   (Sato et al. 2014, LROC-derived global Hapke parameter maps).
+//   B0, h         : shadow-hiding opposition surge amplitude / angular width [rad] (Hapke 2002).
+//   hapke_gain    : reflectance->radiance calibration (documented; absolute brightness is also
+//                   set by the Sun light_energy + filmic exposure, so this is NOT a hidden knob).
+uniform bool  hapke_enabled = true;
+uniform float hapke_b  = 0.26;
+uniform float hapke_c  = 0.08;
+uniform float hapke_B0 = 1.0;
+uniform float hapke_h  = 0.06;
+// Radiance calibration: lands the nominal grazing-sun regolith at the same mid-tone as the
+// prior Lambert look (measured Hapke/Lambert lit-terrain ~0.71 at gain 1.0 -> 1.4 equalizes),
+// so the A/B comparison isolates BRDF SHAPE, not overall level. Reconciles the folded-PI scale
+// with the established light_energy(3.0)+filmic exposure; documented, not a per-scene look knob.
+uniform float hapke_gain = 1.4;
 
 // --- detail pass tunables (render_fidelity_spec.md §4.2/§8 open params) ----------
 // World metres spanned by the field UV (0..1) — terrain.gd sets it from grid extent
@@ -135,6 +161,18 @@ float vnoise(vec2 p) {
 // 2-octave granular height in [0,1] at a point scaled into "grain space".
 float grain_height(vec2 gp) {
 	return 0.65 * vnoise(gp) + 0.35 * vnoise(gp * 2.7 + 11.3);
+}
+
+// 2-term Henyey-Greenstein single-particle phase function P(g) as a function of cos(phase
+// angle). cg = cos(g), where g is the angle between the directions to the Sun and to the
+// camera (g=0 at opposition / full backscatter). c>0 weights the BACKscattering lobe — lunar
+// regolith is net backscattering at visible wavelengths (Sato et al. 2014 mare b,c). At g=0
+// this returns >1 (the backscatter peak); normalization is carried by the w/4PI factor in r.
+float hg_phase(float cg, float b, float c) {
+	float b2 = b * b;
+	float back = (1.0 - b2) / pow(max(1.0 - 2.0 * b * cg + b2, 1e-4), 1.5);
+	float fwd  = (1.0 - b2) / pow(max(1.0 + 2.0 * b * cg + b2, 1e-4), 1.5);
+	return 0.5 * (1.0 + c) * back + 0.5 * (1.0 - c) * fwd;
 }
 
 void fragment() {
@@ -333,4 +371,55 @@ void fragment() {
 	ROUGHNESS = clamp(rough, 0.0, 1.0);
 	METALLIC = 0.0;
 	NORMAL = N;   // view-space perturbed normal (NORMAL output is view-space)
+}
+
+// =====================================================================
+// LIGHT (render_fidelity): Hapke IMSA bidirectional reflectance, replacing Lambert.
+// The headline fidelity term for the grazing polar sun the IPEx team cares about.
+//
+//   r(i,e,g) = (w/4PI) * mu0/(mu0+mu) * [ (1 + B(g))*P(g) + H(mu0)*H(mu) - 1 ]
+//
+//   mu0 = cos(incidence) = N.L,  mu = cos(emission) = N.V,  g = phase angle.
+//   * mu0/(mu0+mu)  Lommel-Seeliger single-scattering geometry (Hapke 1981). THE headline
+//                   change over Lambert: it cancels most of Lambert's limb/terminator
+//                   darkening, so the surface reads as the near-uniform-brightness disk the
+//                   Moon actually is, instead of a Lambert sphere driven to black at the
+//                   grazing incidence of a ~5deg polar sun.
+//   * P(g)          2-term Henyey-Greenstein single-particle phase fn; lunar mare is net
+//                   backscattering (Sato et al. 2014 LROC b=0.26,c=0.08 @643 nm).
+//   * B(g)          shadow-hiding opposition surge B0/(1 + tan(g/2)/h) — bright spike toward
+//                   zero phase, Sun directly behind the camera (Hapke 2002).
+//   * H(x)          Chandrasekhar isotropic multiple-scattering function, Hapke 1981 rational
+//                   approximation (1+2x)/(1+2x*sqrt(1-w)); small on the dark Moon but included.
+//   * w == ALBEDO   per-texel single-scattering albedo (chromatic, spatial: mottle/state/cut).
+//
+// NORMAL is the DETAIL-perturbed normal and ATTENUATION carries the real cast shadow, so both
+// micro-relief and cast shadows feed the BRDF. The macroscopic-roughness shadowing term
+// S(i,e,g;theta_bar) (Hapke 1984) is deliberately OMITTED — the detail-normal pass + real cast
+// shadows already carry sub-mesh roughness shadowing geometrically; the statistical theta_bar
+// correction is flagged in render_fidelity_spec as the next refinement. hapke_enabled=false
+// falls back to Lambert so the same pipeline renders the A/B comparison.
+// =====================================================================
+void light() {
+	// NB: Godot's light() processor forbids `return`, so this is structured as nested if/else.
+	float mu0 = dot(NORMAL, LIGHT);
+	if (mu0 > 0.0) {                                        // mu0<=0 => self-shadowed, no direct term
+		if (!hapke_enabled) {                              // Lambert fallback (A/B baseline)
+			DIFFUSE_LIGHT += ALBEDO * LIGHT_COLOR * ATTENUATION * mu0;
+		} else {
+			float mu = max(dot(NORMAL, VIEW), 1e-3);       // cos emission (camera side)
+			float cg = clamp(dot(LIGHT, VIEW), -1.0, 1.0); // cos(phase angle); LIGHT,VIEW unit
+			float g  = acos(cg);
+			float P  = hg_phase(cg, hapke_b, hapke_c);                             // phase function
+			float B  = hapke_B0 / (1.0 + tan(0.5 * g) / max(hapke_h, 1e-4));       // SHOE surge
+			vec3  w  = clamp(ALBEDO, vec3(0.0), vec3(0.999));                      // single-scatter albedo
+			vec3  gamma = sqrt(1.0 - w);
+			vec3  Hi = (1.0 + 2.0 * mu0) / (1.0 + 2.0 * mu0 * gamma);              // H(mu0)
+			vec3  He = (1.0 + 2.0 * mu)  / (1.0 + 2.0 * mu  * gamma);              // H(mu)
+			float ls = mu0 / (mu0 + mu);                                          // Lommel-Seeliger core
+			// w/(4PI), PI folded into Godot's diffuse-light scale (LIGHT_COLOR carries energy) -> w*0.25.
+			vec3  r  = (w * 0.25) * ls * ((1.0 + B) * P + Hi * He - 1.0);
+			DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * max(r, vec3(0.0)) * hapke_gain;
+		}
+	}
 }

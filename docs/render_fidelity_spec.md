@@ -197,3 +197,41 @@ Default the whole refinement subsystem **off** so the existing scenes/tests are 
 - Drum `teeth_count` / `teeth_pitch_m` / scoop depth (RASSOR drum; cite `2021-ASCEND-Mass-Inference-RASSOR.pdf`).
 - Exact wheel **contact width** (the 0.18 m default vs the rendered mesh).
 - Whether TAA (needs motion vectors over a sequence) or MSAA+SSAA is the better headless default.
+
+---
+
+## 9. Photometry — Hapke / Lommel–Seeliger BRDF (IMPLEMENTED)
+
+The terrain and clast shaders own diffuse lighting via a custom `light()` instead of Godot's
+`diffuse_lambert`. Lambert (∝ cos *i*) is wrong for an airless granular surface and **most wrong at
+the grazing/low-sun angles the IPEx polar mission cares about** (it crushes low-incidence slopes to
+black). We use the **Hapke IMSA** (isotropic multiple-scattering approximation), built up from the
+Lommel–Seeliger single-scattering core so each physical term stays legible:
+
+```
+r(i,e,g) = (w/4π) · μ₀/(μ₀+μ) · [ (1 + B(g))·P(g) + H(μ₀)H(μ) − 1 ]
+```
+
+- **μ₀/(μ₀+μ)** — Lommel–Seeliger single-scattering geometry (Hapke 1981). The headline change over
+  Lambert: cancels most limb/terminator darkening → the near-uniform-brightness disk the Moon
+  actually is, instead of a Lambert sphere driven to black at a 5° grazing sun.
+- **P(g)** — 2-term Henyey–Greenstein phase fn; lunar mare is net **backscattering**. `b=0.26, c=0.08`
+  (Sato et al. 2014, LROC-derived global Hapke maps @643 nm).
+- **B(g)** — shadow-hiding opposition surge `B₀/(1+tan(g/2)/h)`, `B₀=1.0, h=0.06` (Hapke 2002).
+- **H(x)** — Chandrasekhar isotropic multiple scattering, Hapke 1981 rational approx; small on the
+  dark Moon but included.
+- **w** = the per-texel `ALBEDO` (macro mottle + state tints + cut-depth), so all prior appearance
+  work flows in as a spatially/chromatically varying single-scattering albedo (standard Hapke usage).
+
+Implementation: `terrain.gdshader`, `terrain_farfield.gdshader`, `clast.gdshader` (one shared
+`light()`); params in `state_fields.gd` (literature defaults + optional per-scene `photometric_model`
+override, e.g. highlands vs mare); `--brdf lambert|hapke` toggles the same pipeline for the A/B.
+Additive & default-on (every scene gets correct airless photometry; no INTERFACE/physics change).
+`hapke_gain=1.4` is a documented radiance calibration (lands the nominal scene at the prior
+Lambert mid-tone), not a look-knob. Sources are cited by author/year in `papers/CITATIONS.md`.
+
+**Deferred (flagged, not yet built): macroscopic-roughness shadowing** `S(i,e,g; θ̄)` (Hapke 1984,
+mean slope θ̄ ≈ 20–25° for the Moon). It primarily corrects the BRDF near the terminator/limb — i.e.
+the grazing-sun regime — so it is the natural next photometry refinement. We omit it for now because
+the detail-normal pass (§4.2.2) + real cast shadows already carry sub-mesh roughness shadowing
+*geometrically*; the statistical θ̄ term is a second-order correction on top of that.

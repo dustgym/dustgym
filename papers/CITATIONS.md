@@ -38,3 +38,19 @@ clones the repo; obtain the documents from their publisher / DOI / NASA NTRS.
 
 *Descriptors are paraphrased from how each work is used in this repo; consult the
 original for authoritative bibliographic data.*
+
+## Photometry references (cited by author/year; not in the corpus)
+
+The Hapke / Lommel–Seeliger terrain+clast BRDF (`godot_sidecar/*.gdshader`;
+[`../docs/render_fidelity_spec.md`](../docs/render_fidelity_spec.md) §9) uses **foundational
+photometry equations and published lunar parameters**, cited by author/year rather than by a local
+PDF — these are textbook relations, appropriate to cite directly. They are *not* in `papers/`;
+they are recommended additions to the private library.
+
+| Reference | What it anchors here |
+|---|---|
+| Hapke, B. (1981) *Bidirectional reflectance spectroscopy 1. Theory.* JGR 86, 3039–3054. | The IMSA framework, the Lommel–Seeliger single-scattering core μ₀/(μ₀+μ), and the H-function multiple-scattering approximation. |
+| Hapke, B. (2002) *…5. The coherent backscatter opposition effect and anisotropic scattering.* Icarus 157, 523–534. | The shadow-hiding opposition surge B(g)=B₀/(1+tan(g/2)/h). |
+| Hapke, B. (1984) *…3. Correction for macroscopic roughness.* Icarus 59, 41–59. | The mean-slope θ̄ roughness/shadowing term S(i,e,g;θ̄) — **deferred** (spec §9), cited as the next refinement. |
+| Sato, H. et al. (2014) *Resolved Hapke parameter maps of the Moon.* JGR Planets 119, 1775–1805 (doi:10.1002/2013JE004580; LROC). | The numeric lunar **mare** parameters used: 2-term Henyey–Greenstein `b=0.26, c=0.08` @643 nm (and the highlands envelope for the optional per-scene override). |
+| Hapke, B. (2012) *Theory of Reflectance and Emittance Spectroscopy*, 2nd ed. Cambridge Univ. Press. | Consolidated reference for the double-HG phase function form and the IMSA bidirectional reflectance. |

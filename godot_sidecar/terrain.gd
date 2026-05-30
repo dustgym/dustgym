@@ -81,6 +81,14 @@ func _build_far_field(mode: int) -> void:
 		sm.set_shader_parameter("surface_density_cd", sf.mantle_surface_density)
 		sm.set_shader_parameter("cut_depth_full_m", sf.cut_depth_full_m)
 		sm.set_shader_parameter("fresh_albedo_gain", sf.maturity_albedo_ratio)
+		# Photometry: Hapke BRDF (render_fidelity). The far plane fills the frame, so it
+		# carries the same airless-regolith photometry as the active window (no BRDF seam).
+		sm.set_shader_parameter("hapke_enabled", sf.hapke_enabled)
+		sm.set_shader_parameter("hapke_b", sf.hapke_b)
+		sm.set_shader_parameter("hapke_c", sf.hapke_c)
+		sm.set_shader_parameter("hapke_B0", sf.hapke_B0)
+		sm.set_shader_parameter("hapke_h", sf.hapke_h)
+		sm.set_shader_parameter("hapke_gain", sf.hapke_gain)
 		_far_mi.material_override = sm
 	else:
 		# In false-color modes the far plane just uses the active material look;
@@ -212,6 +220,16 @@ func _build_active_zone(mode: int) -> void:
 		sm.set_shader_parameter("surface_density_cd", sf.mantle_surface_density)
 		sm.set_shader_parameter("cut_depth_full_m", sf.cut_depth_full_m)
 		sm.set_shader_parameter("fresh_albedo_gain", sf.maturity_albedo_ratio)
+		# Photometry: Hapke BRDF (render_fidelity; replaces Lambert). Physical lunar-regolith
+		# constants from state_fields (literature defaults, optional per-scene override). NORMAL
+		# here is the detail-perturbed normal, so micro-relief feeds the BRDF. --brdf lambert
+		# flips hapke_enabled for the A/B comparison render.
+		sm.set_shader_parameter("hapke_enabled", sf.hapke_enabled)
+		sm.set_shader_parameter("hapke_b", sf.hapke_b)
+		sm.set_shader_parameter("hapke_c", sf.hapke_c)
+		sm.set_shader_parameter("hapke_B0", sf.hapke_B0)
+		sm.set_shader_parameter("hapke_h", sf.hapke_h)
+		sm.set_shader_parameter("hapke_gain", sf.hapke_gain)
 		_active_mi.material_override = sm
 	else:
 		_active_mi.material_override = _make_falsecolor_mat(mode)

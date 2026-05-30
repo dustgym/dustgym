@@ -8,7 +8,10 @@ shader_type spatial;
 // CPU mesh, no fine subdivision, just one plane + a cheap vertex displace.
 // Contrast with terrain.gdshader, used for the fine ACTIVE zone.
 
-render_mode specular_disabled, diffuse_lambert;
+// Diffuse is owned by the custom light() below — the SAME Hapke / Lommel-Seeliger BRDF as
+// terrain.gdshader (render_fidelity), so the far field and the fine active window share one
+// airless-regolith photometry (no BRDF seam where they meet), NOT Lambert.
+render_mode specular_disabled;
 
 uniform sampler2D height_lowres : filter_linear;   // R = elevation (m), decimated
 // Aligned with terrain.gdshader's base_albedo (#2) so the fine ACTIVE window and this
@@ -40,6 +43,16 @@ uniform float surface_density_cd = 1300.0;
 uniform float cut_depth_full_m = 0.08;
 uniform float fresh_albedo_gain = 1.5;
 
+// Photometry: Hapke BRDF (mirror of terrain.gdshader — see that file's light() block for the
+// full equation + sources). The far-field plane fills the fly-through frame, so it MUST use the
+// same airless-regolith photometry as the active window or the two would shade differently.
+uniform bool  hapke_enabled = true;
+uniform float hapke_b  = 0.26;     // 2-term HG lobe width (mare 643 nm; Sato et al. 2014)
+uniform float hapke_c  = 0.08;     // 2-term HG back/forward partition (mare; Sato et al. 2014)
+uniform float hapke_B0 = 1.0;      // shadow-hiding opposition amplitude (Hapke 2002)
+uniform float hapke_h  = 0.06;     // shadow-hiding opposition angular width [rad] (Hapke 2002)
+uniform float hapke_gain = 1.4;    // radiance calibration -> Lambert-comparable mid-tone (documented)
+
 varying vec2 fuv;   // UV (0..1 across the field) carried to the fragment stage
 
 // --- cheap hash / value noise (verbatim mirror of terrain.gdshader §4.2.2) ---
@@ -57,6 +70,14 @@ float vnoise(vec2 p) {
 	float c = hash21(i + vec2(0.0, 1.0));
 	float d = hash21(i + vec2(1.0, 1.0));
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// 2-term Henyey-Greenstein phase function P(g) vs cos(phase angle) (mirror of terrain.gdshader).
+float hg_phase(float cg, float b, float c) {
+	float b2 = b * b;
+	float back = (1.0 - b2) / pow(max(1.0 - 2.0 * b * cg + b2, 1e-4), 1.5);
+	float fwd  = (1.0 - b2) / pow(max(1.0 + 2.0 * b * cg + b2, 1e-4), 1.5);
+	return 0.5 * (1.0 + c) * back + 0.5 * (1.0 - c) * fwd;
 }
 
 void vertex() {
@@ -120,4 +141,32 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = rough;
 	METALLIC = 0.0;
+}
+
+// Hapke IMSA BRDF, identical to terrain.gdshader's light() (see that file for the full
+// derivation + sources). The far-field NORMAL is the geometric heightmap-gradient normal
+// (no detail-normal pass here), but the photometry — Lommel-Seeliger limb behavior, the
+// backscatter phase function, opposition surge, multiple scattering — is the same, so the
+// far plane and the active window read as one surface under the grazing sun.
+void light() {
+	// Godot's light() processor forbids `return` -> nested if/else (mirror of terrain.gdshader).
+	float mu0 = dot(NORMAL, LIGHT);
+	if (mu0 > 0.0) {
+		if (!hapke_enabled) {
+			DIFFUSE_LIGHT += ALBEDO * LIGHT_COLOR * ATTENUATION * mu0;
+		} else {
+			float mu = max(dot(NORMAL, VIEW), 1e-3);
+			float cg = clamp(dot(LIGHT, VIEW), -1.0, 1.0);
+			float g  = acos(cg);
+			float P  = hg_phase(cg, hapke_b, hapke_c);
+			float B  = hapke_B0 / (1.0 + tan(0.5 * g) / max(hapke_h, 1e-4));
+			vec3  w  = clamp(ALBEDO, vec3(0.0), vec3(0.999));
+			vec3  gamma = sqrt(1.0 - w);
+			vec3  Hi = (1.0 + 2.0 * mu0) / (1.0 + 2.0 * mu0 * gamma);
+			vec3  He = (1.0 + 2.0 * mu)  / (1.0 + 2.0 * mu  * gamma);
+			float ls = mu0 / (mu0 + mu);
+			vec3  r  = (w * 0.25) * ls * ((1.0 + B) * P + Hi * He - 1.0);
+			DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * max(r, vec3(0.0)) * hapke_gain;
+		}
+	}
 }
