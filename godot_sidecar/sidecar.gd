@@ -34,6 +34,12 @@ const TRAIL_SIDE_M := 1.6     # meters to one side (3/4 view, so the track + LOD
 const TRAIL_HEIGHT_M := 2.1   # meters above the local surface (elevated, sees the ground around)
 const TRAIL_FOV := 50.0       # tighter than the 55deg whole-field default
 
+# Directional shadow frustum depth (render_fidelity #1). The scenes are a ~5.12 m patch;
+# elevated/oblique cameras sit a few metres off, so ~16 m comfortably covers patch + rover
+# + camera standoff while keeping the 8192 atlas dense (the default 100 m wasted it on empty
+# vacuum -> stair-stepped edges). One ORTHOGONAL cascade over this short range beats 4 splits.
+const SHADOW_MAX_DIST_M := 16.0
+
 # --- Articulated EZ-RASSOR assembly (README §4 #11 follow-on) -----------------
 # Kinematic tree transcribed from the EZ-RASSOR URDF (docs/ezrassor_assets.md §3),
 # Z-up(meters)->Y-up via (x,y,z)_zup -> (x,z,-y)_yup. The URDF scale=0.35 macro
@@ -390,8 +396,18 @@ func _setup_environment() -> void:
 	# while the far crater wall stays in deep shadow (the perception hazard).
 	sun.rotation_degrees = Vector3(-5.0, 215.0, 0.0)
 	sun.light_energy = 3.0   # bright disc; vacuum has no scatter to fill shadows
+	# The Sun subtends ~0.5deg from the Moon. A non-zero angular size turns on Godot's
+	# PCSS-style penumbra: shadow edges stay crisp at the occluder and soften with distance
+	# from it (physically correct, not a uniform blur). render_fidelity #1; needs
+	# soft_shadow_filter_quality>0 (set in project.godot).
+	sun.light_angular_distance = 0.5
 	sun.shadow_enabled = true
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	# A SINGLE high-res ORTHOGONAL cascade over the short SHADOW_MAX_DIST_M range, rather than
+	# 4 PSSM splits spread across the default 100 m frustum: the splits were giving the 8192
+	# atlas a huge per-texel footprint on this ~5 m patch -> stair-stepped, swimming shadow
+	# edges (the dominant "plasticy" tell). Pulling the frustum in jumps texel density ~6x.
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	sun.directional_shadow_max_distance = SHADOW_MAX_DIST_M
 	add_child(sun)
 
 	var we := WorldEnvironment.new()

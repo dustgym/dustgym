@@ -45,9 +45,13 @@ func _build_far_field(mode: int) -> void:
 	var ext: Vector2 = sf.extent_m()
 	var pm := PlaneMesh.new()
 	pm.size = ext
-	# Low subdivision on purpose — this is the cheap inactive-region mesh.
-	pm.subdivide_width = 32
-	pm.subdivide_depth = 32
+	# Subdivision matched to the decimated height texel grid (width/4 = 128 for the 512 field)
+	# so the vertex displace can actually resolve a ~18 cm rut: at 32 (16 cm quads) the thin
+	# track was undersampled into a row of dimples (beads), which the #1 crisp grazing shadows
+	# then lit as "circular indents". 128 quads (~4 cm) resolves the groove as a continuous
+	# trough. Still one cheap plane + a single vertex displace (the LOD-cheap story holds).
+	pm.subdivide_width = 128
+	pm.subdivide_depth = 128
 	# Center plane so it spans the whole field; PlaneMesh is centered at origin.
 	_far_mi = MeshInstance3D.new()
 	_far_mi.mesh = pm
@@ -62,6 +66,13 @@ func _build_far_field(mode: int) -> void:
 		# gradient-normal correctly (tex is decimated 4x from the full grid).
 		var lw := int(ceil(float(sf.width) / 4.0))
 		sm.set_shader_parameter("lod_step_m", ext.x / float(maxi(lw, 1)))
+		# State + disturbance at FULL field res so the rover track reads as a continuous
+		# TREAD albedo band on the far field regardless of this mesh's coarseness -- the track
+		# is an APPEARANCE feature, not reliant on under-resolved geometry. Sampled in the same
+		# 0..1 field UV the height displace already uses, so the dark band lands exactly on the
+		# geometric groove. render_fidelity track fix.
+		sm.set_shader_parameter("state_tex", sf.tex_state())
+		sm.set_shader_parameter("disturbance_tex", sf.tex_disturbance())
 		_far_mi.material_override = sm
 	else:
 		# In false-color modes the far plane just uses the active material look;
@@ -238,6 +249,11 @@ func _build_quadtree_overlay() -> void:
 		var mi := MeshInstance3D.new()
 		mi.mesh = im
 		mi.material_override = _overlay_line_mat()
+		# Debug annotation, not geometry: must NOT cast shadows. Default is ON even for an
+		# unshaded material, so the lifted (1-6 cm) wireframe was casting thin shadow stripes
+		# onto the terrain -- invisible under the old coarse shadows, but the #1 dense/crisp
+		# atlas resolves them as grid-correlated artifacts. (render_fidelity shadow fix)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_quadtree_node.add_child(mi)
 
 	# The live active_leaves hot-set: brightest warm, lifted highest, drawn on top.
@@ -251,6 +267,7 @@ func _build_quadtree_overlay() -> void:
 		var mia := MeshInstance3D.new()
 		mia.mesh = ima
 		mia.material_override = _overlay_line_mat()
+		mia.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # debug overlay: no shadow (see above)
 		_quadtree_node.add_child(mia)
 
 	add_child(_quadtree_node)

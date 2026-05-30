@@ -34,3 +34,11 @@ anti_aliasing/quality/screen_space_aa=2
 anti_aliasing/quality/use_taa=false
 scaling_3d/mode=0
 scaling_3d/scale=1.5
+; Grazing-sun shadow fidelity (render_fidelity #1). The ~5deg sun casts long shadows
+; whose edges dominate the "plasticy" read when undersampled. A large directional
+; atlas + Ultra soft-shadow filter resolves them crisply and lets the sun's physical
+; angular size (light_angular_distance, set in sidecar.gd) produce a real PCSS penumbra.
+; Paired with a pulled-in directional_shadow_max_distance so the atlas covers the ~5 m
+; patch instead of the default 100 m frustum (the texel-density win).
+lights_and_shadows/directional_shadow/size=8192
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=5

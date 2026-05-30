@@ -55,6 +55,14 @@ uniform float density_hi = 1456.0;
 // Base regolith albedo (mare-ish mid grey; spec §8 dusty surface).
 uniform vec3 base_albedo : source_color = vec3(0.46, 0.43, 0.40);
 
+// Macro albedo mottle (render_fidelity_spec.md §8 "exposed-sublayer albedo"; #2). A
+// low-frequency value-noise variation applied to ALL states incl. VIRGIN so undisturbed
+// regolith reads as a weathered, non-uniform surface instead of a flat grey slab. Pure
+// appearance -- physics never reads albedo (INTERFACE.md §4). ~0.42 m primary cell +
+// a finer fleck octave; amp is the peak +/- fractional brightness swing.
+uniform float macro_albedo_amp = 0.13;
+uniform float macro_scale_m = 0.42;
+
 // --- detail pass tunables (render_fidelity_spec.md §4.2/§8 open params) ----------
 // World metres spanned by the field UV (0..1) — terrain.gd sets it from grid extent
 // so the in-shader noise/cleat periods are in real metres regardless of field size.
@@ -73,9 +81,12 @@ uniform float teeth_strength = 1.1;
 uniform float teeth_parallax_m = 0.006;   // apparent teeth depth for the raymarch
 uniform int   teeth_parallax_layers = 8;  // CAPPED raymarch layers (cost bound, §4.2)
 // Distance fade (§4.2 "fade detail strength with camera distance"): detail is full
-// strength within fade_near_m and gone by fade_far_m (kills far-tile shimmer).
-uniform float fade_near_m = 1.5;
-uniform float fade_far_m = 8.0;
+// strength within fade_near_m and gone by fade_far_m (kills far-tile shimmer). Extended
+// (#2) from the original 1.5/8.0 so the granular relief carries across the visible patch
+// in the trailing-cam fly-through; the MSAA+SMAA+1.5x SSAA stack absorbs the extra
+// high-frequency content without shimmer.
+uniform float fade_near_m = 3.0;
+uniform float fade_far_m = 20.0;
 
 varying vec2 field_uv;   // 0..1 across the tile, u=+X/col, v=+Z/row
 
@@ -122,6 +133,16 @@ void fragment() {
 
 	vec3 col = base_albedo;
 	float rough = 0.96;  // dusty regolith: very rough, near-Lambertian (spec §8)
+
+	// --- macro albedo mottle (#2): two octaves of value noise in REAL metres, applied
+	// to every state incl. VIRGIN so undisturbed ground stops reading as a uniform slab.
+	// field_uv -> metres via field_span_m, then / macro_scale_m -> mottle cells. ---
+	{
+		float msc = max(macro_scale_m, 1e-3);
+		vec2 mp = field_uv * (field_span_m / msc);
+		float m = 0.62 * vnoise(mp) + 0.38 * vnoise(mp * 3.3 + vec2(7.1, 2.7));  // [0,1]
+		col *= (1.0 + macro_albedo_amp * (m * 2.0 - 1.0));                        // +/- amp
+	}
 
 	// disturbance darkens & roughens slightly (churned loose fines).
 	col *= (1.0 - 0.18 * dist);
@@ -187,7 +208,9 @@ void fragment() {
 
 	// --- §4.2.2 base granularity (everywhere, x disturbance) ---
 	// Grain coords: field-UV -> metres -> grains. Central-difference gradient.
-	float grain_amp = grain_strength * (0.25 + 0.75 * dist) * fade;
+	// Floor raised (#2) from 0.25 to 0.5 so VIRGIN/undisturbed ground still reads granular
+	// (not glassy); disturbance pushes it to full strength.
+	float grain_amp = grain_strength * (0.5 + 0.5 * dist) * fade;
 	if (grain_amp > 1e-4) {
 		vec2 gp = field_uv * (m_per_uv / max(grain_size_m, 1e-4));
 		float eps = 0.75;
