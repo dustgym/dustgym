@@ -18,3 +18,19 @@ window/size/viewport_height=768
 [rendering]
 
 renderer/rendering_method="forward_plus"
+; Anti-aliasing for single still sensor frames (render_fidelity_spec.md §4.1).
+; All four are single-frame-safe (no motion vectors / temporal convergence) and
+; directly tame the grazing-sun (~5deg) hard-shadow stair-stepping that dominates
+; the current look. Forward+ only.
+;   msaa_3d=2        -> 4x MSAA (0/1/2/3 = off/2x/4x/8x).
+;   screen_space_aa=2-> SMAA (0/1/2 = off/FXAA/SMAA); sharper than FXAA(1) which
+;                       blurs stills. TAA is deliberately OFF (needs motion vectors
+;                       + multi-frame convergence -> useless for one still).
+;   scaling_3d/mode=0-> Bilinear, REQUIRED so scale>1.0 supersamples (do NOT pair
+;                       with FSR1/FSR2 -- FSR2 is a temporal upscaler, same caveat).
+;   scaling_3d/scale=1.5 -> 2.25x SSAA.
+anti_aliasing/quality/msaa_3d=2
+anti_aliasing/quality/screen_space_aa=2
+anti_aliasing/quality/use_taa=false
+scaling_3d/mode=0
+scaling_3d/scale=1.5

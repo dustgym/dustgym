@@ -39,3 +39,16 @@ samples/crater_caveins/t*/
 samples/tread_track/t*/
 !samples/tread_track/t000/
 !samples/tread_track/t031/
+
+# ── tread_track_4wheel raw time series (regenerable) ──
+# 19-frame 4-wheel drive, deterministically rebuilt by `python -m terrain_authority.scenes`
+# (build_tread_track_4wheel, seed=11). Commit only the bookends: t000 (pristine) + t018
+# (final, carrying the per-frame §5.2 wheel_tracks metadata + the §5.3 tiles[] descriptors).
+# Motion frames t001..t017 AND the 164 fine 1 cm tile RASTERS under t018/tiles/ are regenerable
+# (~4.5 MB / 984 files) — gitignored like the other raster sequences; t018/metadata.json still
+# documents every tile (id/region_rc/cell_m/dir), so the variable-resolution contract is captured.
+samples/tread_track_4wheel/t*/
+!samples/tread_track_4wheel/t000/
+!samples/tread_track_4wheel/t018/
+samples/tread_track_4wheel/t018/tiles/
+# (excavation_marks is only 2 frames — committed in full, not ignored.)

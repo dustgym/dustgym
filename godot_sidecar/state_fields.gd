@@ -39,6 +39,39 @@ var touched_leaves: Array = []         # [[r0,c0,r1,c1], ...] cumulative refined
 var quadtree_nodes: Array = []         # [{level,row0,col0,size,leaf}, ...] per-frame tiling
 var quadtree_lod: Dictionary = {}      # {min_leaf,refine_factor,footprint_radius_cells,field_size}
 
+# --- OPTIONAL per-frame per-wheel tracks & drum marks (INTERFACE.md §5.2, v1.0.2) ---
+# ALL ADDITIVE / back-compat: absent => has_track_dir=false and tex_track_dir()
+# returns a NEUTRAL texture (zero direction, zero phase) so the shader's cleat/teeth
+# detail is fully suppressed and existing scenes (crater etc.) render exactly as
+# v1.0.1. Each wheel/drum entry carries a contact polyline in BASE [row,col] cells,
+# a heading (0=+col/+X, +pi/2=+row/+Z), a contact/swath width in metres, and (drums)
+# a teeth pitch + phase. The renderer bakes these into a derived RGB direction+phase
+# field (consumer-side, NOT a new on-disk raster; design: render_fidelity_spec.md §4.3).
+var has_track_dir: bool = false
+var wheel_tracks: Dictionary = {}      # {"LF":{points,heading_rad,slip,width_m}, ...}
+var drum_marks: Array = []             # [{drum,swath,depth_m,width_m,teeth_count,teeth_pitch_m,phase}, ...]
+
+# --- OPTIONAL variable-resolution refinement / tiles (INTERFACE.md §5.3, v1.0.2) ---
+# ADDITIVE: the BASE rasters fully describe the scene; tiles[] are finer-resolution
+# bundles over the rover corridor. Absent OR refinement.enabled=false => uniform base
+# resolution = identical to v1.0.1. Parsed here for the consumer (terrain.gd) to
+# optionally sample finer height in the corridor; a consumer that ignores tiles[]
+# renders the base (coarser in the corridor, still correct).
+var refinement: Dictionary = {}        # {enabled,base_cell_m,fine_cell_m,refine_where,fine_min_leaf}
+var tiles: Array = []                  # [{id,region_rc:[r0,c0,r1,c1],cell_m,dir}, ...] valid tiles only
+
+# Resolution of the baked track-direction+phase field (RGB8). It is sampled by
+# terrain.gdshader in FULL-FIELD normalized UV (the same UV0 the active mesh carries),
+# so it just needs to resolve the ~0.18 m wheel bands and the corridor at the field
+# scale; 256 over a 5.12 m field = 2 cm/texel, matching the base raster. Kept modest
+# so the per-frame CPU bake stays cheap (it is a sparse stamp along the polylines).
+const TRACK_DIR_TEX_SIZE := 256
+# Default neutral encoding: direction (R,G) packed as dir*0.5+0.5, so the zero vector
+# encodes to 0.5; phase (B)=0. The shader reads length(dir_decoded) ~ 0 as "no mark".
+const TRACK_DIR_NEUTRAL := Color(0.5, 0.5, 0.0, 1.0)
+# Track-dir field, lazily built on first tex_track_dir() call (after load_scene).
+var _img_track_dir: Image
+
 # --- per-field Images (kept so we can both sample CPU-side and build textures) ---
 var img_height: Image
 var img_density: Image
@@ -153,6 +186,104 @@ func _parse_per_frame_keys() -> void:
 	if typeof(ql) == TYPE_DICTIONARY:
 		quadtree_lod = ql
 
+	_parse_track_keys()
+	_parse_refinement_keys()
+
+# --- OPTIONAL v1.0.2 per-wheel tracks & drum marks (INTERFACE.md §5.2) ---
+# Feature-detect by key presence. has_track_dir becomes true only if at least one
+# usable wheel/drum entry is found; otherwise tex_track_dir() stays neutral and the
+# shader detail is suppressed (identical to v1.0.1). _img_track_dir is invalidated
+# so a re-load rebakes lazily.
+func _parse_track_keys() -> void:
+	has_track_dir = false
+	wheel_tracks = {}
+	drum_marks = []
+	_img_track_dir = null
+
+	var wt = meta.get("wheel_tracks", null)
+	if typeof(wt) == TYPE_DICTIONARY:
+		for key in wt.keys():
+			var w = wt[key]
+			if typeof(w) != TYPE_DICTIONARY:
+				continue
+			var pts := _coerce_points(w.get("points", []))
+			if pts.is_empty():
+				continue
+			wheel_tracks[String(key)] = {
+				"points": pts,
+				"heading_rad": float(w.get("heading_rad", 0.0)),
+				"slip": clampf(float(w.get("slip", 0.0)), 0.0, 1.0),
+				"width_m": float(w.get("width_m", 0.18)),
+			}
+
+	var dm = meta.get("drum_marks", null)
+	if typeof(dm) == TYPE_ARRAY:
+		for d in dm:
+			if typeof(d) != TYPE_DICTIONARY:
+				continue
+			var swath := _coerce_points(d.get("swath", []))
+			if swath.is_empty():
+				continue
+			drum_marks.append({
+				"drum": String(d.get("drum", "front")),
+				"swath": swath,
+				"depth_m": float(d.get("depth_m", 0.03)),
+				"width_m": float(d.get("width_m", 0.20)),
+				"teeth_count": int(d.get("teeth_count", 8)),
+				"teeth_pitch_m": float(d.get("teeth_pitch_m", 0.025)),
+				"phase": float(d.get("phase", 0.0)),
+			})
+
+	has_track_dir = not (wheel_tracks.is_empty() and drum_marks.is_empty())
+
+# --- OPTIONAL v1.0.2 variable-resolution refinement / tiles (INTERFACE.md §5.3) ---
+# Feature-detect by key presence. Tiles that violate the §5.3 robustness rules
+# (bad region, non-integer k, or refinement disabled) are dropped here so the
+# consumer always has a clean, base-aligned, integer-k tile set (or falls back to
+# base). refinement.enabled=false / refine_where=="none" => empty tiles (uniform base).
+func _parse_refinement_keys() -> void:
+	refinement = {}
+	tiles = []
+
+	var rf = meta.get("refinement", null)
+	if typeof(rf) == TYPE_DICTIONARY:
+		refinement = rf
+	# enabled defaults true ONLY when the block exists; absent block => no refinement.
+	var enabled := bool(refinement.get("enabled", false)) if not refinement.is_empty() else false
+	var where := String(refinement.get("refine_where", "none"))
+	if not enabled or where == "none":
+		return
+
+	var base_cell := float(refinement.get("base_cell_m", cell_m))
+	var raw = meta.get("tiles", null)
+	if typeof(raw) != TYPE_ARRAY:
+		return
+	for t in raw:
+		if typeof(t) != TYPE_DICTIONARY:
+			continue
+		var region := _coerce_boxes([t.get("region_rc", [])])
+		if region.is_empty():
+			continue
+		var rb: Array = region[0]
+		var tcell := float(t.get("cell_m", 0.0))
+		if tcell <= 0.0:
+			continue
+		# §5.3: k = base_cell_m / cell_m MUST be a positive integer; drop the tile
+		# (fall back to base for its region) if not, never crash.
+		var kf := base_cell / tcell
+		var k := int(round(kf))
+		if k < 1 or absf(kf - float(k)) > 1e-6:
+			push_warning("sidecar: dropping tile id=%s: non-integer k=%f (base/cell)" % [
+				str(t.get("id", -1)), kf])
+			continue
+		tiles.append({
+			"id": int(t.get("id", -1)),
+			"region_rc": rb,             # [r0,c0,r1,c1] half-open base cells
+			"cell_m": tcell,
+			"k": k,
+			"dir": String(t.get("dir", "")),
+		})
+
 # Normalize a list of [r0,c0,r1,c1] half-open boxes into PackedInt-ish Arrays of 4
 # ints, skipping malformed entries. Keeps the §5.1 box convention intact.
 func _coerce_boxes(raw) -> Array:
@@ -162,6 +293,18 @@ func _coerce_boxes(raw) -> Array:
 	for b in raw:
 		if typeof(b) == TYPE_ARRAY and b.size() == 4:
 			out.append([int(b[0]), int(b[1]), int(b[2]), int(b[3])])
+	return out
+
+# Normalize a polyline of [row,col] base-cell samples (§5.2 points/swath) into an
+# Array of Vector2(row_float, col_float), skipping malformed entries. Kept as floats
+# (sub-cell contact centers are allowed) in BASE-cell index space (§2/§3).
+func _coerce_points(raw) -> Array:
+	var out: Array = []
+	if typeof(raw) != TYPE_ARRAY:
+		return out
+	for p in raw:
+		if typeof(p) == TYPE_ARRAY and p.size() == 2:
+			out.append(Vector2(float(p[0]), float(p[1])))   # (row, col)
 	return out
 
 # rover_rc as field row (for height/world lookups). Valid only if has_rover_rc.
@@ -257,6 +400,137 @@ func tex_height() -> ImageTexture: return ImageTexture.create_from_image(img_hei
 func tex_density() -> ImageTexture: return ImageTexture.create_from_image(img_density)
 func tex_disturbance() -> ImageTexture: return ImageTexture.create_from_image(img_disturbance)
 func tex_state() -> ImageTexture: return ImageTexture.create_from_image(img_state)
+
+# --- Baked track-direction + phase field (consumer-side; INTERFACE.md §5.2 / ---
+# render_fidelity_spec.md §4.3). A small RGB8 texture over the FULL field, sampled by
+# terrain.gdshader in the same field UV0 the active mesh carries:
+#   R,G = unit travel direction (field space: x=+col/+X, y=+row/+Z) packed dir*0.5+0.5
+#   B   = phase/accumulator in [0,1] (arc-length along the track, wrapped), advancing
+#         the cleat/teeth ridge pattern continuously along the corridor.
+# When NO §5.2 keys are present the texture is NEUTRAL (zero direction, zero phase)
+# everywhere, so the shader detail is fully suppressed and the LIT_PBR look of v1.0.1
+# scenes is unchanged. Built lazily + cached. The travel direction (not the transverse
+# ridge axis) is encoded; the shader rotates by 90deg to make TRANSVERSE cleats/teeth.
+func tex_track_dir() -> ImageTexture:
+	if _img_track_dir == null:
+		_img_track_dir = _bake_track_dir()
+	return ImageTexture.create_from_image(_img_track_dir)
+
+# True if the baked track-dir field carries any non-neutral marks this frame (the
+# shader still works either way; this lets terrain.gd skip work / log).
+func has_track_marks() -> bool:
+	return has_track_dir
+
+func _bake_track_dir() -> Image:
+	var sz := TRACK_DIR_TEX_SIZE
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGB8)
+	img.fill(TRACK_DIR_NEUTRAL)
+	if not has_track_dir or width <= 1 or height <= 1:
+		return img   # neutral => no marks (v1.0.1-identical)
+
+	# Field [row,col] -> texel [tx,ty]. The field is row=+Z (=v), col=+X (=u); the
+	# texture's x axis = col/u, y axis = row/v, matching the mesh UV0 (terrain.gd
+	# writes uv = (col/(width-1), row/(height-1))). So texel = uv * (sz-1).
+	var sx := float(sz - 1) / float(width - 1)
+	var sy := float(sz - 1) / float(height - 1)
+
+	# Wheel tracks: cleat phase advances per metre of travel; ridge period is the
+	# grouser pitch (a shader uniform). We bake a per-texel ARC-LENGTH (metres) into
+	# B (wrapped to [0,1] over a fixed 1 m window) so the shader's frac(B * 1m/pitch)
+	# gives continuous transverse ridges along the contact band. Direction = local
+	# travel dir of the nearest segment.
+	for key in wheel_tracks.keys():
+		var w: Dictionary = wheel_tracks[key]
+		_stamp_polyline(img, w["points"], float(w["width_m"]), sx, sy, 0.0)
+
+	# Drum swaths: same machinery, with the drum's own phase offset so the periodic
+	# teeth align to the producer-reported phase.
+	for d in drum_marks:
+		_stamp_polyline(img, d["swath"], float(d["width_m"]), sx, sy, float(d["phase"]))
+
+	return img
+
+# Stamp one contact polyline (Array of Vector2(row,col) in BASE cells) into the
+# track-dir field: for each segment, write the unit travel direction (R,G) and a
+# wrapped arc-length phase (B) into every texel within `width_m`/2 of the segment.
+# A single point stamps a small disc using the polyline's mean heading (or 0).
+func _stamp_polyline(img: Image, pts: Array, width_m: float, sx: float, sy: float,
+		phase0: float) -> void:
+	if pts.is_empty():
+		return
+	var sz := img.get_width()
+	# Half-band in texels: width_m/2 in metres -> cells (/cell_m) -> texels (*sx).
+	var half_cells: float = 0.5 * width_m / maxf(cell_m, 1e-6)
+	var half_tex := maxf(half_cells * sx, 1.0)
+	var arc_m := phase0 * 1.0   # running arc length (m); seed with the reported phase
+
+	# Single-point contact: stamp a disc, direction from heading-less fallback (0,+col).
+	if pts.size() == 1:
+		var p: Vector2 = pts[0]
+		var dir := Vector2(1.0, 0.0)   # default travel +col/+X
+		_stamp_disc(img, p, dir, arc_m, half_tex, sx, sy)
+		return
+
+	for i in range(pts.size() - 1):
+		var a: Vector2 = pts[i]        # (row, col)
+		var b: Vector2 = pts[i + 1]
+		# Travel direction in FIELD space (x=+col, y=+row) -> (dcol, drow).
+		var d_field := Vector2(b.y - a.y, b.x - a.x)
+		var seg_cells := d_field.length()
+		if seg_cells < 1e-6:
+			continue
+		var dir := d_field / seg_cells
+		var seg_m := seg_cells * cell_m
+		_stamp_segment(img, a, b, dir, arc_m, seg_m, half_tex, sx, sy)
+		arc_m += seg_m
+
+# Rasterize one segment a->b (cells, row,col) as a thick band into the field texture.
+# Walks the texel-space bounding box of the band; for each texel inside the band it
+# writes dir*0.5+0.5 into R,G and a wrapped per-texel arc-length into B.
+func _stamp_segment(img: Image, a: Vector2, b: Vector2, dir: Vector2, arc0_m: float,
+		seg_m: float, half_tex: float, sx: float, sy: float) -> void:
+	var sz := img.get_width()
+	# Endpoints in texel space (x=col*sx, y=row*sy).
+	var ax := a.y * sx; var ay := a.x * sy
+	var bx := b.y * sx; var by := b.x * sy
+	var minx := int(floor(minf(ax, bx) - half_tex))
+	var maxx := int(ceil(maxf(ax, bx) + half_tex))
+	var miny := int(floor(minf(ay, by) - half_tex))
+	var maxy := int(ceil(maxf(ay, by) + half_tex))
+	minx = clampi(minx, 0, sz - 1); maxx = clampi(maxx, 0, sz - 1)
+	miny = clampi(miny, 0, sz - 1); maxy = clampi(maxy, 0, sz - 1)
+	var seg := Vector2(bx - ax, by - ay)
+	var seg_len2 := maxf(seg.length_squared(), 1e-9)
+	var rg := Vector2(dir.x, dir.y) * 0.5 + Vector2(0.5, 0.5)
+	for ty in range(miny, maxy + 1):
+		for tx in range(minx, maxx + 1):
+			var pt := Vector2(float(tx), float(ty))
+			# Project onto the segment, clamp to [0,1].
+			var s := clampf((pt - Vector2(ax, ay)).dot(seg) / seg_len2, 0.0, 1.0)
+			var proj := Vector2(ax, ay) + seg * s
+			if pt.distance_to(proj) > half_tex:
+				continue
+			# Arc length at this texel = segment start arc + s*seg_m; wrap to [0,1]
+			# over a 1 m window so frac() in the shader tiles cleats every metre.
+			var arc := arc0_m + s * seg_m
+			var phase: float = arc - floorf(arc)
+			img.set_pixel(tx, ty, Color(rg.x, rg.y, phase))
+
+# Stamp a small filled disc for a single-point contact (orientation = `dir`).
+func _stamp_disc(img: Image, center_rc: Vector2, dir: Vector2, arc_m: float,
+		half_tex: float, sx: float, sy: float) -> void:
+	var sz := img.get_width()
+	var cx := center_rc.y * sx; var cy := center_rc.x * sy
+	var rg := Vector2(dir.x, dir.y) * 0.5 + Vector2(0.5, 0.5)
+	var phase: float = arc_m - floorf(arc_m)
+	var minx := clampi(int(floor(cx - half_tex)), 0, sz - 1)
+	var maxx := clampi(int(ceil(cx + half_tex)), 0, sz - 1)
+	var miny := clampi(int(floor(cy - half_tex)), 0, sz - 1)
+	var maxy := clampi(int(ceil(cy + half_tex)), 0, sz - 1)
+	for ty in range(miny, maxy + 1):
+		for tx in range(minx, maxx + 1):
+			if Vector2(float(tx), float(ty)).distance_to(Vector2(cx, cy)) <= half_tex:
+				img.set_pixel(tx, ty, Color(rg.x, rg.y, phase))
 
 # A decimated copy of the heightmap for the far-field LOD demo (spec §4:
 # far field renders from a low-res tile). step=4 -> 64x64 from 256x256.

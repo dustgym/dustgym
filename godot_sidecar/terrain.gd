@@ -172,6 +172,17 @@ func _build_active_zone(mode: int) -> void:
 		sm.set_shader_parameter("density_tex", sf.tex_density())
 		sm.set_shader_parameter("density_lo", sf.density_range.x)
 		sm.set_shader_parameter("density_hi", sf.density_range.y)
+		# Detail pass (render_fidelity_spec.md §4.2): the baked track-direction + phase
+		# field (§4.3) orients cleat/teeth marks; it is NEUTRAL (no marks) for scenes
+		# with no §5.2 wheel_tracks/drum_marks, so this is additive — crater etc. render
+		# as before save for the AA + subtle base granularity. MUST set every uniform the
+		# shader samples (track_dir_tex, field_span_m) so there are no missing-uniform
+		# warnings; the §4.2 tunables keep their shader defaults.
+		sm.set_shader_parameter("track_dir_tex", sf.tex_track_dir())
+		# World metres spanned by the field UV (0..1). The field is square at cell_m
+		# (INTERFACE.md §1/§3): span = width * cell_m. Lets the in-shader noise/cleat/
+		# teeth periods be real metres regardless of field size.
+		sm.set_shader_parameter("field_span_m", float(sf.width) * sf.cell_m)
 		_active_mi.material_override = sm
 	else:
 		_active_mi.material_override = _make_falsecolor_mat(mode)

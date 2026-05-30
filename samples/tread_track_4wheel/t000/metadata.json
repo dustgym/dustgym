@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "scene_name": "tread_track_4wheel",
+  "producer": "terrain_authority (NumPy Tier-2 surrogate)",
+  "grid": {
+    "width": 256,
+    "height": 256,
+    "cell_m": 0.02,
+    "order": "row-major-C"
+  },
+  "world_bounds_m": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 5.12,
+    "y1": 5.12
+  },
+  "gravity_m_s2": 1.62,
+  "fields": {
+    "heightmap": {
+      "file": "heightmap.rf32",
+      "dtype": "<f4",
+      "units": "m"
+    },
+    "mass_areal": {
+      "file": "mass_areal.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^2"
+    },
+    "density": {
+      "file": "density.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^3"
+    },
+    "disturbance": {
+      "file": "disturbance.rf32",
+      "dtype": "<f4",
+      "units": "1 (normalized)"
+    },
+    "state_label": {
+      "file": "state_label.r8",
+      "dtype": "u1",
+      "enum": [
+        "VIRGIN",
+        "TREAD",
+        "EXCAVATED",
+        "SPOIL",
+        "COMPACTED_BERM"
+      ]
+    }
+  },
+  "ice_present": false,
+  "height_range_m": [
+    -0.05353,
+    0.04647
+  ],
+  "clasts": [],
+  "active_zone": {
+    "min_rc": [
+      48,
+      40
+    ],
+    "max_rc": [
+      205,
+      184
+    ]
+  },
+  "quadtree": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 256,
+      "label": "ROOT"
+    },
+    {
+      "level": 1,
+      "row0": 48,
+      "col0": 40,
+      "size": 157,
+      "label": "ACTIVE"
+    }
+  ],
+  "notes": "4-wheel tread-track frame 0/18; IPEx 4-wheel footprint (gauge 0.57 m, wheelbase 0.4 m) advancing along a 2-segment path, laying FOUR VIRGIN->TREAD ruts (density up, ruts sink, disturbance bumped). Mass conserved \u2014 pure compaction (spec \u00a75, \u00a76; rover.py).",
+  "frame_index": 0,
+  "active_leaves": [],
+  "quadtree_nodes": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 256,
+      "leaf": true
+    }
+  ],
+  "touched_leaves": [],
+  "rover_rc": null,
+  "quadtree_lod": {
+    "min_leaf": 8,
+    "refine_factor": 0.5,
+    "footprint_radius_cells": 5.5,
+    "field_size": 256
+  },
+  "refinement": {
+    "enabled": true,
+    "base_cell_m": 0.02,
+    "fine_cell_m": 0.01,
+    "refine_where": "touched",
+    "fine_min_leaf": 4
+  },
+  "contract_revision": "1.0.2",
+  "features": [
+    "wheel_tracks",
+    "refinement",
+    "tiles"
+  ]
+}

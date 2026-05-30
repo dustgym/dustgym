@@ -28,10 +28,12 @@ import numpy as np
 
 from . import constants as K
 from . import procgen
+from . import refinement
 from .column_state import ColumnState
 from .io_fields import save_scene, write_hillshade_png, write_preview_png
 from .quadtree import QuadtreeTracker
-from .rover import straight_path, wheel_pass
+from .rover import (build_drum_marks_meta, build_wheel_tracks_meta, drum_pass,
+                    four_wheel_pass, straight_path, wheel_pass)
 from .sandpile import Sandpile
 
 # Grid (INTERFACE.md §5 example / spec §4 resolution anchors).
@@ -435,6 +437,354 @@ def build_tread_track() -> None:
           f"qt active(last)={n_active_last} touched(total)={n_touched}")
 
 
+# ---------------------------------------------------------------------------
+# NEW render-fidelity scenes (render_fidelity_spec.md §5/§6, INTERFACE.md §5.2/§5.3).
+# These ADD to the existing seven scenes; they never touch the existing builders'
+# outputs (HARD RULE 3). All metadata additions are ADDITIVE optional keys exactly
+# like _attach_quadtree_meta (§5.1): new keys only, schema_version stays "1.0".
+# ---------------------------------------------------------------------------
+
+# Mode-B corridor-refinement knobs for the 4-wheel scene (spec §2.2 refinement block).
+FINE_CELL_M = 0.01          # 1 cm active-corridor resolution (spec §2.2 experiment knob)
+FINE_MIN_LEAF = 4           # quadtree may subdivide past min_leaf to mark fine tiles (§2.2)
+N_4WHEEL_FRAMES = 18        # motion frames (+ pristine t000); modest, raw frames gitignored
+
+
+def _attach_refinement_meta(meta: dict, *, enabled: bool, refine_where: str,
+                            tiles_desc: list[dict] | None = None) -> None:
+    """ADDITIVELY attach the §5.3 ``refinement`` policy block (and optional ``tiles[]``).
+
+    Mirrors ``_attach_quadtree_meta``'s discipline: adds NEW optional keys ONLY (never
+    touches existing rasters or metadata keys). A v1.0/v1.0.1 consumer that ignores these
+    renders the base rasters exactly as today (spec §2.2; INTERFACE.md §5.3). The refinement
+    factor ``k = base_cell_m/fine_cell_m`` is the validated positive integer (refinement.k_factor).
+    """
+    meta["refinement"] = {
+        "enabled": bool(enabled),
+        "base_cell_m": CELL_M,
+        "fine_cell_m": FINE_CELL_M,
+        "refine_where": refine_where,   # "touched" -> whole driven corridor stays fine (§2.2)
+        "fine_min_leaf": FINE_MIN_LEAF,
+    }
+    if tiles_desc is not None:
+        meta["tiles"] = tiles_desc      # PER-FRAME key (§5.3); each entry id/region_rc/cell_m/dir
+
+
+def _heading_from_segment(p_prev, p_cur) -> float:
+    """Travel heading [rad] from path point p_prev -> p_cur (INTERFACE.md §5.2 convention:
+    0 = +col/+X, +pi/2 = +row/+Z). forward unit (drow,dcol)=(sin h, cos h) ⇒ h=atan2(drow,dcol)."""
+    drow = float(p_cur[0] - p_prev[0])
+    dcol = float(p_cur[1] - p_prev[1])
+    if drow == 0.0 and dcol == 0.0:
+        return 0.0
+    return float(np.arctan2(drow, dcol))
+
+
+def build_tread_track_4wheel() -> None:
+    """TIME SERIES: a rover drives a 2-segment path laying FOUR separate compacting ruts.
+
+    The render-fidelity headline (spec §5 "rover.py -> 4-wheel stamping", §4.2.3): unlike
+    ``build_tread_track`` (one disc footprint), this drives with ``rover.four_wheel_pass`` so
+    the IPEx wheel layout (gauge 0.57 m, wheelbase 0.40 m; asce-es-2024) lays LF/RF/LB/RB as
+    four distinct VIRGIN->TREAD ruts. Mass is conserved per pass (density-only compaction; the
+    column thins so each rut sinks via height=datum+mass/density — spec §6).
+
+    Each frame carries, ADDITIVELY (consumers MAY ignore; schema_version stays "1.0"):
+      - §5.2 ``wheel_tracks``: the four contact polylines + per-wheel heading + width_m, built
+        by ``rover.build_wheel_tracks_meta`` so the shader can orient per-wheel cleat detail
+        (§4.2.3) WITHOUT resolving cleats in the heightfield.
+      - §5.3 ``refinement`` policy block (enabled=true, base 2 cm, fine 1 cm, refine_where
+        "touched", fine_min_leaf 4) — the Mode-B corridor-refinement contract (spec §2.2).
+    The FINAL frame additionally writes §5.3 ``tiles[]`` over the touched corridor: each tile
+    is refined to 1 cm via ``refinement.extract_tiles`` and saved as a normal 5-raster bundle
+    under ``tiles/tile_<id>/`` (the persistent crisp trail; base<->tile mass-consistent §2.4).
+    """
+    name = "tread_track_4wheel"
+    # A 2-segment drive (row,col) waypoints, clear of the borders so the full 4-wheel
+    # footprint (half-gauge ~14 cells, half-base ~10 cells) lands on-grid at every pose.
+    cr0, cc0 = int(0.25 * HEIGHT), int(0.22 * WIDTH)
+    cr1, cc1 = int(0.50 * HEIGHT), int(0.50 * WIDTH)
+    cr2, cc2 = int(0.74 * HEIGHT), int(0.66 * WIDTH)
+
+    path = straight_path(cr0, cc0, cr1, cc1, step_cells=1)
+    path += straight_path(cr1, cc1, cr2, cc2, step_cells=1)[1:]
+    chunks = np.array_split(np.arange(len(path)), N_4WHEEL_FRAMES)
+
+    # Per-frame poses (center_rc, heading) for four_wheel_pass + the contact polylines we
+    # accumulate for the §5.2 wheel_tracks metadata. Frame 0 is pristine (no rover).
+    cs = procgen.rolling_hills(WIDTH, HEIGHT, CELL_M, seed=13, amplitude_m=0.1, base_cells=3)
+    mass_before = cs.total_mass()
+    frames: list[ColumnState] = [_clone(cs)]              # t000 pristine
+    frame_polylines: list[dict | None] = [None]           # per-frame wheel_tracks polylines
+    frame_headings: list[dict | None] = [None]
+    frame_centers: list[tuple[int, int] | None] = [None]
+
+    prev_pt = path[0]
+    for chunk in chunks:
+        if len(chunk) == 0:
+            continue
+        sub = [path[k] for k in chunk]
+        # Build a pose per path sample in this chunk; heading from the local segment so the
+        # cleat field orients to true travel direction (INTERFACE.md §5.2).
+        poses: list[tuple[tuple[float, float], float]] = []
+        p_prev = prev_pt
+        for p in sub:
+            poses.append(((float(p[0]), float(p[1])), _heading_from_segment(p_prev, p)))
+            p_prev = p
+        prev_pt = sub[-1]
+        polylines = four_wheel_pass(cs, poses, wheel_width_m=0.18, compaction=0.14)
+        # Per-wheel heading = the chunk's last-segment heading (one travel dir per frame).
+        head = _heading_from_segment(sub[0] if len(sub) == 1 else sub[-2], sub[-1])
+        frame_polylines.append(polylines)
+        frame_headings.append({key: head for key in ("LF", "RF", "LB", "RB")})
+        frame_centers.append(tuple(sub[-1]))
+        frames.append(_clone(cs))
+    mass_after = cs.total_mass()
+
+    # Active zone + static D1b quadtree tightly bound the driven corridor (spec §4).
+    rmin = max(0, min(cr0, cr1, cr2) - 16)
+    cmin = max(0, min(cc0, cc1, cc2) - 16)
+    rmax = min(HEIGHT, max(cr0, cr1, cr2) + 16)
+    cmax = min(WIDTH, max(cc0, cc1, cc2) + 16)
+    az = {"min_rc": [rmin, cmin], "max_rc": [rmax, cmax]}
+    qt = _default_quadtree(active_row0=rmin, active_col0=cmin,
+                           active_size=max(rmax - rmin, cmax - cmin))
+
+    # Track the interaction quadtree (the touched corridor) frame by frame, so the final
+    # frame's tiles cover exactly the driven trail (refine_where="touched", §2.2/§5.3).
+    tracker = QuadtreeTracker(field_size=WIDTH, min_leaf=QT_MIN_LEAF,
+                              refine_factor=QT_REFINE_FACTOR,
+                              footprint_radius_cells=QT_FOOTPRINT_RADIUS_CELLS)
+    qt_per_frame = []
+    qt_touched_per_frame = []
+    for center in frame_centers:
+        qt_per_frame.append(tracker.step(center))
+        qt_touched_per_frame.append(tracker.touched_boxes())
+
+    scene_dir = os.path.join(SAMPLES_DIR, name)
+    os.makedirs(scene_dir, exist_ok=True)
+    last = len(frames) - 1
+    final_tiles_desc: list[dict] = []
+
+    for i, frame_cs in enumerate(frames):
+        tdir = os.path.join(scene_dir, f"t{i:03d}")
+        meta = _base_metadata(
+            name, active_zone=az, quadtree=qt, height_range=_height_range(frame_cs),
+            notes=f"4-wheel tread-track frame {i}/{last}; IPEx 4-wheel footprint "
+                  f"(gauge {0.57} m, wheelbase {0.40} m) advancing along a 2-segment path, "
+                  f"laying FOUR VIRGIN->TREAD ruts (density up, ruts sink, disturbance "
+                  f"bumped). Mass conserved — pure compaction (spec §5, §6; rover.py).")
+        meta["frame_index"] = i
+        # ADDITIVE (INTERFACE.md v1.0.1 §5.1): per-frame interaction-keyed quadtree state.
+        _attach_quadtree_meta(meta, qt_per_frame[i], frame_centers[i],
+                              qt_touched_per_frame[i])
+        # ADDITIVE (INTERFACE.md v1.0.2 §5.2): per-frame wheel_tracks (four contact polylines
+        # + travel heading + contact width); built by rover so the shader can orient cleats.
+        if frame_polylines[i] is not None:
+            meta["wheel_tracks"] = build_wheel_tracks_meta(
+                frame_polylines[i], frame_headings[i], cell_m=CELL_M, width_m=0.18)
+        # ADDITIVE (INTERFACE.md v1.0.2 §5.3): the Mode-B refinement policy block on EVERY
+        # frame; the FINAL frame additionally emits tiles[] + writes the fine tile bundles
+        # under this frame's own tiles/ dir (tdir already names it; created on demand).
+        if i == last:
+            final_tiles_desc = _write_4wheel_tiles(tdir, frame_cs, qt_touched_per_frame[i])
+            _attach_refinement_meta(meta, enabled=True, refine_where="touched",
+                                    tiles_desc=final_tiles_desc)
+        else:
+            _attach_refinement_meta(meta, enabled=True, refine_where="touched")
+        # ADDITIVE discoverability (ignorable; consumers feature-detect by key presence, not
+        # this — INTERFACE.md §5.3). schema_version stays "1.0".
+        meta["contract_revision"] = "1.0.2"
+        meta["features"] = ["wheel_tracks", "refinement", "tiles"]
+        save_scene(tdir, frame_cs.fields_dict(), meta)
+
+    _write_previews(os.path.join(scene_dir, "t000"), frames[0], name + "_t000")
+    _write_previews(os.path.join(scene_dir, f"t{last:03d}"), frames[-1],
+                    name + f"_t{last:03d}")
+
+    parent_meta = _base_metadata(
+        name, active_zone=az, quadtree=qt, height_range=_height_range(frames[-1]),
+        notes="TIME SERIES (driven-rover, FOUR wheels). rover.four_wheel_pass lays the IPEx "
+              "LF/RF/LB/RB footprint as four separate VIRGIN->TREAD compaction ruts along a "
+              "2-segment path (mass conserved, pure compaction; spec §5/§6). Per-frame §5.2 "
+              "wheel_tracks orient cleat detail; §5.3 refinement (1 cm corridor) + tiles[] on "
+              "the final frame back the crisp persistent trail. All additive; ignorable.")
+    parent_meta["time_series"] = {
+        "frame_count": len(frames),
+        "frame_cadence_steps": 1,
+        "frame_dirs": [f"t{i:03d}" for i in range(len(frames))],
+        "mass_conserved_kg": round(mass_after, 6),
+        "mass_drift_kg": round(abs(mass_after - mass_before), 9),
+    }
+    parent_meta["quadtree_lod"] = {
+        "min_leaf": QT_MIN_LEAF, "refine_factor": QT_REFINE_FACTOR,
+        "footprint_radius_cells": QT_FOOTPRINT_RADIUS_CELLS, "field_size": WIDTH,
+        "per_frame_keys": ["active_leaves", "quadtree_nodes", "touched_leaves", "rover_rc",
+                           "wheel_tracks", "refinement"],
+        "note": "interaction-keyed quadtree + per-frame wheel_tracks; the final frame carries "
+                "the §5.3 refinement tiles over the touched corridor. Optional; ignorable.",
+    }
+    # Scene-level refinement policy on the parent (spec §5.3 "refinement appears on BOTH the
+    # parent and per-frame"); no tiles[] here (tiles are a per-frame key).
+    _attach_refinement_meta(parent_meta, enabled=True, refine_where="touched")
+    parent_meta["contract_revision"] = "1.0.2"
+    parent_meta["features"] = ["wheel_tracks", "refinement", "tiles"]
+    import json
+    with open(os.path.join(scene_dir, "metadata.json"), "w") as fh:
+        json.dump(parent_meta, fh, indent=2)
+    print(f"  wrote {name}  frames={len(frames)}  "
+          f"mass_before={mass_before:.4f} mass_after={mass_after:.4f} kg "
+          f"drift={abs(mass_after - mass_before):.2e} kg  tiles(final)={len(final_tiles_desc)}")
+
+
+def _write_4wheel_tiles(frame_dir: str, frame_cs: ColumnState,
+                        touched_boxes: list[list[int]]) -> list[dict]:
+    """Refine the touched corridor to FINE_CELL_M and write each tile bundle (§5.3).
+
+    Uses ``refinement.extract_tiles`` to refine each base-cell-aligned touched leaf box (§5.1)
+    to ``FINE_CELL_M`` (k = CELL_M/FINE_CELL_M = 2, a validated positive integer). Each tile is
+    a normal INTERFACE.md raster bundle (the 5 REQUIRED rasters at the fine cell size) written
+    to ``<frame_dir>/tiles/tile_<id>/`` via ``save_scene`` — a tile dir IS just a raster bundle.
+    By construction ``coarsen(tile) == base block`` (base<->tile consistency, §2.4/§5.3,
+    asserted in tests). Returns the §5.3 ``tiles[]`` descriptor list (id/region_rc/cell_m/dir).
+
+    Tiles are written ONLY on the final frame (the complete, persistent crisp trail) to keep
+    the raw frame set modest (raw frames are gitignored; the contract is the point). The
+    ``dir`` in each descriptor is RELATIVE to the frame dir (``tiles/tile_<id>``), per §5.3.
+    """
+    if not touched_boxes:
+        return []
+    tiles = refinement.extract_tiles(frame_cs, touched_boxes, FINE_CELL_M)
+    tiles_dir = os.path.join(frame_dir, "tiles")
+    descs: list[dict] = []
+    for t in tiles:
+        rel_dir = f"tiles/tile_{t.id:04d}"
+        tile_dir = os.path.join(tiles_dir, f"tile_{t.id:04d}")
+        # Per-tile metadata: a self-contained fine raster bundle (INTERFACE.md §5.3 storage).
+        tw, th = t.cs.width, t.cs.height
+        x0 = t.region_rc[1] * CELL_M
+        z0 = t.region_rc[0] * CELL_M
+        tile_meta = {
+            "schema_version": "1.0",
+            "scene_name": f"tread_track_4wheel/tile_{t.id:04d}",
+            "producer": "terrain_authority (NumPy Tier-2 surrogate)",
+            "grid": {"width": tw, "height": th, "cell_m": t.cell_m, "order": "row-major-C"},
+            "world_bounds_m": {"x0": round(x0, 4), "y0": round(z0, 4),
+                               "x1": round(x0 + tw * t.cell_m, 4),
+                               "y1": round(z0 + th * t.cell_m, 4)},
+            "gravity_m_s2": K.g,
+            "fields": {
+                "heightmap": {"file": "heightmap.rf32", "dtype": "<f4", "units": "m"},
+                "mass_areal": {"file": "mass_areal.rf32", "dtype": "<f4", "units": "kg/m^2"},
+                "density": {"file": "density.rf32", "dtype": "<f4", "units": "kg/m^3"},
+                "disturbance": {"file": "disturbance.rf32", "dtype": "<f4",
+                                "units": "1 (normalized)"},
+                "state_label": {"file": "state_label.r8", "dtype": "u1", "enum": K.STATE_NAMES},
+            },
+            "tile_of": "tread_track_4wheel",
+            "region_rc": [int(v) for v in t.region_rc],  # BASE cells (§5.3)
+            "refine_factor_k": refinement.k_factor(CELL_M, FINE_CELL_M),
+            "notes": "§5.3 refinement tile: a base-cell-aligned k x k block refined to "
+                     "fine_cell_m. coarsen(this) == the base block (base<->tile mass-consistent, "
+                     "spec §2.4). Consumers MAY ignore tiles and render the base rasters.",
+        }
+        save_scene(tile_dir, t.cs.fields_dict(), tile_meta)
+        descs.append(t.descriptor(rel_dir))
+    return descs
+
+
+def build_excavation_marks() -> None:
+    """A short drum-dig demo: cut an EXCAVATED band, dump it as SPOIL; emit §5.2 drum_marks.
+
+    The foss_ipex-distinctive excavation story (spec §5 "Drum dig events", §4.2.4; excavation
+    is disabled in LAC's mapping year, so this is ours, not LAC-required). A counter-rotating
+    RASSOR drum (2021-ASCEND-Mass-Inference-RASSOR.pdf) cuts a swath to ``depth_m`` into the
+    drum inventory (EXCAVATED) and dumps it elsewhere as SPOIL (bulking: same mass, lower
+    density -> more height; spec §7). Mass is conserved THROUGH the inventory (rover.drum_pass).
+
+    Emits the §5.2 ``drum_marks`` metadata (swath + depth + teeth params + phase) so the shader
+    can orient/phase the teeth normals + POM (§4.2.4) WITHOUT resolving teeth in the grid. A
+    tiny two-frame series (t000 pristine -> t001 dug) bookends the change; all additive keys.
+    """
+    name = "excavation_marks"
+    cs = procgen.flat_compact(WIDTH, HEIGHT, CELL_M, seed=2)
+    mass_before = cs.total_mass()
+    frame0 = _clone(cs)  # pristine
+
+    # A straight dig swath across the middle, with the spoil dumped a short way off-axis.
+    dig_r = HEIGHT // 2
+    c_start, c_end = int(0.30 * WIDTH), int(0.62 * WIDTH)
+    swath = straight_path(dig_r, c_start, dig_r, c_end, step_cells=1)
+    dump_r = dig_r + 24  # ~48 cm off-axis spoil heap
+    dump = straight_path(dump_r, c_start, dump_r, c_end, step_cells=1)
+
+    depth_m = 0.04   # 4 cm cut (RASSOR scoop-depth scale; shader teeth ride this band)
+    width_m = 0.20   # drum swath width (rover.DRUM defaults)
+    moved_kg = drum_pass(cs, swath, depth_m=depth_m, width_m=width_m, dump_rc=dump)
+    mass_after = cs.total_mass()
+    frame1 = _clone(cs)
+
+    # heading along the swath travel dir (+col/+X) = 0 rad (INTERFACE.md §5.2 convention).
+    swath_heading = _heading_from_segment(swath[0], swath[-1])
+    drum_entry = build_drum_marks_meta(swath, swath_heading, drum="front",
+                                       depth_m=depth_m, width_m=width_m, cell_m=CELL_M)
+
+    # Active zone bounds the dig + dump corridor.
+    rmin = max(0, dig_r - 12)
+    rmax = min(HEIGHT, dump_r + 12)
+    cmin = max(0, c_start - 12)
+    cmax = min(WIDTH, c_end + 12)
+    az = {"min_rc": [rmin, cmin], "max_rc": [rmax, cmax]}
+    qt = _default_quadtree(active_row0=rmin, active_col0=cmin,
+                           active_size=max(rmax - rmin, cmax - cmin))
+
+    scene_dir = os.path.join(SAMPLES_DIR, name)
+    os.makedirs(scene_dir, exist_ok=True)
+    frames = [frame0, frame1]
+    for i, frame_cs in enumerate(frames):
+        tdir = os.path.join(scene_dir, f"t{i:03d}")
+        meta = _base_metadata(
+            name, active_zone=az, quadtree=qt, height_range=_height_range(frame_cs),
+            notes=f"excavation-marks frame {i}/{len(frames)-1}; RASSOR drum cuts an EXCAVATED "
+                  f"swath (depth {depth_m} m) into the drum inventory and dumps it as SPOIL "
+                  f"(bulking, spec §7). Mass conserved through the inventory (spec §5/§6; "
+                  f"rover.drum_pass).")
+        meta["frame_index"] = i
+        # ADDITIVE (INTERFACE.md v1.0.2 §5.2): drum_marks on the DUG frame only (no active
+        # drum on the pristine t000). The scene wraps the single rover entry in a list.
+        if i == 1:
+            meta["drum_marks"] = [drum_entry]
+        meta["contract_revision"] = "1.0.2"
+        meta["features"] = ["drum_marks"]
+        save_scene(tdir, frame_cs.fields_dict(), meta)
+
+    _write_previews(os.path.join(scene_dir, "t000"), frames[0], name + "_t000")
+    _write_previews(os.path.join(scene_dir, "t001"), frames[-1], name + "_t001")
+
+    parent_meta = _base_metadata(
+        name, active_zone=az, quadtree=qt, height_range=_height_range(frames[-1]),
+        notes="Drum-dig demo (t000 pristine -> t001 dug). rover.drum_pass cuts an EXCAVATED "
+              "swath into the drum inventory and dumps SPOIL off-axis (bulking, spec §7); mass "
+              "conserved through the inventory. Per-frame §5.2 drum_marks orient the shader "
+              "teeth/POM detail (§4.2.4). All additive; ignorable.")
+    parent_meta["time_series"] = {
+        "frame_count": len(frames),
+        "frame_cadence_steps": 1,
+        "frame_dirs": [f"t{i:03d}" for i in range(len(frames))],
+        "mass_conserved_kg": round(mass_after, 6),
+        "mass_drift_kg": round(abs(mass_after - mass_before), 9),
+        "drum_excavated_kg": round(moved_kg, 6),
+    }
+    parent_meta["contract_revision"] = "1.0.2"
+    parent_meta["features"] = ["drum_marks"]
+    import json
+    with open(os.path.join(scene_dir, "metadata.json"), "w") as fh:
+        json.dump(parent_meta, fh, indent=2)
+    print(f"  wrote {name}  frames={len(frames)}  excavated={moved_kg:.3f} kg  "
+          f"mass_before={mass_before:.4f} mass_after={mass_after:.4f} kg "
+          f"drift={abs(mass_after - mass_before):.2e} kg")
+
+
 def _tread_path_endpoints() -> tuple[int, int, int, int, int, int]:
     """The 2-segment drive path (row,col) waypoints: start -> mid bend -> end."""
     # Drive diagonally across the field with a gentle bend at the middle, staying clear of
@@ -543,6 +893,10 @@ def main() -> int:
     build_crater_boulders()
     build_crater_caveins()
     build_tread_track()
+    # NEW render-fidelity scenes (spec §5; INTERFACE.md §5.2/§5.3). Additive; the seven
+    # scenes above are byte-identical to before (HARD RULE 3).
+    build_tread_track_4wheel()
+    build_excavation_marks()
     print("done.")
     return 0
 

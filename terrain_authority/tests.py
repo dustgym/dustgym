@@ -19,9 +19,11 @@ import numpy as np
 
 from . import constants as K
 from . import procgen
+from . import refinement
 from .column_state import ColumnState, StateLabel, loose_mask
 from .quadtree import build_quadtree, leaves_cover_field
-from .rover import straight_path, wheel_pass
+from .rover import (WHEEL_GAUGE_M, build_wheel_tracks_meta, four_wheel_pass,
+                    straight_path, wheel_contact_points, wheel_pass)
 from .sandpile import Sandpile
 
 _results: list[tuple[str, bool, str]] = []
@@ -275,6 +277,378 @@ def test_quadtree_space_management() -> None:
           f"over {len(positions)} frames")
 
 
+# ---------------------------------------------------------------------------
+# Render-fidelity acceptance tests (render_fidelity_spec.md §6). The variable-
+# resolution operators (refinement.py) and the 4-wheel / drum producer ops
+# (rover.py) just landed; these assert the NORMATIVE §2.4 mass-conservation
+# invariants and the §5.2/§5.3 producer geometry against them.
+# ---------------------------------------------------------------------------
+
+def _mixed_fine_bundle(h: int, w: int, k: int, *, seed: int = 0,
+                       ) -> dict[str, np.ndarray]:
+    """A genuinely heterogeneous (H*k, W*k) fine bundle (NOT a refine() of anything).
+
+    Random per-cell mass/density/datum/disturbance and per-cell state labels, all in
+    physical ranges (density>0 everywhere — the §2.4 zero-mass precondition), so coarsen()
+    exercises the general harmonic-mean / priority-reduce paths rather than the bit-exact
+    uniform-block shortcut. Deterministic via ``seed``.
+    """
+    rng = np.random.default_rng(seed)
+    hf, wf = h * k, w * k
+    labels = np.array([int(StateLabel.VIRGIN), int(StateLabel.TREAD),
+                       int(StateLabel.EXCAVATED), int(StateLabel.SPOIL),
+                       int(StateLabel.COMPACTED_BERM)], dtype=np.uint8)
+    return {
+        "mass_areal": rng.uniform(0.0, 250.0, size=(hf, wf)),
+        "density": rng.uniform(K.RHO_SURFACE, K.RHO_DEEP, size=(hf, wf)),
+        "datum": rng.uniform(-0.3, 0.3, size=(hf, wf)),
+        "state_label": labels[rng.integers(0, labels.size, size=(hf, wf))],
+        "disturbance": rng.uniform(0.0, 1.0, size=(hf, wf)),
+    }
+
+
+def _bundle_height(b: dict[str, np.ndarray]) -> np.ndarray:
+    """height = datum + mass_areal/density on a raw field bundle (INTERFACE.md §4)."""
+    return b["datum"] + b["mass_areal"] / b["density"]
+
+
+# §6.1 refine/coarsen round-trip exact -------------------------------------------------
+
+def test_refine_coarsen_roundtrip() -> None:
+    """§6.1: coarsen(refine(cell)) == cell EXACTLY; mass drift 0; height max-err 0.
+
+    Checked across SEVERAL refine factors k ∈ {2, 3, 5, 8} — deliberately including
+    non-power-of-two k and k=8 (the spec §2.5/§8 mission config "base 8 cm + 1 cm touched
+    band"). This matters: ``np.mean`` of k^2 identical float64s is only bit-exact when the
+    k^2 sum/divide round-trips (k=2, 4); for k=3/5/6/7/8 a plain mean drifts ~1e-13. The
+    operators copy homogeneous blocks VERBATIM (refinement._uniform_aware_mean + the density
+    uniform branch), so the round-trip is drift-0 for EVERY integer k — this test locks that.
+    """
+    ks = [2, 3, 5, 8]
+    worst = {"field": 0.0, "h_refine": 0.0, "h_back": 0.0, "mass_copy": 0.0}
+    labels_ok = True
+    for k in ks:
+        base = _mixed_fine_bundle(7, 5, 1, seed=11)  # arbitrary (H, W) base bundle
+        fine = refinement.refine_field(base, k)
+        back = refinement.coarsen_field(fine, k)
+
+        # Every carried field round-trips BIT-EXACT (refine copies -> uniform block -> the
+        # coarsen reductions are exact identities for all k via the verbatim-copy shortcut).
+        for name in ("mass_areal", "density", "datum", "disturbance"):
+            worst["field"] = max(worst["field"], float(np.max(np.abs(back[name] - base[name]))))
+        labels_ok = labels_ok and bool(np.array_equal(back["state_label"], base["state_label"]))
+
+        # Mass conservation as the INTENSIVE per-cell invariant: refine copies mass_areal
+        # (kg/m^2) verbatim into all k^2 children, so each child's areal mass equals its
+        # parent's to drift 0 (total mass Σ mass_areal·cell_area is then conserved because the
+        # k^2 children each have 1/k^2 of the parent's plan area). Asserted as a verbatim copy
+        # (NOT a Σ over k^2 terms, whose float REDUCTION ORDER differs ~1e-16 even for equal
+        # values — a summation artifact, not a conservation violation).
+        worst["mass_copy"] = max(worst["mass_copy"], float(np.max(np.abs(
+            fine["mass_areal"] - np.repeat(np.repeat(base["mass_areal"], k, 0), k, 1)))))
+
+        # height invariant exact across both ops, for every k.
+        worst["h_refine"] = max(worst["h_refine"], float(np.max(np.abs(
+            _bundle_height(fine) - np.repeat(np.repeat(_bundle_height(base), k, 0), k, 1)))))
+        worst["h_back"] = max(worst["h_back"], float(np.max(np.abs(
+            _bundle_height(back) - _bundle_height(base)))))
+
+    ok = (worst["field"] == 0.0 and labels_ok and worst["mass_copy"] == 0.0
+          and worst["h_refine"] == 0.0 and worst["h_back"] == 0.0)
+    check("§6.1: refine/coarsen round-trip exact for k in {2,3,5,8} (drift 0, height max-err 0)",
+          ok,
+          f"label_ok={labels_ok} mass_copy_err={worst['mass_copy']:.2e} "
+          f"h_err(refine)={worst['h_refine']:.2e} h_err(back)={worst['h_back']:.2e} "
+          f"field_max_err={worst['field']:.2e}")
+
+
+# §6.2 base<->tile consistency ---------------------------------------------------------
+
+def test_base_tile_consistency() -> None:
+    """§6.2: for a refined scene, every base cell over a tile == coarsen(tile children).
+
+    Builds a small base ColumnState, drives a 4-wheel pass + a drum dig so the corridor
+    carries TREAD/EXCAVATED/SPOIL labels and non-uniform density (a genuine coarsen), then
+    extracts tiles over base-cell-aligned leaf boxes. For each tile, coarsen its fine cells
+    back and assert mass_areal AND area-mean height match the base block exactly (the §5.3
+    NORMATIVE base<->tile invariant), plus state_label/datum/disturbance.
+    """
+    base_cell_m, fine_cell_m = 0.02, 0.01
+    k = refinement.k_factor(base_cell_m, fine_cell_m)  # 2
+    cs = procgen.rolling_hills(48, 48, base_cell_m, seed=23, amplitude_m=0.1)
+    # Lay TREAD ruts + an EXCAVATED/SPOIL dig so the corridor is heterogeneous.
+    poses = [((r, r), np.deg2rad(45.0)) for r in np.linspace(10, 38, 15)]
+    four_wheel_pass(cs, poses, wheel_width_m=0.18, compaction=0.12)
+    from .rover import drum_pass
+    swath = [(8, c) for c in range(8, 24)]
+    dump = [(40, c) for c in range(8, 24)]
+    drum_pass(cs, swath, depth_m=0.03, width_m=0.20, dump_rc=dump)
+
+    # Base-cell-aligned leaf boxes over the touched corridor (8x8 blocks; k=2 divides 8).
+    leaf_boxes = [[8, 8, 16, 16], [16, 16, 24, 24], [24, 24, 32, 32],
+                  [0, 8, 8, 16], [40, 8, 48, 16]]
+    tiles = refinement.extract_tiles(cs, leaf_boxes, fine_cell_m)
+
+    worst_mass = 0.0
+    worst_height = 0.0
+    worst_datum = 0.0
+    worst_dist = 0.0
+    labels_ok = True
+    for t in tiles:
+        r0, c0, r1, c1 = t.region_rc
+        coarse = refinement.coarsen_field(t.fields, k)
+        base_block = {
+            "mass_areal": cs.mass_areal[r0:r1, c0:c1],
+            "density": cs.density[r0:r1, c0:c1],
+            "datum": cs.datum[r0:r1, c0:c1],
+            "state_label": cs.state_label[r0:r1, c0:c1],
+            "disturbance": cs.disturbance[r0:r1, c0:c1],
+        }
+        worst_mass = max(worst_mass,
+                         float(np.max(np.abs(coarse["mass_areal"] - base_block["mass_areal"]))))
+        worst_height = max(worst_height,
+                           float(np.max(np.abs(_bundle_height(coarse) - _bundle_height(base_block)))))
+        worst_datum = max(worst_datum,
+                          float(np.max(np.abs(coarse["datum"] - base_block["datum"]))))
+        worst_dist = max(worst_dist,
+                         float(np.max(np.abs(coarse["disturbance"] - base_block["disturbance"]))))
+        labels_ok = labels_ok and bool(
+            np.array_equal(coarse["state_label"], base_block["state_label"]))
+
+    ok = (worst_mass == 0.0 and worst_height == 0.0 and worst_datum == 0.0
+          and worst_dist == 0.0 and labels_ok and len(tiles) == len(leaf_boxes))
+    check("§6.2: base<->tile consistency (mass + area-mean height) over a refined scene",
+          ok,
+          f"tiles={len(tiles)} max_mass_err={worst_mass:.2e} max_height_err={worst_height:.2e} "
+          f"max_datum_err={worst_datum:.2e} max_dist_err={worst_dist:.2e} labels_ok={labels_ok}")
+
+
+# §6.2b zero-mass coarsen --------------------------------------------------------------
+
+def test_coarsen_zero_mass() -> None:
+    """§6.2b: an all-empty (mass_areal=0) block coarsens to finite density=mean(density_fine),
+    height==datum, no NaN/inf (the zero-mass branch; density_fine>0 precondition)."""
+    k = 2
+    h, w = 3, 3
+    rng = np.random.default_rng(7)
+    rho_fine = rng.uniform(K.RHO_SURFACE, K.RHO_DEEP, size=(h * k, w * k))
+    datum_fine = rng.uniform(-0.2, 0.2, size=(h * k, w * k))
+    fine = {
+        "mass_areal": np.zeros((h * k, w * k)),  # ALL empty
+        "density": rho_fine,
+        "datum": datum_fine,
+        "state_label": np.full((h * k, w * k), int(StateLabel.VIRGIN), dtype=np.uint8),
+        "disturbance": np.zeros((h * k, w * k)),
+    }
+    coarse = refinement.coarsen_field(fine, k)
+    rho_mean = rho_fine.reshape(h, k, w, k).mean(axis=(1, 3))
+    datum_mean = datum_fine.reshape(h, k, w, k).mean(axis=(1, 3))
+    height = _bundle_height(coarse)
+
+    finite = bool(np.all(np.isfinite(coarse["density"])) and np.all(np.isfinite(height)))
+    rho_ok = float(np.max(np.abs(coarse["density"] - rho_mean))) == 0.0
+    height_is_datum = float(np.max(np.abs(height - datum_mean))) == 0.0
+    mass_zero = float(np.max(np.abs(coarse["mass_areal"]))) == 0.0
+    check("§6.2b: zero-mass coarsen -> finite density=mean(rho_fine), height==datum, no nan/inf",
+          finite and rho_ok and height_is_datum and mass_zero,
+          f"finite={finite} rho==mean(rho_fine)={rho_ok} height==datum={height_is_datum} "
+          f"mass_zero={mass_zero}")
+
+
+# §6.2c non-uniform datum --------------------------------------------------------------
+
+def test_coarsen_nonuniform_datum() -> None:
+    """§6.2c: with varied per-cell datum, coarse height == area-mean(child heights) and
+    datum_coarse == mean(datum_fine)."""
+    k = 2
+    h, w = 4, 4
+    fine = _mixed_fine_bundle(h, w, k, seed=31)  # non-uniform datum + density + mass
+    coarse = refinement.coarsen_field(fine, k)
+
+    datum_mean = fine["datum"].reshape(h, k, w, k).mean(axis=(1, 3))
+    height_fine_mean = _bundle_height(fine).reshape(h, k, w, k).mean(axis=(1, 3))
+    height_coarse = _bundle_height(coarse)
+
+    datum_err = float(np.max(np.abs(coarse["datum"] - datum_mean)))
+    height_err = float(np.max(np.abs(height_coarse - height_fine_mean)))
+    # area-mean height = mean of child heights for equal-area children; allow float round-off.
+    ok = datum_err == 0.0 and height_err <= 1e-12
+    check("§6.2c: non-uniform datum -> coarse height==area-mean(child h), datum==mean(datum_fine)",
+          ok, f"datum_err={datum_err:.2e} height_err={height_err:.2e}")
+
+
+# §6.2d non-integer k rejected ---------------------------------------------------------
+
+def test_non_integer_k_rejected() -> None:
+    """§6.2d: a base_cell_m/fine_cell_m that is not a positive integer is REJECTED."""
+    # Genuine non-integer ratio (0.02/0.012 = 1.666...) must raise; a non-positive must raise.
+    rejected_noninteger = False
+    try:
+        refinement.k_factor(0.02, 0.012)
+    except ValueError:
+        rejected_noninteger = True
+    rejected_nonpositive = False
+    try:
+        refinement.k_factor(0.02, 0.0)
+    except ValueError:
+        rejected_nonpositive = True
+    # A genuine integer ratio must still be accepted (and absorb float division noise).
+    accepted_int = refinement.k_factor(0.02, 0.01) == 2
+    check("§6.2d: non-integer / non-positive k rejected (ValueError), integer k accepted",
+          rejected_noninteger and rejected_nonpositive and accepted_int,
+          f"noninteger_raised={rejected_noninteger} nonpositive_raised={rejected_nonpositive} "
+          f"int_accepted={accepted_int}")
+
+
+# §6.3 toggle equivalence --------------------------------------------------------------
+
+def test_refinement_toggle_equivalence() -> None:
+    """§6.3: building a scene with refinement DISABLED yields BYTE-IDENTICAL base rasters to
+    the plain uniform pipeline (the no-op-equivalent escape hatch).
+
+    Self-contained: build the SAME base ColumnState two ways and save both into temp dirs —
+    (A) the plain uniform pipeline (just the base fields), (B) a "refinement-disabled" build
+    that attaches the refinement policy block (enabled=false) + the ignorable feature flags
+    but emits NO tiles. Then compare the on-disk raster bytes for the 5 REQUIRED rasters.
+    refinement.enabled=false must touch neither the rasters nor any existing key.
+    """
+    import os
+    import tempfile
+
+    from .io_fields import save_scene
+
+    def _build_base() -> ColumnState:
+        cs = procgen.rolling_hills(40, 40, 0.02, seed=44, amplitude_m=0.1)
+        poses = [((r, r), np.deg2rad(45.0)) for r in np.linspace(8, 32, 12)]
+        four_wheel_pass(cs, poses, wheel_width_m=0.18, compaction=0.12)
+        return cs
+
+    cs_a = _build_base()
+    cs_b = _build_base()
+    meta_common = {
+        "schema_version": "1.0", "scene_name": "toggle",
+        "grid": {"width": 40, "height": 40, "cell_m": 0.02, "order": "row-major-C"},
+    }
+    raster_files = ["heightmap.rf32", "mass_areal.rf32", "density.rf32",
+                    "disturbance.rf32", "state_label.r8"]
+    with tempfile.TemporaryDirectory() as d:
+        sa = os.path.join(d, "plain")
+        sb = os.path.join(d, "refine_off")
+        save_scene(sa, cs_a.fields_dict(), dict(meta_common))
+        # B: refinement DISABLED + ignorable discoverability flags; NO tiles emitted.
+        meta_b = dict(meta_common)
+        meta_b["contract_revision"] = "1.0.2"
+        meta_b["features"] = ["refinement", "wheel_tracks", "drum_marks"]
+        meta_b["refinement"] = {
+            "enabled": False, "base_cell_m": 0.02, "fine_cell_m": 0.01,
+            "refine_where": "none", "fine_min_leaf": 4,
+        }
+        save_scene(sb, cs_b.fields_dict(), meta_b)
+
+        all_identical = True
+        details = []
+        for fn in raster_files:
+            with open(os.path.join(sa, fn), "rb") as fh:
+                ba = fh.read()
+            with open(os.path.join(sb, fn), "rb") as fh:
+                bb = fh.read()
+            same = ba == bb
+            all_identical = all_identical and same
+            if not same:
+                details.append(fn)
+        no_tiles = not os.path.isdir(os.path.join(sb, "tiles"))
+    check("§6.3: refinement-disabled build is byte-identical to plain uniform base rasters",
+          all_identical and no_tiles,
+          f"rasters_identical={all_identical} no_tiles_dir={no_tiles}"
+          + (f" diff={details}" if details else ""))
+
+
+# §6.4 4-wheel separability ------------------------------------------------------------
+
+def test_four_wheel_separability() -> None:
+    """§6.4: after a STRAIGHT drive, exactly two TREAD bands at ~0.57 m gauge; after a TURN,
+    four distinct arcs/clusters."""
+    cell_m = 0.02
+    gauge_cells = WHEEL_GAUGE_M / cell_m  # 0.57 m / 0.02 = 28.5 cells L<->R separation
+
+    # --- STRAIGHT drive along +row (heading +pi/2): L and R wheels share a row-band each;
+    # the two fore/aft wheels on the same side overlap into ONE band -> exactly TWO bands. ---
+    cs = procgen.flat_compact(96, 96, cell_m, seed=3)
+    heading = np.deg2rad(90.0)  # +row/+Z travel; lateral axis is +col/-col
+    poses = [((r, 48.0), heading) for r in np.linspace(20, 76, 40)]
+    four_wheel_pass(cs, poses, wheel_width_m=0.18, compaction=0.12)
+    tread = cs.state_label == int(StateLabel.TREAD)
+    # Project onto the lateral (col) axis: count contiguous TREAD column-bands.
+    col_hit = tread.any(axis=0)
+    n_bands_straight, band_centers = _count_bands(col_hit)
+    two_bands = n_bands_straight == 2
+    gauge_ok = False
+    if len(band_centers) == 2:
+        sep = abs(band_centers[1] - band_centers[0])
+        gauge_ok = abs(sep - gauge_cells) <= 4.0  # within ~8 cm of the 28.5-cell gauge
+
+    # --- TURNING drive: heading sweeps so the 4 wheels trace 4 distinct arcs/clusters. ---
+    cs2 = procgen.flat_compact(96, 96, cell_m, seed=3)
+    poses2 = []
+    for t in np.linspace(0.0, 1.0, 40):
+        ang = np.deg2rad(20.0 + 120.0 * t)  # heading sweeps 100 deg -> a real turn
+        rr = 48.0 + 16.0 * np.sin(ang)
+        cc = 48.0 + 16.0 * (1.0 - np.cos(ang))
+        poses2.append(((rr, cc), ang))
+    poly = four_wheel_pass(cs2, poses2, wheel_width_m=0.12, compaction=0.12)
+    # Four wheels -> four contact polylines whose endpoint clusters are pairwise separated.
+    centroids = {key: np.mean(np.array(poly[key]), axis=0) for key in ("LF", "RF", "LB", "RB")}
+    min_sep = min(
+        float(np.hypot(*(centroids[a] - centroids[b])))
+        for i, a in enumerate(("LF", "RF", "LB", "RB"))
+        for b in ("LF", "RF", "LB", "RB")[i + 1:])
+    four_distinct = min_sep > 0.5 * gauge_cells  # clusters clearly separated (> ~half gauge)
+
+    check("§6.4: 4-wheel separability (straight=2 bands @ gauge; turn=4 distinct clusters)",
+          two_bands and gauge_ok and four_distinct,
+          f"straight_bands={n_bands_straight} band_sep_cells={band_centers} "
+          f"gauge_ok={gauge_ok} turn_min_cluster_sep={min_sep:.1f}cells "
+          f"(half_gauge={0.5 * gauge_cells:.1f})")
+
+
+def _count_bands(hit: np.ndarray) -> tuple[int, list[float]]:
+    """Count contiguous True runs in a 1-D mask; return (n_runs, run-center indices)."""
+    n = 0
+    centers: list[float] = []
+    i = 0
+    L = len(hit)
+    while i < L:
+        if hit[i]:
+            j = i
+            while j < L and hit[j]:
+                j += 1
+            centers.append(0.5 * (i + j - 1))
+            n += 1
+            i = j
+        else:
+            i += 1
+    return n, centers
+
+
+# §6.5 mass under 4-wheel pass ---------------------------------------------------------
+
+def test_four_wheel_pass_preserves_mass() -> None:
+    """§6.5: total mass unchanged under a 4-wheel pass (density-only compaction)."""
+    cs = procgen.rolling_hills(64, 64, 0.02, seed=4, amplitude_m=0.08)
+    m0 = cs.total_mass()
+    h0 = cs.derive_height().copy()
+    poses = [((r, r), np.deg2rad(45.0)) for r in np.linspace(12, 52, 30)]
+    four_wheel_pass(cs, poses, wheel_width_m=0.18, compaction=0.15)
+    m1 = cs.total_mass()
+    h1 = cs.derive_height()
+    sank = bool(np.any(h1 < h0 - 1e-6))  # ruts must sink somewhere
+    ok_h, err_h = _height_consistent(cs)
+    check("§6.5: 4-wheel pass preserves mass (density-only compaction)",
+          abs(m1 - m0) / m0 < 1e-9 and sank and ok_h,
+          f"m0={m0:.6f} m1={m1:.6f} kg rel_drift={abs(m1 - m0) / m0:.2e} "
+          f"ruts_sank={sank} height_err={err_h:.2e}")
+
+
 def main() -> int:
     test_cut_dump_relax_conserves_mass()
     test_height_consistency_all_ops()
@@ -282,6 +656,15 @@ def main() -> int:
     test_sandpile_conserves_and_reposes()
     test_io_roundtrip()
     test_quadtree_space_management()
+    # render_fidelity_spec.md §6 acceptance tests (refinement.py + rover.py producer ops).
+    test_refine_coarsen_roundtrip()          # §6.1
+    test_base_tile_consistency()             # §6.2
+    test_coarsen_zero_mass()                 # §6.2b
+    test_coarsen_nonuniform_datum()          # §6.2c
+    test_non_integer_k_rejected()            # §6.2d
+    test_refinement_toggle_equivalence()     # §6.3
+    test_four_wheel_separability()           # §6.4
+    test_four_wheel_pass_preserves_mass()    # §6.5
 
     n_fail = sum(1 for _, ok, _ in _results if not ok)
     n_pass = len(_results) - n_fail

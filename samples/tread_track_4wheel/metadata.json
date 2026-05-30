@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0",
+  "scene_name": "tread_track_4wheel",
+  "producer": "terrain_authority (NumPy Tier-2 surrogate)",
+  "grid": {
+    "width": 256,
+    "height": 256,
+    "cell_m": 0.02,
+    "order": "row-major-C"
+  },
+  "world_bounds_m": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 5.12,
+    "y1": 5.12
+  },
+  "gravity_m_s2": 1.62,
+  "fields": {
+    "heightmap": {
+      "file": "heightmap.rf32",
+      "dtype": "<f4",
+      "units": "m"
+    },
+    "mass_areal": {
+      "file": "mass_areal.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^2"
+    },
+    "density": {
+      "file": "density.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^3"
+    },
+    "disturbance": {
+      "file": "disturbance.rf32",
+      "dtype": "<f4",
+      "units": "1 (normalized)"
+    },
+    "state_label": {
+      "file": "state_label.r8",
+      "dtype": "u1",
+      "enum": [
+        "VIRGIN",
+        "TREAD",
+        "EXCAVATED",
+        "SPOIL",
+        "COMPACTED_BERM"
+      ]
+    }
+  },
+  "ice_present": false,
+  "height_range_m": [
+    -0.0747,
+    0.04647
+  ],
+  "clasts": [],
+  "active_zone": {
+    "min_rc": [
+      48,
+      40
+    ],
+    "max_rc": [
+      205,
+      184
+    ]
+  },
+  "quadtree": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 256,
+      "label": "ROOT"
+    },
+    {
+      "level": 1,
+      "row0": 48,
+      "col0": 40,
+      "size": 157,
+      "label": "ACTIVE"
+    }
+  ],
+  "notes": "TIME SERIES (driven-rover, FOUR wheels). rover.four_wheel_pass lays the IPEx LF/RF/LB/RB footprint as four separate VIRGIN->TREAD compaction ruts along a 2-segment path (mass conserved, pure compaction; spec \u00a75/\u00a76). Per-frame \u00a75.2 wheel_tracks orient cleat detail; \u00a75.3 refinement (1 cm corridor) + tiles[] on the final frame back the crisp persistent trail. All additive; ignorable.",
+  "time_series": {
+    "frame_count": 19,
+    "frame_cadence_steps": 1,
+    "frame_dirs": [
+      "t000",
+      "t001",
+      "t002",
+      "t003",
+      "t004",
+      "t005",
+      "t006",
+      "t007",
+      "t008",
+      "t009",
+      "t010",
+      "t011",
+      "t012",
+      "t013",
+      "t014",
+      "t015",
+      "t016",
+      "t017",
+      "t018"
+    ],
+    "mass_conserved_kg": 5521.79304,
+    "mass_drift_kg": 0.0
+  },
+  "quadtree_lod": {
+    "min_leaf": 8,
+    "refine_factor": 0.5,
+    "footprint_radius_cells": 5.5,
+    "field_size": 256,
+    "per_frame_keys": [
+      "active_leaves",
+      "quadtree_nodes",
+      "touched_leaves",
+      "rover_rc",
+      "wheel_tracks",
+      "refinement"
+    ],
+    "note": "interaction-keyed quadtree + per-frame wheel_tracks; the final frame carries the \u00a75.3 refinement tiles over the touched corridor. Optional; ignorable."
+  },
+  "refinement": {
+    "enabled": true,
+    "base_cell_m": 0.02,
+    "fine_cell_m": 0.01,
+    "refine_where": "touched",
+    "fine_min_leaf": 4
+  },
+  "contract_revision": "1.0.2",
+  "features": [
+    "wheel_tracks",
+    "refinement",
+    "tiles"
+  ]
+}
