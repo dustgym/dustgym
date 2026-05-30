@@ -5,9 +5,24 @@ NumPy analytical surrogate (spec §2 authority model; spec §11 candidate toolin
 the **exact** on-disk state-field contract (`INTERFACE.md`) so it is a drop-in for the surrogate —
 producer and consumer share only the `.rf32`/`.r8` + `metadata.json` seam.
 
-**Status:** Research / setup guide. **Nothing was installed or built** to produce this document — it
-is an environment-checked plan. Class/package/flag names were verified against live Chrono docs
+**Status:** Research / setup guide. Class/package/flag names were verified against live Chrono docs
 (May 2026); anything unconfirmed is flagged inline.
+
+> **⚙️ Bring-up EXECUTED 2026-05-30 — Path A is live.** This plan has since been carried out on this
+> box: a conda `chrono` env (Python 3.12) with **PyChrono 10.0.0** runs an `SCMTerrain` rover at lunar
+> gravity headless, and a partial `SCM → INTERFACE.md` exporter (`scripts/chrono_scm_export.py`) writes
+> a contract-valid scene via the frozen `io_fields.save_scene`. See **[`chrono_bringup_log.md`](chrono_bringup_log.md)**
+> for the full as-built record and `scripts/chrono_scm_rover.py` / `chrono_scm_export_demo.py`.
+> **Verified corrections to this guide** (the live 10.0.0 API differs from the sketches below):
+> - The conda build `py312h98ab86c_677` links **`libgdal.so.37`**; the default solve pulls GDAL 3.12
+>   (`.so.38`) and breaks `import pychrono.vehicle`. Fix: pin **`libgdal=3.11`** alongside pychrono
+>   (soname map: 3.9→.so.35, 3.10→.so.36, **3.11→.so.37**, 3.12→.so.38).
+> - SCM patch setup is **`SetReferenceFrame(ChCoordsysd(...))`**, *not* `SetPlane` (which does not exist).
+>   Run Y-up by rotating the **terrain** frame −90° about X (`QuatFromAngleX`); SCM defaults to Z-up.
+> - A bare `SCMTerrain` + body advances inside **`sys.DoStepDynamics(dt)`** — do *not* also call
+>   `terrain.Synchronize/Advance` (those belong to the Chrono::Vehicle driver loop).
+> - PyChrono 10.0.0 exposes **no `__version__`**; identify the build via `conda list` / the module path.
+> - Classic solver (conda 23.3.1) is slow (~20–30 min/solve); pinning pychrono shrinks the search space.
 
 **Scope recall:** This project targets **Tier 2** (spec §3) — coupled semi-empirical terramechanics.
 Chrono provides Tier-2 mobility via **Chrono::Vehicle + SCM deformable terrain** and the Tier-3
