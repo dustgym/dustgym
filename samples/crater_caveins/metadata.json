@@ -1,0 +1,194 @@
+{
+  "schema_version": "1.0",
+  "scene_name": "crater_caveins",
+  "producer": "terrain_authority (NumPy Tier-2 surrogate)",
+  "grid": {
+    "width": 256,
+    "height": 256,
+    "cell_m": 0.02,
+    "order": "row-major-C"
+  },
+  "world_bounds_m": {
+    "x0": 0.0,
+    "y0": 0.0,
+    "x1": 5.12,
+    "y1": 5.12
+  },
+  "gravity_m_s2": 1.62,
+  "fields": {
+    "heightmap": {
+      "file": "heightmap.rf32",
+      "dtype": "<f4",
+      "units": "m"
+    },
+    "mass_areal": {
+      "file": "mass_areal.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^2"
+    },
+    "density": {
+      "file": "density.rf32",
+      "dtype": "<f4",
+      "units": "kg/m^3"
+    },
+    "disturbance": {
+      "file": "disturbance.rf32",
+      "dtype": "<f4",
+      "units": "1 (normalized)"
+    },
+    "state_label": {
+      "file": "state_label.r8",
+      "dtype": "u1",
+      "enum": [
+        "VIRGIN",
+        "TREAD",
+        "EXCAVATED",
+        "SPOIL",
+        "COMPACTED_BERM"
+      ]
+    }
+  },
+  "ice_present": false,
+  "height_range_m": [
+    -0.13843,
+    0.25328
+  ],
+  "clasts": [],
+  "active_zone": {
+    "min_rc": [
+      64,
+      64
+    ],
+    "max_rc": [
+      192,
+      192
+    ]
+  },
+  "quadtree": [
+    {
+      "level": 0,
+      "row0": 0,
+      "col0": 0,
+      "size": 256,
+      "label": "ROOT"
+    },
+    {
+      "level": 1,
+      "row0": 64,
+      "col0": 64,
+      "size": 128,
+      "label": "ACTIVE"
+    }
+  ],
+  "notes": "TIME SERIES (cave-in). A loose ridge piled on the inner crater rim with deposit() is relaxed to angle-of-repose by the sandpile CA (spec \u00a77). Each tNNN/ is a full snapshot; mass conserved across the series.",
+  "time_series": {
+    "frame_count": 102,
+    "frame_cadence_steps": 4,
+    "frame_dirs": [
+      "t000",
+      "t001",
+      "t002",
+      "t003",
+      "t004",
+      "t005",
+      "t006",
+      "t007",
+      "t008",
+      "t009",
+      "t010",
+      "t011",
+      "t012",
+      "t013",
+      "t014",
+      "t015",
+      "t016",
+      "t017",
+      "t018",
+      "t019",
+      "t020",
+      "t021",
+      "t022",
+      "t023",
+      "t024",
+      "t025",
+      "t026",
+      "t027",
+      "t028",
+      "t029",
+      "t030",
+      "t031",
+      "t032",
+      "t033",
+      "t034",
+      "t035",
+      "t036",
+      "t037",
+      "t038",
+      "t039",
+      "t040",
+      "t041",
+      "t042",
+      "t043",
+      "t044",
+      "t045",
+      "t046",
+      "t047",
+      "t048",
+      "t049",
+      "t050",
+      "t051",
+      "t052",
+      "t053",
+      "t054",
+      "t055",
+      "t056",
+      "t057",
+      "t058",
+      "t059",
+      "t060",
+      "t061",
+      "t062",
+      "t063",
+      "t064",
+      "t065",
+      "t066",
+      "t067",
+      "t068",
+      "t069",
+      "t070",
+      "t071",
+      "t072",
+      "t073",
+      "t074",
+      "t075",
+      "t076",
+      "t077",
+      "t078",
+      "t079",
+      "t080",
+      "t081",
+      "t082",
+      "t083",
+      "t084",
+      "t085",
+      "t086",
+      "t087",
+      "t088",
+      "t089",
+      "t090",
+      "t091",
+      "t092",
+      "t093",
+      "t094",
+      "t095",
+      "t096",
+      "t097",
+      "t098",
+      "t099",
+      "t100",
+      "t101"
+    ],
+    "mass_conserved_kg": 4525.590932,
+    "mass_drift_kg": 0.0
+  }
+}

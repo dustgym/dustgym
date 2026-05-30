@@ -1,0 +1,32 @@
+# ── Vendored heavyweight tooling (not redistributed; see README §3 + docs/) ──
+# .venv/  = in-repo Python venv (numpy/scipy/matplotlib/pillow)
+# .tools/ = vendored Godot 4.6.3 binary
+# .vendor/ = EZ-RASSOR source checkout (incl. unlicensed extra_models/)
+.venv/
+.tools/
+.vendor/
+
+# ── Godot editor cache + import sidecars ──
+godot_sidecar/.godot/
+*.import
+
+# ── Python bytecode ──
+__pycache__/
+*.pyc
+
+# ── Third-party copyrighted research PDFs — NOT redistributed ──
+# Journal / IEEE / NASA / conference papers: John's private research library,
+# cited by filename throughout the repo (README §4, scene metadata) but cannot be
+# relicensed CC0 or redistributed. See papers/CITATIONS.md for the reference list.
+# Same exclusion rationale as .vendor/extra_models (THIRD_PARTY.md).
+papers/*
+!papers/CITATIONS.md
+
+# ── crater_caveins raw time series (~110 MB, regenerable) ──
+# 102-frame float32 raster sequence, deterministically rebuilt by
+# `python -m terrain_authority.scenes` (build_crater_caveins, seed=5).
+# Commit only the bookend frames (t000, t101) + previews; the motion is already
+# captured by viz/out/caveins.gif and caveins_filmstrip.png.
+samples/crater_caveins/t*/
+!samples/crater_caveins/t000/
+!samples/crater_caveins/t101/
