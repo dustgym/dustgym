@@ -20,6 +20,7 @@ import numpy as np
 from . import constants as K
 from . import procgen
 from .column_state import ColumnState, StateLabel, loose_mask
+from .quadtree import build_quadtree, leaves_cover_field
 from .rover import straight_path, wheel_pass
 from .sandpile import Sandpile
 
@@ -191,12 +192,96 @@ def test_io_roundtrip() -> None:
           f"meta={meta_ok} shape={shape_ok} mass_rt={rt} label_u8={label_ok}")
 
 
+# ---------------------------------------------------------------------------
+# Check 6: interaction-keyed quadtree (spec §4 "the tree manages space, keyed
+# to interaction"). Three properties: (a) the leaf set tiles the field with no
+# gaps/overlap, (b) promotion is monotone toward the rover — the leaf CONTAINING
+# the rover footprint is at min_leaf (finest), a node FAR from the rover stays
+# above min_leaf (coarse), and the box-distance-to-rover is non-decreasing with
+# leaf size; (c) the active (fine) leaf count is bounded along the whole drive.
+# ---------------------------------------------------------------------------
+
+def test_quadtree_space_management() -> None:
+    field_size = 256
+    min_leaf = 8
+    refine_factor = 0.5
+    footprint_radius = 5.5  # cells (~22 cm wheel half-width at 0.02 m/cell)
+
+    # --- (a) the leaf set tiles the field exactly once (no gaps/overlap) -----------
+    rover = (128, 133)
+    res = build_quadtree(field_size, rover, min_leaf=min_leaf,
+                         refine_factor=refine_factor,
+                         footprint_radius_cells=footprint_radius)
+    cover_ok, n_once = leaves_cover_field(res)
+    check("quadtree: leaves tile the field exactly once (no gaps/overlap)",
+          cover_ok and n_once == field_size * field_size,
+          f"covered_once={n_once}/{field_size * field_size} leaves={len(res.leaves)}")
+
+    # --- (b) promotion is monotone toward the rover --------------------------------
+    # Leaf containing the rover footprint center is at the finest (min_leaf) level.
+    rr, rc = rover
+    rover_leaf_size = next(
+        (r1 - r0) for (r0, c0, r1, c1) in res.leaves if r0 <= rr < r1 and c0 <= rc < c1)
+    rover_is_fine = rover_leaf_size == min_leaf
+    # A node in the far corner (opposite the rover) stays coarse (> min_leaf).
+    far_leaf_size = next(
+        (r1 - r0) for (r0, c0, r1, c1) in res.leaves if r0 <= 4 < r1 and c0 <= 4 < c1)
+    far_is_coarse = far_leaf_size > min_leaf
+    # Monotonicity: bin leaves by size, and assert the MINIMUM box-distance-to-rover
+    # is non-decreasing as leaf size grows (bigger leaves only live farther out).
+    from .quadtree import _box_chebyshev_distance
+    by_size: dict[int, float] = {}
+    for (r0, c0, r1, c1) in res.leaves:
+        d = _box_chebyshev_distance(r0, c0, r1, c1, rr, rc)
+        sz = r1 - r0
+        by_size[sz] = min(by_size.get(sz, np.inf), d)
+    sizes_sorted = sorted(by_size)
+    min_dists = [by_size[s] for s in sizes_sorted]
+    monotone = all(min_dists[i] <= min_dists[i + 1] + 1e-9 for i in range(len(min_dists) - 1))
+    check("quadtree: promotion monotone toward rover (rover leaf fine, far leaf coarse)",
+          rover_is_fine and far_is_coarse and monotone,
+          f"rover_leaf={rover_leaf_size} far_leaf={far_leaf_size} "
+          f"min_dist_by_size={[f'{s}:{d:.0f}' for s, d in zip(sizes_sorted, min_dists)]}")
+
+    # --- (c) active (fine) leaf count is bounded along the whole drive -------------
+    # Replay the SAME tread-track rover positions and assert the active set never blows
+    # up (LOD budget is finite) and that as the rover moves the active cluster MOVES
+    # (its centroid tracks the rover, not stuck at the start).
+    from .scenes import _tread_path_endpoints
+    cr0, cc0, cr1, cc1, cr2, cc2 = _tread_path_endpoints()
+    path = straight_path(cr0, cc0, cr1, cc1, 1) + straight_path(cr1, cc1, cr2, cc2, 1)[1:]
+    chunks = np.array_split(np.arange(len(path)), 31)
+    positions = [None] + [[path[k] for k in ch][-1] for ch in chunks if len(ch)]
+
+    MAX_ACTIVE = 64  # generous LOD budget; observed peak is well under this
+    max_active = 0
+    centroids = []
+    for pos in positions:
+        r = build_quadtree(field_size, pos, min_leaf=min_leaf,
+                           refine_factor=refine_factor,
+                           footprint_radius_cells=footprint_radius)
+        max_active = max(max_active, len(r.active_leaves))
+        if r.active_leaves:
+            arr = np.array([[(a + c) / 2, (b + d) / 2] for (a, b, c, d) in r.active_leaves])
+            centroids.append((pos, arr.mean(axis=0)))
+    bounded = max_active <= MAX_ACTIVE
+    # The active-cluster centroid stays near the rover it is keyed to (within ~min_leaf*4).
+    tracks = all(
+        abs(cent[0] - pos[0]) <= min_leaf * 4 and abs(cent[1] - pos[1]) <= min_leaf * 4
+        for pos, cent in centroids)
+    check("quadtree: active-leaf count bounded + cluster tracks the rover along the drive",
+          bounded and tracks,
+          f"max_active={max_active} (budget {MAX_ACTIVE}); cluster_tracks_rover={tracks} "
+          f"over {len(positions)} frames")
+
+
 def main() -> int:
     test_cut_dump_relax_conserves_mass()
     test_height_consistency_all_ops()
     test_rover_pass_preserves_mass()
     test_sandpile_conserves_and_reposes()
     test_io_roundtrip()
+    test_quadtree_space_management()
 
     n_fail = sum(1 for _, ok, _ in _results if not ok)
     n_pass = len(_results) - n_fail

@@ -1,4 +1,4 @@
-# foss_ipex — State-Field Interface Contract (v1.0, FROZEN)
+# foss_ipex — State-Field Interface Contract (v1.0, FROZEN; v1.0.1 additive note)
 
 This is the **decoupling seam** of the architecture (spec §2, §4). The physics authority
 *produces* a directory of state fields; renderers and visualizers *consume* it. Producer and
@@ -102,6 +102,47 @@ so the trap is named, not so it is solved this weekend. Cite spec §11.
   `ACTIVE` node(s) render as fine cuboids. (Spec §4: the tree manages *space*, not physics.)
 - `active_zone` is the fine-solve window (spec §4 "Under wheels/drums").
 
+### 5.1 OPTIONAL additive keys — interaction-keyed quadtree (v1.0.1)
+
+> **ADDITIVE, backward-compatible (contract still v1.0 for the rasters).** These are NEW
+> OPTIONAL `metadata.json` keys. They appear today on the **driven-rover `tread_track`**
+> time-series frames (per-frame) to realize spec §4's headline thesis — *the tree manages
+> SPACE, keyed to interaction*: as the rover drives, quadtree leaves near it promote to the
+> finest level (fine/active) while distant regions stay coarse. **Consumers MAY ignore all
+> of these** and lose nothing; no raster, dtype, endianness, or existing metadata key
+> changes. The static `quadtree[]` D1b key above is untouched and still present.
+
+```jsonc
+{
+  "rover_rc": [128, 133],            // rover footprint CENTER [row,col] this frame, or null (pre-drive)
+  "active_leaves": [[112,112,120,120], ...],   // FINE (min_leaf) leaf boxes under the rover NOW
+  "touched_leaves": [[...], ...],    // cumulative min_leaf cells the rover has EVER activated (trail)
+  "quadtree_nodes": [                // the full per-frame subdivision (coarse far, fine near)
+    { "level": 0, "row0": 0, "col0": 0, "size": 256, "leaf": false },
+    { "level": 5, "row0": 120, "col0": 128, "size": 8, "leaf": true }
+  ],
+  "quadtree_lod": {                  // the deterministic promotion knobs (also on the parent)
+    "min_leaf": 8, "refine_factor": 0.5, "footprint_radius_cells": 5.5, "field_size": 256
+  }
+}
+```
+
+- **Box convention:** every box is `[r0, c0, r1, c1]` **half-open** in cells (rows `r0..r1-1`,
+  cols `c0..c1-1`), same row-major indexing as the rasters (§2/§3). World corners are
+  `x = col*cell_m`, `z = row*cell_m`.
+- **`active_leaves`** are the `min_leaf`-size (finest) leaves under the current rover
+  footprint — the live LOD hot-set that **promotes as the rover approaches and evicts as it
+  leaves** (count is bounded; see `terrain_authority.tests`).
+- **`touched_leaves`** is the promote-only cumulative history (the refined trail left behind,
+  mirroring the VIRGIN→TREAD segmentation).
+- **`quadtree_nodes[]`** tiles the field exactly once via its `leaf:true` nodes (no gaps,
+  no overlap). It is a *finer-grained, interaction-driven* sibling of the static `quadtree[]`
+  D1b key, NOT a replacement.
+- **Promotion rule** (deterministic, pure NumPy; `terrain_authority/quadtree.py`): subdivide
+  a node iff `size > min_leaf` AND box-distance(rover, node) − `footprint_radius_cells`
+  `< refine_factor * size`. Distance-graded LOD: fine near the rover, coarse far.
+- The parent `tread_track/metadata.json` advertises this under `quadtree_lod.per_frame_keys`.
+
 ## 6. Producer & consumer responsibilities
 
 | Producer (terrain_authority / Chrono) MUST | Consumer (Godot / native viz) MAY ASSUME |
@@ -121,4 +162,9 @@ import these; they do not re-implement raw I/O.** Godot implements its own loade
 
 ---
 
-*Contract frozen 2026-05-30. Bump `schema_version` on any breaking change.*
+*Contract frozen 2026-05-30 (v1.0). v1.0.1 (2026-05-30): ADDITIVE only — added the OPTIONAL
+interaction-keyed quadtree keys in §5.1 (`rover_rc`, `active_leaves`, `touched_leaves`,
+`quadtree_nodes`, `quadtree_lod`) on the `tread_track` frames. No raster, dtype, endianness,
+or existing metadata key changed; `schema_version` stays `"1.0"` because the on-disk raster
+contract is unchanged and consumers may ignore the new keys. Bump `schema_version` only on a
+BREAKING change.*

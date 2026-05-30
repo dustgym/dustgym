@@ -30,6 +30,7 @@ from . import constants as K
 from . import procgen
 from .column_state import ColumnState
 from .io_fields import save_scene, write_hillshade_png, write_preview_png
+from .quadtree import QuadtreeTracker
 from .rover import straight_path, wheel_pass
 from .sandpile import Sandpile
 
@@ -37,6 +38,12 @@ from .sandpile import Sandpile
 WIDTH = 256
 HEIGHT = 256
 CELL_M = 0.02  # 2 cm -> 5.12 m patch
+
+# Interaction-keyed quadtree config for the driven-rover series (quadtree.py; spec §4).
+# WIDTH==HEIGHT==256 is a power of two so the tree bottoms out cleanly at QT_MIN_LEAF.
+QT_MIN_LEAF = 8                       # finest leaf side [cells] = 16 cm (wheel scale)
+QT_REFINE_FACTOR = 0.5                # subdivide while box-dist < factor*node_size cells
+QT_FOOTPRINT_RADIUS_CELLS = 5.5       # ~22 cm wheel contact half-width at 0.02 m/cell
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLES_DIR = os.path.join(ROOT, "samples")
@@ -82,6 +89,34 @@ def _default_quadtree(active_row0=64, active_col0=64, active_size=128):
         {"level": 1, "row0": active_row0, "col0": active_col0, "size": active_size,
          "label": "ACTIVE"},
     ]
+
+
+def _attach_quadtree_meta(meta: dict, qt_result, rover_rc, touched_boxes) -> None:
+    """ADDITIVELY attach the per-frame interaction-keyed quadtree state (INTERFACE.md §5.1).
+
+    Adds NEW optional keys ONLY; never touches existing rasters or metadata keys (the static
+    ``quadtree`` D1b key, fields, grid, ... are all left as-is). Consumers may ignore these:
+
+      active_leaves   [[r0,c0,r1,c1],...]  fine (min_leaf) leaves under the CURRENT rover
+                                           footprint (promote+evict; the live hot set).
+      quadtree_nodes  [{level,row0,col0,size,leaf},...]  the full subdivision for this frame
+                                           (coarse far, fine near — the LOD context).
+      touched_leaves  [[r0,c0,r1,c1],...]  cumulative min_leaf cells the rover had activated
+                                           AS OF THIS FRAME (promote-only history / the
+                                           refined trail behind the rover; empty pre-drive).
+      rover_rc        [row,col] or null    the rover footprint center this frame is keyed to.
+      quadtree_lod    {min_leaf, refine_factor, footprint_radius_cells}  the promotion knobs.
+    """
+    meta["active_leaves"] = qt_result.boxes("active")
+    meta["quadtree_nodes"] = qt_result.nodes
+    meta["touched_leaves"] = touched_boxes
+    meta["rover_rc"] = list(rover_rc) if rover_rc is not None else None
+    meta["quadtree_lod"] = {
+        "min_leaf": qt_result.min_leaf,
+        "refine_factor": QT_REFINE_FACTOR,
+        "footprint_radius_cells": QT_FOOTPRINT_RADIUS_CELLS,
+        "field_size": qt_result.field_size,
+    }
 
 
 def _height_range(cs: ColumnState) -> list[float]:
@@ -312,6 +347,25 @@ def build_tread_track() -> None:
 
     frames, mass_before, mass_after = _replay_tread_track()
 
+    # Per-frame rover footprint center + the interaction-keyed quadtree that FOLLOWS it
+    # (quadtree.py; spec §4). The QuadtreeTracker accumulates the "touched" history while
+    # each frame's active set promotes/evicts with the rover. This is computed from the
+    # SAME path/chunking the frames were laid with, so the fine LOD provably tracks the
+    # same rover that lays the TREAD trail.
+    positions = _tread_frame_positions()
+    tracker = QuadtreeTracker(field_size=WIDTH, min_leaf=QT_MIN_LEAF,
+                              refine_factor=QT_REFINE_FACTOR,
+                              footprint_radius_cells=QT_FOOTPRINT_RADIUS_CELLS)
+    # Step the tracker frame by frame, snapshotting the active set AND the cumulative
+    # touched history AS OF THAT FRAME (touched grows monotonically: empty pre-drive,
+    # full at the end). Snapshotting inside the loop is required — reading
+    # tracker.touched_boxes() after the loop would give every frame the FINAL trail.
+    qt_per_frame = []
+    qt_touched_per_frame = []
+    for pos in positions:
+        qt_per_frame.append(tracker.step(pos))
+        qt_touched_per_frame.append(tracker.touched_boxes())
+
     scene_dir = os.path.join(SAMPLES_DIR, name)
     os.makedirs(scene_dir, exist_ok=True)
 
@@ -334,6 +388,11 @@ def build_tread_track() -> None:
                   f"rut sinks, disturbance bumped). Mass conserved — pure compaction "
                   f"(spec §6; rover.py).")
         meta["frame_index"] = i
+        # ADDITIVE (INTERFACE.md v1.0.1): per-frame interaction-keyed quadtree state. The
+        # existing static "quadtree" key (D1b wireframes) is untouched; these are NEW
+        # optional keys consumers may ignore. boxes are [r0,c0,r1,c1] half-open cell boxes.
+        _attach_quadtree_meta(meta, qt_per_frame[i], positions[i],
+                              qt_touched_per_frame[i])
         save_scene(tdir, frame_cs.fields_dict(), meta)
 
     # First/last-frame previews at the parent level (mirrors crater_caveins).
@@ -356,12 +415,24 @@ def build_tread_track() -> None:
         "mass_conserved_kg": round(mass_after, 6),
         "mass_drift_kg": round(abs(mass_after - mass_before), 9),
     }
+    # ADDITIVE (INTERFACE.md v1.0.1): advertise that each frame carries the per-frame
+    # interaction-keyed quadtree (active_leaves / quadtree_nodes / touched_leaves / rover_rc).
+    parent_meta["quadtree_lod"] = {
+        "min_leaf": QT_MIN_LEAF, "refine_factor": QT_REFINE_FACTOR,
+        "footprint_radius_cells": QT_FOOTPRINT_RADIUS_CELLS, "field_size": WIDTH,
+        "per_frame_keys": ["active_leaves", "quadtree_nodes", "touched_leaves", "rover_rc"],
+        "note": "interaction-keyed quadtree: leaves near the rover promote to min_leaf "
+                "(fine/active), distant regions stay coarse (spec §4). Optional; ignorable.",
+    }
     import json
     with open(os.path.join(scene_dir, "metadata.json"), "w") as fh:
         json.dump(parent_meta, fh, indent=2)
+    n_active_last = len(qt_per_frame[-1].active_leaves)
+    n_touched = len(tracker.touched_leaves())
     print(f"  wrote {name}  frames={len(frames)}  "
           f"mass_before={mass_before:.4f} mass_after={mass_after:.4f} kg "
-          f"drift={abs(mass_after-mass_before):.2e} kg")
+          f"drift={abs(mass_after-mass_before):.2e} kg  "
+          f"qt active(last)={n_active_last} touched(total)={n_touched}")
 
 
 def _tread_path_endpoints() -> tuple[int, int, int, int, int, int]:
@@ -374,12 +445,36 @@ def _tread_path_endpoints() -> tuple[int, int, int, int, int, int]:
     return cr0, cc0, cr1, cc1, cr2, cc2
 
 
+def _tread_frame_positions() -> list[tuple[int, int] | None]:
+    """Per-frame rover footprint CENTER (row,col), aligned to the captured frames.
+
+    Frame 0 is the pristine pre-drive surface -> None (no rover on the field yet). Frame i
+    (1..n_motion) corresponds to the i-th path chunk having been driven, so the rover sits
+    at the LAST cell of that chunk. This is the single source of truth for "where is the
+    rover at frame i", reused by both the quadtree-per-frame metadata and the viz, so the
+    quadtree provably follows the SAME rover as the tread trail (one coherent story).
+    """
+    cr0, cc0, cr1, cc1, cr2, cc2 = _tread_path_endpoints()
+    path = straight_path(cr0, cc0, cr1, cc1, step_cells=1)
+    path += straight_path(cr1, cc1, cr2, cc2, step_cells=1)[1:]
+    chunks = np.array_split(np.arange(len(path)), 31)
+    positions: list[tuple[int, int] | None] = [None]  # t000 pristine
+    for chunk in chunks:
+        if len(chunk) == 0:
+            continue
+        sub = [path[k] for k in chunk]
+        positions.append(tuple(sub[-1]))
+    return positions
+
+
 def _replay_tread_track() -> tuple[list[ColumnState], float, float]:
     """Deterministically rebuild the tread track; return (frames, mass_before, mass_after).
 
     Builds the full (row,col) path, splits it into ~N_FRAMES contiguous chunks, and applies
     wheel_pass to one chunk per frame so the trail is laid progressively. A ColumnState
-    clone is captured per frame (frame 0 is the pristine pre-drive surface).
+    clone is captured per frame (frame 0 is the pristine pre-drive surface). The chunking
+    here is kept identical to ``_tread_frame_positions`` so the captured frames and the
+    per-frame rover positions / quadtree stay in lockstep.
     """
     cs = procgen.rolling_hills(WIDTH, HEIGHT, CELL_M, seed=11, amplitude_m=0.12,
                                base_cells=3)
