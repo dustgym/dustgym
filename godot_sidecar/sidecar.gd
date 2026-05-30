@@ -83,26 +83,53 @@ var _has_pose := false
 var sf                       # StateFields instance (preloaded script)
 var _cam: Camera3D
 
+# --- sequence (fly-through) mode state (INTERFACE.md §5.1 driven rover) --------
+# When _seq_dir != "" the sidecar iterates the tNNN frames in ONE process. For
+# each frame the rover is placed at rover_rc (surface-snapped) and yawed along the
+# local path heading (from consecutive rover_rc). The active window + quadtree
+# overlay follow the rover because they read sf.rover_rc / sf.active_leaves.
+var _seq_dir := ""
+var _seq_stride := 2
+# Per-frame rover override (set by the sequence loop before _build_rover). When
+# _rover_rc_override.x >= 0 the rover is placed there with yaw _rover_yaw instead
+# of the static demo offset, so single-frame rover renders stay unchanged.
+var _rover_rc_override := Vector2i(-1, -1)
+var _rover_yaw := 0.0
+
 func _ready() -> void:
 	_parse_args()
-	if _scene_dir == "":
-		push_error("sidecar: --scene <dir> is required")
-		get_tree().quit(2); return
+
+	if _layers.is_empty():
+		_layers = DEFAULT_LAYERS.split(",")
 
 	get_window().size = _viewport_size
+
+	if _seq_dir != "":
+		await _run_sequence()
+		return
+
+	# --- single-frame mode (unchanged) ---
+	if _scene_dir == "":
+		push_error("sidecar: --scene <dir> or --sequence <dir> is required")
+		get_tree().quit(2); return
 
 	sf = StateFieldsScript.new()
 	if not sf.load_scene(_scene_dir):
 		push_error("sidecar: failed to load scene: " + sf.error_msg)
 		get_tree().quit(3); return
 
-	if _layers.is_empty():
-		_layers = DEFAULT_LAYERS.split(",")
-
 	_setup_environment()
 	_setup_camera()
 	_build_layers()
 
+	await _render_to(_out_path)
+	print("sidecar: wrote ", ProjectSettings.globalize_path(_out_path),
+		" size=", _viewport_size.x, "x", _viewport_size.y,
+		" scene=", sf.scene_name, " layers=", ",".join(_layers))
+	get_tree().quit(0)
+
+# Wait the appropriate number of post-draw frames, then save the viewport to `path`.
+func _render_to(path: String) -> bool:
 	# Two post-draw waits: first frame may sample a stale buffer (per render_test.gd).
 	# Extra waits when post-processing reads the back buffer (distortion) or when
 	# GPUParticles need a frame to advance into their ballistic arc (dust).
@@ -111,16 +138,168 @@ func _ready() -> void:
 		waits = 4
 	for _w in range(waits):
 		await RenderingServer.frame_post_draw
-
 	var img := get_viewport().get_texture().get_image()
-	var err := img.save_png(_out_path)
+	var err := img.save_png(path)
 	if err != OK:
-		push_error("sidecar: save_png failed: %d" % err)
-		get_tree().quit(4); return
-	print("sidecar: wrote ", ProjectSettings.globalize_path(_out_path),
-		" size=", img.get_width(), "x", img.get_height(),
-		" scene=", sf.scene_name, " layers=", ",".join(_layers))
-	get_tree().quit(0)
+		push_error("sidecar: save_png failed: %d for %s" % [err, path])
+		return false
+	return true
+
+# ---------------------------------------------------------------------------
+# SEQUENCE (fly-through) MODE — INTERFACE.md §5.1 driven-rover D4 headline.
+# In ONE process (scene rasters loaded once per frame dir, scripts preloaded):
+# iterate the tNNN frames at _seq_stride, and for each frame place the articulated
+# rover at rover_rc (surface-snapped), yaw it along the local path heading (from
+# consecutive rover_rc), move the active fine-mesh window + quadtree overlay (both
+# read sf.rover_rc / sf.active_leaves), and save out/quadtree_flythrough_NNN.png.
+# The environment + camera are built ONCE; only the per-frame layer nodes rebuild.
+# ---------------------------------------------------------------------------
+func _run_sequence() -> void:
+	var dir := _seq_dir.trim_suffix("/")
+	var frames := _list_frames(dir)
+	if frames.is_empty():
+		push_error("sidecar: --sequence found no tNNN frames under " + dir)
+		get_tree().quit(2); return
+
+	# Pre-scan every frame's rover_rc so we can compute path headings (and skip the
+	# pre-drive null frame). We render only frames that HAVE a rover_rc.
+	var all_rc: Array = []           # parallel to frames: Vector2i or (-1,-1)
+	for fdir in frames:
+		all_rc.append(_peek_rover_rc(fdir))
+
+	# Load the FIRST frame's fields up front so the camera framing (which reads grid
+	# extent / height_range) is valid; grid dims are constant across the series.
+	sf = StateFieldsScript.new()
+	if not sf.load_scene(frames[0]):
+		push_error("sidecar: --sequence cannot load first frame: " + sf.error_msg)
+		get_tree().quit(3); return
+
+	# Build the static stage once (env + camera). Camera frames the whole drive.
+	_setup_environment()
+	_setup_camera_for_drive()
+
+	var out_dir := "res://out"
+	var n_written := 0
+	var idx := 0
+	while idx < frames.size():
+		var rc: Vector2i = all_rc[idx]
+		if rc.x < 0:
+			idx += _seq_stride
+			continue   # skip pre-drive / rover-less frames
+
+		# Load this frame's fields.
+		sf = StateFieldsScript.new()
+		if not sf.load_scene(frames[idx]):
+			push_warning("sidecar: seq skip %s: %s" % [frames[idx], sf.error_msg])
+			idx += _seq_stride
+			continue
+
+		# Path heading from consecutive rover_rc (look ahead, else look back).
+		_rover_rc_override = rc
+		_rover_yaw = _heading_yaw(all_rc, idx)
+
+		# Rebuild only the per-frame layer nodes (terrain/active-window/overlay/rover).
+		_clear_frame_nodes()
+		_build_layers()
+
+		var fname := "%s/quadtree_flythrough_%03d.png" % [out_dir, n_written]
+		var ok := await _render_to(fname)
+		if ok:
+			print("sidecar: seq frame %d <- %s rover_rc=%s yaw=%.1fdeg active_leaves=%d -> %s" % [
+				n_written, frames[idx].get_file(), str(rc), rad_to_deg(_rover_yaw),
+				sf.active_leaves.size(), ProjectSettings.globalize_path(fname)])
+			n_written += 1
+		idx += _seq_stride
+
+	print("sidecar: sequence wrote %d frames to %s (stride=%d)" % [
+		n_written, ProjectSettings.globalize_path(out_dir), _seq_stride])
+	get_tree().quit(0 if n_written > 0 else 5)
+
+# List tNNN frame directories under `dir`, sorted ascending.
+func _list_frames(dir: String) -> Array:
+	var out: Array = []
+	var d := DirAccess.open(dir)
+	if d == null:
+		return out
+	d.list_dir_begin()
+	var name := d.get_next()
+	while name != "":
+		if d.current_is_dir() and name.begins_with("t") and name.length() == 4 \
+				and name.substr(1).is_valid_int():
+			out.append(dir + "/" + name)
+		name = d.get_next()
+	d.list_dir_end()
+	out.sort()
+	return out
+
+# Read just the rover_rc from a frame's metadata.json (cheap; no raster load).
+func _peek_rover_rc(fdir: String) -> Vector2i:
+	var f := FileAccess.open(fdir + "/metadata.json", FileAccess.READ)
+	if f == null:
+		return Vector2i(-1, -1)
+	var parsed = JSON.parse_string(f.get_as_text())
+	f.close()
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return Vector2i(-1, -1)
+	var rc = parsed.get("rover_rc", null)
+	if typeof(rc) == TYPE_ARRAY and rc.size() == 2:
+		return Vector2i(int(rc[0]), int(rc[1]))
+	return Vector2i(-1, -1)
+
+# Local path-heading yaw (radians about +Y) at frame index i, from the rover_rc
+# delta (col->+X, row->+Z). Looks ahead to the next valid rc; falls back to the
+# previous one; default faces +Z. atan2(dx, dz) gives yaw where 0 faces +Z.
+func _heading_yaw(all_rc: Array, i: int) -> float:
+	var here: Vector2i = all_rc[i]
+	var nxt := Vector2i(-1, -1)
+	for j in range(i + _seq_stride, all_rc.size(), _seq_stride):
+		if all_rc[j].x >= 0:
+			nxt = all_rc[j]; break
+	var prv := Vector2i(-1, -1)
+	for j in range(i - _seq_stride, -1, -_seq_stride):
+		if all_rc[j].x >= 0:
+			prv = all_rc[j]; break
+	var a := here; var b := here
+	if nxt.x >= 0:
+		b = nxt
+		if prv.x >= 0:
+			a = prv      # central difference when both neighbors exist
+	elif prv.x >= 0:
+		a = prv          # last frame: use incoming direction
+	var dx := float(b.y - a.y)   # col delta -> +X
+	var dz := float(b.x - a.x)   # row delta -> +Z
+	if absf(dx) < 1e-6 and absf(dz) < 1e-6:
+		return 0.0
+	return atan2(dx, dz)
+
+# Camera that frames the whole driven path (diagonal across the field), oblique 3/4.
+func _setup_camera_for_drive() -> void:
+	_cam = Camera3D.new()
+	_cam.fov = 55.0
+	_cam.near = 0.02
+	_cam.far = 100.0
+	add_child(_cam)
+	if _has_pose:
+		_cam.look_at_from_position(_cam_pos, _cam_target, Vector3.UP)
+		return
+	# tread_track drives from ~rc(60,51) to ~rc(204,179): down-right diagonal in the
+	# field. Frame it from the +X/+Z corner looking back toward the origin so the
+	# whole trail + the moving fine cluster stay in view across all frames.
+	var ext: Vector2 = sf.extent_m()
+	var cx: float = sf.world_min.x + ext.x * 0.5
+	var cz: float = sf.world_min.y + ext.y * 0.55
+	_cam_pos = Vector3(cx + ext.x * 0.30, maxf(ext.x, ext.y) * 0.95, cz + ext.y * 0.85)
+	_cam_target = Vector3(cx, sf.height_range.x, cz)
+	_cam.look_at_from_position(_cam_pos, _cam_target, Vector3.UP)
+
+# Remove only the per-frame layer nodes (terrain/clasts/rover/overlay) between
+# sequence frames, leaving the sun + WorldEnvironment + camera in place.
+func _clear_frame_nodes() -> void:
+	for ch in get_children():
+		if ch is Camera3D or ch is DirectionalLight3D or ch is WorldEnvironment:
+			continue
+		remove_child(ch)
+		ch.queue_free()
 
 # ---------------------------------------------------------------------------
 func _parse_args() -> void:
@@ -131,6 +310,10 @@ func _parse_args() -> void:
 		match a:
 			"--scene":
 				i += 1; _scene_dir = String(args[i])
+			"--sequence":
+				i += 1; _seq_dir = String(args[i])
+			"--stride":
+				i += 1; _seq_stride = maxi(1, int(args[i]))
 			"--out":
 				i += 1; _out_path = _abs_out(String(args[i]))
 			"--layers":
@@ -213,15 +396,23 @@ func _setup_camera() -> void:
 func _build_layers() -> void:
 	# Terrain-family layers are mutually informative; precedence:
 	# heightmap / state false-color override the lit terrain look if requested.
+	# The "quadtree" layer is an additive wireframe LOD overlay (built inside the
+	# terrain node) that mirrors the 4a filmstrip colors (INTERFACE.md §5.1).
+	var show_qt := _has("quadtree")
 	var terrain = TerrainScript.new()
 	if _has("heightmap"):
-		terrain.build(sf, TerrainScript.Mode.FALSECOLOR_HEIGHT)
+		terrain.build(sf, TerrainScript.Mode.FALSECOLOR_HEIGHT, show_qt)
 		add_child(terrain)
 	elif _has("state"):
-		terrain.build(sf, TerrainScript.Mode.FALSECOLOR_STATE)
+		terrain.build(sf, TerrainScript.Mode.FALSECOLOR_STATE, show_qt)
 		add_child(terrain)
 	elif _has("terrain"):
-		terrain.build(sf, TerrainScript.Mode.LIT_PBR)
+		terrain.build(sf, TerrainScript.Mode.LIT_PBR, show_qt)
+		add_child(terrain)
+	elif show_qt:
+		# quadtree overlay requested without a terrain mesh: still build the node
+		# so the wireframe alone is visible (diagnostic).
+		terrain.build(sf, TerrainScript.Mode.LIT_PBR, true)
 		add_child(terrain)
 	# else: no terrain mesh requested (e.g. clasts-only diagnostic).
 
@@ -345,15 +536,29 @@ func _build_rover() -> void:
 
 	_apply_material_recursive(root, rmat)
 
-	# Place on the surface, offset from the active-zone center so it sits on the
-	# plain/rim (not down a crater bowl), plus a yaw to show the 3/4 silhouette.
-	var ext: Vector2 = sf.extent_m()
-	var rx: float = sf.world_min.x + ext.x * 0.5 + ext.x * 0.22
-	var rz: float = sf.world_min.y + ext.y * 0.5 + ext.y * 0.12
-	var u: float = clampf((rx - sf.world_min.x) / ext.x, 0.0, 1.0)
-	var v: float = clampf((rz - sf.world_min.y) / ext.y, 0.0, 1.0)
-	var surf_y: float = sf.height_uv(u, v)
-	var yaw := Basis(Vector3.UP, deg_to_rad(35.0))
+	# Placement. SEQUENCE/per-frame mode (override set, or rover_rc present): put
+	# the rover at the driven footprint center rover_rc, snapped to the surface,
+	# yawed along the path heading. Otherwise the static demo pose: offset from the
+	# active-zone center so it sits on the plain/rim, yawed 35deg for the 3/4 view.
+	var rx: float; var rz: float; var surf_y: float; var yaw: Basis
+	var place_rc := _rover_rc_override
+	if place_rc.x < 0 and sf.has_rover_rc:
+		place_rc = sf.rover_rc
+	if place_rc.x >= 0:
+		var u: float = clampf(float(place_rc.y) / float(sf.width - 1), 0.0, 1.0)
+		var v: float = clampf(float(place_rc.x) / float(sf.height - 1), 0.0, 1.0)
+		rx = sf.world_min.x + place_rc.y * sf.cell_m   # col -> +X
+		rz = sf.world_min.y + place_rc.x * sf.cell_m   # row -> +Z
+		surf_y = sf.height_uv(u, v)
+		yaw = Basis(Vector3.UP, _rover_yaw)
+	else:
+		var ext: Vector2 = sf.extent_m()
+		rx = sf.world_min.x + ext.x * 0.5 + ext.x * 0.22
+		rz = sf.world_min.y + ext.y * 0.5 + ext.y * 0.12
+		var u: float = clampf((rx - sf.world_min.x) / ext.x, 0.0, 1.0)
+		var v: float = clampf((rz - sf.world_min.y) / ext.y, 0.0, 1.0)
+		surf_y = sf.height_uv(u, v)
+		yaw = Basis(Vector3.UP, deg_to_rad(35.0))
 
 	# GROUND-SNAP ONCE AT THE ROOT: orient (yaw) first, then measure the assembled
 	# world AABB and offset so the LOWEST point (wheel bottoms) rests at surf_y. Do

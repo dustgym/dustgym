@@ -20,14 +20,23 @@ enum Mode { LIT_PBR, FALSECOLOR_HEIGHT, FALSECOLOR_STATE }
 # (spec §4: "render resolution may be 5-10x physics resolution").
 const ACTIVE_VERTS_PER_SIDE := 192   # 192x192 verts over the active window
 
+# When the rover-keyed window is used (v1.0.1 rover_rc/active_leaves present), the
+# fine mesh is a square window CENTERED on the rover, sized to cover the active
+# leaves plus a margin so it reads as "fine mesh follows the rover" (vs the small
+# bare active_leaves bbox). Half-width in CELLS, clamped to the field.
+const ROVER_WINDOW_HALF_CELLS := 40   # -> ~80x80 cell fine window (1.6 m at 0.02 m/cell)
+
 var sf                       # StateFields instance (preloaded by caller)
 var _active_mi: MeshInstance3D
 var _far_mi: MeshInstance3D
+var _quadtree_node: Node3D   # optional wireframe LOD overlay
 
-func build(state, mode: int = Mode.LIT_PBR) -> void:
+func build(state, mode: int = Mode.LIT_PBR, show_quadtree: bool = false) -> void:
 	sf = state
 	_build_far_field(mode)
 	_build_active_zone(mode)
+	if show_quadtree:
+		_build_quadtree_overlay()
 
 # ---------------------------------------------------------------------------
 # FAR FIELD: one low-poly plane displaced in the vertex shader (cheap LOD).
@@ -61,17 +70,46 @@ func _build_far_field(mode: int) -> void:
 		# Far plane carries no per-vertex displacement in fc mode (flat context).
 	add_child(_far_mi)
 
+# Choose the fine ACTIVE-zone window [r0,c0,r1,c1] (inclusive corners in cells).
+# v1.0.1 (INTERFACE.md §5.1): when the per-frame rover keys are present, the fine
+# mesh FOLLOWS the rover -- a square window centered on rover_rc, grown to cover
+# the active_leaves bbox plus a margin (ROVER_WINDOW_HALF_CELLS). When absent,
+# fall back to the static metadata active_zone (the v1.0 behavior). This is the
+# render-side realization of spec §4: the tree manages SPACE, keyed to interaction.
+func _active_window_rc() -> Array:
+	if sf.has_rover_rc:
+		var cr: int = sf.rover_row()
+		var cc: int = sf.rover_col()
+		var half := ROVER_WINDOW_HALF_CELLS
+		# Grow the half-window so the active_leaves bbox is fully inside it (so the
+		# fine mesh always covers the live LOD hot-set, not just a fixed box).
+		var bb: Array = sf.active_leaves_bbox()
+		if bb[2] > bb[0]:   # non-empty bbox
+			half = maxi(half, int(ceil(maxf(
+				maxf(abs(cr - bb[0]), abs(bb[2] - cr)),
+				maxf(abs(cc - bb[1]), abs(bb[3] - cc))))) + 2)
+		var r0 := clampi(cr - half, 0, sf.height - 2)
+		var c0 := clampi(cc - half, 0, sf.width - 2)
+		var r1 := clampi(cr + half, r0 + 1, sf.height - 1)
+		var c1 := clampi(cc + half, c0 + 1, sf.width - 1)
+		return [r0, c0, r1, c1]
+	# --- static fallback (v1.0 active_zone) ---
+	var az: Dictionary = sf.active_zone
+	var min_rc = az.get("min_rc", [0, 0])
+	var max_rc = az.get("max_rc", [sf.height - 1, sf.width - 1])
+	var sr0 := clampi(int(min_rc[0]), 0, sf.height - 1)
+	var sr1 := clampi(int(max_rc[0]), 1, sf.height - 1)
+	var sc0 := clampi(int(min_rc[1]), 0, sf.width - 1)
+	var sc1 := clampi(int(max_rc[1]), 1, sf.width - 1)
+	return [sr0, sc0, sr1, sc1]
+
 # ---------------------------------------------------------------------------
 # ACTIVE ZONE: fine ArrayMesh, vertices sample the authoritative heightmap.
 # ---------------------------------------------------------------------------
 func _build_active_zone(mode: int) -> void:
-	var az: Dictionary = sf.active_zone
-	var min_rc = az.get("min_rc", [0, 0])
-	var max_rc = az.get("max_rc", [sf.height - 1, sf.width - 1])
-	var r0 := int(min_rc[0]); var c0 := int(min_rc[1])
-	var r1 := int(max_rc[0]); var c1 := int(max_rc[1])
-	r0 = clampi(r0, 0, sf.height - 1); r1 = clampi(r1, 1, sf.height - 1)
-	c0 = clampi(c0, 0, sf.width - 1);  c1 = clampi(c1, 1, sf.width - 1)
+	var win := _active_window_rc()
+	var r0: int = win[0]; var c0: int = win[1]
+	var r1: int = win[2]; var c1: int = win[3]
 
 	var n := ACTIVE_VERTS_PER_SIDE
 	var verts := PackedVector3Array()
@@ -150,6 +188,111 @@ func _make_falsecolor_mat(mode: int) -> ShaderMaterial:
 		sm.shader = load("res://falsecolor_state.gdshader")
 		sm.set_shader_parameter("state_tex", sf.tex_state())
 	return sm
+
+# ---------------------------------------------------------------------------
+# QUADTREE LOD OVERLAY (toggleable "quadtree" layer). Draws the per-frame
+# quadtree_nodes leaf boxes as wireframe rectangles lifted to the heightmap,
+# mirroring the 4a matplotlib colors (viz/out/quadtree_demo_filmstrip.png):
+#   - FINE / active leaves (size == min_leaf)  -> WARM red, lifted highest
+#   - mid leaves                                -> AMBER
+#   - COARSE far-field leaves (big nodes)       -> COOL teal/blue, near-surface
+# Plus the active_leaves hot-set drawn brightest, so the promotion-follows-rover
+# is legible in 3D (spec §4: the tree manages SPACE keyed to interaction).
+# Uses ImmediateMesh line lists (cheap, headless-safe) on an unshaded material.
+# ---------------------------------------------------------------------------
+func _build_quadtree_overlay() -> void:
+	_quadtree_node = Node3D.new()
+	_quadtree_node.name = "QuadtreeOverlay"
+
+	var nodes: Array = sf.quadtree_nodes
+	var min_leaf: int = int(sf.quadtree_lod.get("min_leaf", 8))
+
+	# All quadtree leaves: color-graded by size (fine warm -> coarse cool).
+	if not nodes.is_empty():
+		var im := ImmediateMesh.new()
+		im.surface_begin(Mesh.PRIMITIVE_LINES)
+		for nd in nodes:
+			if typeof(nd) != TYPE_DICTIONARY:
+				continue
+			if not bool(nd.get("leaf", false)):
+				continue
+			var r0 := int(nd.get("row0", 0))
+			var c0 := int(nd.get("col0", 0))
+			var sz := int(nd.get("size", min_leaf))
+			var col := _lod_color(sz, min_leaf)
+			# Lift fine boxes a touch higher so they pop above the surface relief.
+			var lift := lerpf(0.045, 0.012, clampf(float(sz - min_leaf) / 64.0, 0.0, 1.0))
+			_emit_box_outline(im, r0, c0, r0 + sz, c0 + sz, lift, col)
+		im.surface_end()
+		var mi := MeshInstance3D.new()
+		mi.mesh = im
+		mi.material_override = _overlay_line_mat()
+		_quadtree_node.add_child(mi)
+
+	# The live active_leaves hot-set: brightest warm, lifted highest, drawn on top.
+	if not sf.active_leaves.is_empty():
+		var ima := ImmediateMesh.new()
+		ima.surface_begin(Mesh.PRIMITIVE_LINES)
+		var hot := Color(1.0, 0.35, 0.15)
+		for b in sf.active_leaves:
+			_emit_box_outline(ima, int(b[0]), int(b[1]), int(b[2]), int(b[3]), 0.06, hot)
+		ima.surface_end()
+		var mia := MeshInstance3D.new()
+		mia.mesh = ima
+		mia.material_override = _overlay_line_mat()
+		_quadtree_node.add_child(mia)
+
+	add_child(_quadtree_node)
+	print("sidecar: quadtree overlay = %d nodes, %d active leaves" % [
+		nodes.size(), sf.active_leaves.size()])
+
+# LOD color ramp mirroring the 4a filmstrip: fine (min_leaf) reads WARM red, the
+# largest coarse far-field leaves read COOL teal; mid sizes interpolate amber.
+func _lod_color(size: int, min_leaf: int) -> Color:
+	# t: 0 at min_leaf (fine) -> 1 at a big coarse node (>= 8*min_leaf).
+	var t := clampf(log(float(maxi(size, 1)) / float(maxi(min_leaf, 1))) / log(8.0), 0.0, 1.0)
+	var warm := Color(0.95, 0.45, 0.20)   # fine = warm orange-red
+	var cool := Color(0.25, 0.55, 0.85)   # coarse = cool blue
+	return warm.lerp(cool, t)
+
+# Emit the 4 top edges (a lifted rectangle outline) of a half-open cell box
+# [r0,c0,r1,c1] into an ImmediateMesh, each corner snapped to the heightmap + lift.
+func _emit_box_outline(im: ImmediateMesh, r0: int, c0: int, r1: int, c1: int,
+		lift: float, col: Color) -> void:
+	# Inclusive cell corners in world meters; r1/c1 are half-open so the far edge
+	# is the (r1,c1) grid line.
+	var p00 := _surf_point(r0, c0, lift)
+	var p01 := _surf_point(r0, c1, lift)
+	var p11 := _surf_point(r1, c1, lift)
+	var p10 := _surf_point(r1, c0, lift)
+	im.surface_set_color(col); im.surface_add_vertex(p00)
+	im.surface_set_color(col); im.surface_add_vertex(p01)
+	im.surface_set_color(col); im.surface_add_vertex(p01)
+	im.surface_set_color(col); im.surface_add_vertex(p11)
+	im.surface_set_color(col); im.surface_add_vertex(p11)
+	im.surface_set_color(col); im.surface_add_vertex(p10)
+	im.surface_set_color(col); im.surface_add_vertex(p10)
+	im.surface_set_color(col); im.surface_add_vertex(p00)
+
+# Field grid corner (row,col may be == size for the far edge) -> world point on the
+# heightmap surface, plus a small vertical lift so the wire floats above the mesh.
+func _surf_point(row: int, col: int, lift: float) -> Vector3:
+	var rr := clampi(row, 0, sf.height - 1)
+	var cc := clampi(col, 0, sf.width - 1)
+	var u := float(cc) / float(sf.width - 1)
+	var v := float(rr) / float(sf.height - 1)
+	var h: float = sf.height_uv(u, v) + lift
+	return Vector3(sf.world_min.x + col * sf.cell_m, h, sf.world_min.y + row * sf.cell_m)
+
+# Unshaded, vertex-colored, depth-test-disabled line material so the overlay
+# reads as a HUD-style wireframe over the lit terrain (always visible).
+func _overlay_line_mat() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.vertex_color_use_as_albedo = true
+	m.albedo_color = Color(1, 1, 1, 1)
+	m.no_depth_test = true        # draw over the terrain so boxes never hide in ruts
+	return m
 
 # Per-vertex normals via cross products of triangle edges, averaged.
 func _compute_normals(verts: PackedVector3Array, indices: PackedInt32Array,

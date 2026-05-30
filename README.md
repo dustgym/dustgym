@@ -121,7 +121,7 @@ Outputs:
 
 ### D4 — layer-toggle Godot render sidecar (headless)
 Compositor that renders lunar-lit views with toggleable diagnostic layers (`heightmap`, `state`,
-`terrain`, `clasts`, `rover`, `dust`, `distortion`). Single ~5° hard sun, ambient/SSIL/SDFGI/glow off, near-black
+`terrain`, `clasts`, `rover`, `quadtree`, `dust`, `distortion`), plus a `--sequence` fly-through mode. Single ~5° hard sun, ambient/SSIL/SDFGI/glow off, near-black
 background — Godot's strong suit and exactly IPEx's grazing-angle perception challenge (spec §8).
 
 ```bash
@@ -155,6 +155,14 @@ Outputs (all 1024×768 unless noted):
   transcribed, Z-up→Y-up, mesh-only 0.35 scale), root-snapped to the surface on the crater rim amid the
   boulder field / on rolling terrain. Front drum lowered (digging), back drum raised (transport). Static
   pose — joints are fixed constants, not physics-driven yet (§4 #11).
+- [`godot_sidecar/out/quadtree_flythrough.gif`](godot_sidecar/out/quadtree_flythrough.gif) (key frames
+  `quadtree_flythrough_000…014.png`) — **the D4 headline / item-④ payoff in 3D**: the articulated rover
+  drives the `tread_track` path while the **fine active-mesh window and the quadtree LOD overlay follow it**
+  (warm = fine/active leaves locked on the rover, cool = coarse far field), turning at the path bend. It
+  **consumes the per-frame `active_leaves` metadata** (`INTERFACE.md` §5.1) — the authority decides
+  space-management, the renderer just draws it. One Godot process renders the whole sequence (`--sequence`),
+  placing the rover at `rover_rc` and yawing it along the path heading each frame. The on-screen twin of
+  `viz/out/quadtree_demo.gif`.
 
 > Terrain meshing note: the active-zone mesh samples the heightmap **bilinearly** (not nearest), and
 > the far-field LOD plane recomputes per-vertex normals from the height gradient — without these the
@@ -207,6 +215,12 @@ done
 ../.venv/bin/python ../scripts/convert_rover_mesh.py
 ./render_layers.sh -- --scene ../samples/crater_boulders --layers terrain,clasts,rover \
     --pose 1.7,1.05,1.5,3.7,0.05,3.2 --size 1024x768 --out crater_boulders_rover.png
+
+# quadtree fly-through (item 4): rover drives the path, active window + quadtree LOD follow it
+# (one process; consumes per-frame active_leaves metadata). Needs the tread_track frames on disk
+# (regenerate with: ../.venv/bin/python -m terrain_authority.scenes).
+./render_layers.sh -- --sequence ../samples/tread_track --stride 2 \
+    --layers terrain,quadtree,rover --size 1024x768
 ```
 
 `terrain_authority.tests` is authoritative: 7/7 checks pass (total mass constant across cut→dump→relax,

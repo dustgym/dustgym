@@ -28,6 +28,17 @@ var active_zone: Dictionary = {}       # {min_rc:[r,c], max_rc:[r,c]}
 var quadtree: Array = []               # [{level,row0,col0,size,label}, ...]
 var scene_name: String = ""
 
+# --- OPTIONAL per-frame interaction-keyed quadtree (INTERFACE.md §5.1, v1.0.1) ---
+# All ADDITIVE / back-compat: absent => has_rover_rc=false, empty arrays, and the
+# consumer keeps its v1.0 behavior (static active_zone window). Boxes are
+# [r0,c0,r1,c1] HALF-OPEN in cells (rows r0..r1-1, cols c0..c1-1) per §5.1.
+var has_rover_rc: bool = false
+var rover_rc := Vector2i(-1, -1)       # rover footprint CENTER [row,col], or (-1,-1)
+var active_leaves: Array = []          # [[r0,c0,r1,c1], ...] FINE leaves under rover NOW
+var touched_leaves: Array = []         # [[r0,c0,r1,c1], ...] cumulative refined trail
+var quadtree_nodes: Array = []         # [{level,row0,col0,size,leaf}, ...] per-frame tiling
+var quadtree_lod: Dictionary = {}      # {min_leaf,refine_factor,footprint_radius_cells,field_size}
+
 # --- per-field Images (kept so we can both sample CPU-side and build textures) ---
 var img_height: Image
 var img_density: Image
@@ -85,6 +96,11 @@ func load_scene(dir_path: String) -> bool:
 	active_zone = meta.get("active_zone", {})
 	quadtree = meta.get("quadtree", [])
 
+	# --- OPTIONAL per-frame keys (INTERFACE.md §5.1). Parsed only when present; ---
+	# absent or null => leave has_rover_rc=false / empty so callers fall back to
+	# the static active_zone window (back-compat with v1.0 frames).
+	_parse_per_frame_keys()
+
 	# --- rasters ---
 	var fields: Dictionary = meta.get("fields", {})
 	img_height = _load_rf(dir, _file_of(fields, "heightmap", "heightmap.rf32"))
@@ -108,6 +124,61 @@ func _file_of(fields: Dictionary, key: String, fallback: String) -> String:
 	if typeof(f) == TYPE_DICTIONARY and f.has("file"):
 		return String(f["file"])
 	return fallback
+
+# --- OPTIONAL v1.0.1 per-frame interaction-keyed quadtree (INTERFACE.md §5.1) ---
+# Reads rover_rc / active_leaves / touched_leaves / quadtree_nodes / quadtree_lod
+# when present. Everything stays back-compatible: a frame with none of these (or
+# rover_rc:null, like tread_track/t000 pre-drive) leaves has_rover_rc=false and
+# empty arrays, so consumers fall back to the static active_zone window.
+func _parse_per_frame_keys() -> void:
+	has_rover_rc = false
+	rover_rc = Vector2i(-1, -1)
+	active_leaves = []
+	touched_leaves = []
+	quadtree_nodes = []
+	quadtree_lod = {}
+
+	var rc = meta.get("rover_rc", null)
+	if typeof(rc) == TYPE_ARRAY and rc.size() == 2:
+		rover_rc = Vector2i(int(rc[0]), int(rc[1]))   # [row, col]
+		has_rover_rc = true
+
+	active_leaves = _coerce_boxes(meta.get("active_leaves", []))
+	touched_leaves = _coerce_boxes(meta.get("touched_leaves", []))
+
+	var qn = meta.get("quadtree_nodes", null)
+	if typeof(qn) == TYPE_ARRAY:
+		quadtree_nodes = qn
+	var ql = meta.get("quadtree_lod", null)
+	if typeof(ql) == TYPE_DICTIONARY:
+		quadtree_lod = ql
+
+# Normalize a list of [r0,c0,r1,c1] half-open boxes into PackedInt-ish Arrays of 4
+# ints, skipping malformed entries. Keeps the §5.1 box convention intact.
+func _coerce_boxes(raw) -> Array:
+	var out: Array = []
+	if typeof(raw) != TYPE_ARRAY:
+		return out
+	for b in raw:
+		if typeof(b) == TYPE_ARRAY and b.size() == 4:
+			out.append([int(b[0]), int(b[1]), int(b[2]), int(b[3])])
+	return out
+
+# rover_rc as field row (for height/world lookups). Valid only if has_rover_rc.
+func rover_row() -> int: return rover_rc.x
+func rover_col() -> int: return rover_rc.y
+
+# Bounding box (half-open [r0,c0,r1,c1] in cells) of the current active_leaves, or
+# an empty Rect2i-style [0,0,0,0] when there are none. Used to place the fine mesh.
+func active_leaves_bbox() -> Array:
+	if active_leaves.is_empty():
+		return [0, 0, 0, 0]
+	var r0 := 1 << 30; var c0 := 1 << 30
+	var r1 := -(1 << 30); var c1 := -(1 << 30)
+	for b in active_leaves:
+		r0 = mini(r0, int(b[0])); c0 = mini(c0, int(b[1]))
+		r1 = maxi(r1, int(b[2])); c1 = maxi(c1, int(b[3]))
+	return [r0, c0, r1, c1]
 
 # Load a .rf32 raster as a single-channel float Image (FORMAT_RF).
 func _load_rf(dir: String, fname: String) -> Image:
