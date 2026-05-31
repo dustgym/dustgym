@@ -32,6 +32,11 @@ from . import refinement
 from .column_state import ColumnState
 from .io_fields import save_scene, write_hillshade_png, write_preview_png
 from .quadtree import QuadtreeTracker
+# W2-SCENES (serial join): the DEM corridor stack. Imported here so build_from_dem can wire
+# the four Wave-2 generators (density / craters / illumination / mosaic) WITHOUT touching the
+# nine legacy builders below. A missing committed DEM scene degrades gracefully in main().
+from . import dem_import, dem_io, dem_overlay, illumination, tiles_mosaic
+from .io_fields import load_scene
 from .rover import (build_drum_marks_meta, build_wheel_tracks_meta, drum_pass,
                     four_wheel_pass, straight_path, wheel_pass)
 from .sandpile import Sandpile
@@ -883,6 +888,281 @@ def _clone(cs: ColumnState) -> ColumnState:
     return out
 
 
+# ---------------------------------------------------------------------------
+# W2-SCENES (serial join) — connect the disconnected DEM corridor stack to the builder.
+# This is ADDITIVE: it never touches the nine legacy builders above or their main() calls.
+# The four Wave-2 generators are wired here (docs/dem_terrain_contract.md §8 "W2-SCENES"):
+#   * W2-DENSITY  dem_import.polar_mantle_density_fn  -> sourced ChaSTE bulk density (+ datum re-supply)
+#   * W2-CRATERS  dem_overlay.make_crater_feature_fn  -> sub-DEM crater population on fine tiles
+#   * W2-ILLUM    illumination.horizon_clip           -> terrain-derived shadow mask (demo §4)
+#   * W2-VARIANCE tiles_mosaic / dem_overlay fbm_nu0  -> calibrated fine-band roughness overlay
+# The committed samples/ rasters are NOT regenerated; we re-derive the missing `datum` field
+# in-RAM (the frozen io_fields._FIELD_SPEC omits it) so the streaming ArrayBaseReader is fed.
+# ---------------------------------------------------------------------------
+
+#: DEM effective resolution [m] for the Haworth-group base (PGDA Product-90 LDEM_EFFRES band;
+#: the same ~15 m the procgen_csfd / dem_overlay self-tests use, Barker 2023). Craters at/above
+#: this are ALREADY in the committed base heightmap; populate_craters synthesizes strictly below
+#: it (de-confliction), so the crater overlay only adds SUB-DEM detail on fine corridor tiles.
+DEM_EFFRES_M_HAWORTH = 15.0
+
+#: Documented default residual variance [m^2] for the fine-band fbm overlay when the caller does
+#: NOT pass a calibrated fbm_nu0. This is the [CALIB placeholder] dem_overlay.DEFAULT_OVERLAY_PARAMS
+#: value (1.0e-4 m^2 -> ~1 cm RMS at the 2 cm fine cell). HONEST NOTE: the 100 m roughness is
+#: carried by the REAL base (deviogram@100m == the _slp anchor by construction); fbm_nu0 calibrates
+#: ONLY the sub-DEM / resolved fine band, which is where it is physically meaningful (the overlay
+#: is zero-mean per base cell, so it adds NOTHING at or above the 5 m base lattice — see the
+#: acceptance discussion in scripts/dem_acceptance.py / docs/dem_terrain_contract.md §7/§8).
+DEFAULT_FBM_NU0_FINE = dem_overlay.DEFAULT_OVERLAY_PARAMS["fbm_nu0"]
+
+
+def build_from_dem(scene_dir: str = "samples/lunar_dem/haworth_10km_5m", *,
+                   region: str = "haworth", radius_m: float = 30.0,
+                   with_craters: bool = True, fbm_nu0: float | None = None,
+                   world_seed: int = 0) -> tuple[dict, dict]:
+    """Build a loadable DEM-backed scene by wiring the four Wave-2 generators (contract §8).
+
+    Connects the previously-disconnected corridor stack to a builder. Steps (contract §8 +
+    the binding decisions in the W2-SCENES task brief):
+
+      1. ``load_scene`` the committed real-LOLA base (heightmap + carried fields + metadata).
+         Read the loose-mantle thickness from ``metadata.regolith_model.mantle_thickness_m``
+         (fallback ``K.Z_T``).
+      2. INJECT the sourced ChaSTE density WITHOUT regenerating the committed rasters:
+         ``density = polar_mantle_density_fn(mantle_m)(X,Y)`` (a constant ChaSTE bulk grid), then
+         RE-DERIVE ``datum = heightmap - mantle_m`` and ``mass_areal = mantle_m * density`` so
+         ``derive_height() == heightmap`` stays exact (asserted ``max|err| <= 1e-3`` m). This both
+         supplies the ``datum`` the frozen ``io_fields`` omits AND lands the sourced polar density.
+      3. Build a ``dem_io.ArrayBaseReader`` over {mass_areal, density, datum, state_label,
+         disturbance} with NON-ZERO ``world_x0/world_y0`` from ``metadata.world_bounds_m``, and a
+         ``tiles_mosaic.TileMosaic`` over it.
+      4. Forward ``feature_fn = make_crater_feature_fn(dem_effres_m=...)`` (when ``with_craters``)
+         and the calibrated ``fbm_nu0`` into the overlay params used by the mosaic's fine tiles.
+      5. Compute a terrain-derived illumination mask via ``illumination.horizon_clip`` and carry
+         it in the returned meta (CLEARLY tagged terrain-derived, NOT a Product-69 ingest).
+      6. Update ``meta`` via ``tiles_mosaic.write_dem_base_metadata`` (non-zero world_bounds,
+         base/fine cell, region, dem_provenance, density source [CALIB] tag). schema_version 1.0.
+      7. Return ``(fields, meta)``. ``fields`` IS the loadable base bundle whose
+         ``derive_height() == heightmap`` (so the acceptance harness can measure the deviogram on
+         the real surface); ``meta`` carries the corridor / illumination / density provenance.
+
+    Returns
+    -------
+    (fields, meta) : (dict[str, np.ndarray], dict)
+        ``fields`` has the 5 REQUIRED rasters (heightmap, mass_areal, density, disturbance,
+        state_label) PLUS the re-derived ``datum`` — a full loadable scene whose surface is the
+        real DEM. ``meta`` is the committed metadata extended (additively) with the corridor /
+        density / illumination provenance.
+    """
+    # Resolve the scene dir relative to the repo root when a relative path is given.
+    if not os.path.isabs(scene_dir):
+        scene_dir = os.path.join(ROOT, scene_dir)
+
+    # --- Step 1: load the committed real-LOLA base + metadata --------------------------
+    base, meta = load_scene(scene_dir)
+    if "heightmap" not in base:
+        raise ValueError(f"build_from_dem: {scene_dir} has no heightmap.rf32 (not a DEM scene)")
+    heightmap = np.asarray(base["heightmap"], dtype=np.float64)
+    H, W = heightmap.shape
+
+    grid = meta["grid"]
+    base_cell_m = float(meta.get("base_cell_m", grid["cell_m"]))
+    fine_cell_m = float(meta.get("fine_cell_m", CELL_M))  # 2 cm corridor (contract §0)
+
+    # Loose-mantle thickness: the cm-scale loose layer the datum path injects (eval §5 step 1).
+    mantle_m = float(meta.get("regolith_model", {}).get("mantle_thickness_m", K.Z_T))
+
+    # --- Step 2: inject sourced ChaSTE density + RE-DERIVE datum (the §8 "datum re-supply trap").
+    # polar_mantle_density_fn ignores X,Y (it is a single mass-weighted-mean scalar broadcast,
+    # NOT a spatial field — honest per the dem_import closure doc). density CANCELS out of the
+    # height inversion (datum=Z-mantle, mass=mantle*rho, height=datum+mass/rho==Z for any rho>0),
+    # so this lands the sourced polar areal mass WITHOUT moving the surface.
+    density_fn = dem_import.polar_mantle_density_fn(mantle_m)
+    rho_bar = float(density_fn.rho_bar)  # the constant ChaSTE bulk density [kg/m^3]
+    if not (K.RHO_SURFACE_POLAR <= rho_bar <= K.RHO_BULK_POLAR_10CM):
+        raise AssertionError(
+            f"build_from_dem: ChaSTE rho_bar={rho_bar} outside "
+            f"[{K.RHO_SURFACE_POLAR}, {K.RHO_BULK_POLAR_10CM}] (density acceptance range)")
+    density = np.full((H, W), rho_bar, dtype=np.float64)
+    datum = heightmap - mantle_m
+    mass_areal = np.full((H, W), mantle_m * rho_bar, dtype=np.float64)
+
+    # Carried fields: keep the committed state_label / disturbance verbatim (defaults if absent).
+    state_label = np.asarray(base.get("state_label", np.zeros((H, W), np.uint8)), dtype=np.uint8)
+    disturbance = np.asarray(base.get("disturbance", np.zeros((H, W))), dtype=np.float64)
+
+    # Assert the datum-path round-trip: derive_height() == committed heightmap (contract §8).
+    derived = datum + mass_areal / density
+    rt_err = float(np.max(np.abs(derived - heightmap)))
+    if rt_err > 1e-3:
+        raise AssertionError(
+            f"build_from_dem: re-derived datum path deviates from the committed heightmap by "
+            f"{rt_err:.3e} m (> 1e-3); the datum re-supply is broken")
+
+    base_fields = {
+        "mass_areal": mass_areal, "density": density, "datum": datum,
+        "state_label": state_label, "disturbance": disturbance,
+    }
+
+    # --- Step 3: ArrayBaseReader (NON-ZERO global origin) + TileMosaic over it ----------
+    wb = meta["world_bounds_m"]
+    world_x0 = float(wb["x0"])
+    world_y0 = float(wb["y0"])
+    reader = dem_io.ArrayBaseReader(base_fields, base_cell_m=base_cell_m,
+                                    world_x0=world_x0, world_y0=world_y0)
+
+    # --- Step 4: crater feature_fn (sub-DEM) + calibrated fbm_nu0 into the overlay params.
+    eff_res = float(meta.get("dem_effres_m",
+                             meta.get("dem_provenance", {}).get("dem_effres_m",
+                                                                DEM_EFFRES_M_HAWORTH)))
+    nu0 = DEFAULT_FBM_NU0_FINE if fbm_nu0 is None else float(fbm_nu0)
+    overlay_params = dict(dem_overlay.DEFAULT_OVERLAY_PARAMS)
+    overlay_params["fbm_nu0"] = nu0
+
+    feature_fn = None
+    if with_craters:
+        feature_fn = dem_overlay.make_crater_feature_fn(
+            dem_effres_m=eff_res, d_min_m=1.0, base_cell_class=0)
+
+    mosaic = tiles_mosaic.TileMosaic(
+        reader, base_cell_m, fine_cell_m,
+        tile_base_cells=8, max_resident_tiles=16, world_seed=int(world_seed),
+        overlay_params=overlay_params, feature_fn=feature_fn)
+
+    # Demand-refine the fine corridor around the scene center (a LIVE-pose stand-in). This
+    # exercises the WHOLE wired stack (overlay_residual + crater feature_fn + fbm) and lets us
+    # verify coarsen(fine tile) == base BIT-EXACT (conservation preserved even with craters).
+    center_x = (world_x0 + float(wb["x1"])) / 2.0
+    center_y = (world_y0 + float(wb["y1"])) / 2.0
+    fine_tiles = mosaic.ensure_fine((center_x, center_y), radius_m=float(radius_m))
+
+    # Conservation self-check on one materialized fine tile: coarsen(fine) == its base block.
+    corridor_conservation = None
+    if fine_tiles:
+        t0 = fine_tiles[0]
+        r0, c0, r1, c1 = t0.region_rc
+        base_block = reader.window((r0, c0, r1, c1))
+        # Coarsen the fine bundle through the 5 carried base fields (fields_dict() omits the
+        # base-only `datum`; coarsen_field needs it — build the dict from the Tile's ColumnState).
+        fine_bundle = {
+            "mass_areal": t0.cs.mass_areal, "density": t0.cs.density, "datum": t0.cs.datum,
+            "state_label": t0.cs.state_label, "disturbance": t0.cs.disturbance,
+        }
+        back = refinement.coarsen_field(fine_bundle, mosaic.k)
+        scale = max(float(np.max(np.abs(base_block["mass_areal"]))), 1.0)
+        mass_relerr = float(np.max(np.abs(back["mass_areal"] - base_block["mass_areal"]))) / scale
+        datum_exact = bool(np.array_equal(back["datum"], base_block["datum"]))
+        state_exact = bool(np.array_equal(back["state_label"], base_block["state_label"]))
+        corridor_conservation = {
+            "tile_region_rc": [int(v) for v in t0.region_rc],
+            "k": int(mosaic.k),
+            "mass_relerr": mass_relerr,
+            "datum_bit_exact": datum_exact,
+            "state_bit_exact": state_exact,
+            "coarsen_equals_base": bool(mass_relerr <= 1e-12 and datum_exact and state_exact),
+        }
+
+    # --- Step 5: terrain-derived illumination mask (W2-ILLUM) for the demo's shadow attribution.
+    # Grazing polar sun; azimuth defaulted to the hillshade-preview convention (light from +Z/N).
+    sun_az = float(meta.get("sun_az_deg", 315.0))
+    sun_el = float(K.SUN_ELEVATION_DEG_POLAR)
+    illum_mask = illumination.horizon_clip(heightmap, base_cell_m, sun_az, sun_el)
+    lit_fraction = float(illum_mask.mean())
+
+    # --- Step 6: write the additive DEM/mosaic metadata block (non-zero world_bounds) -------
+    tiles_mosaic.write_dem_base_metadata(
+        meta,
+        world_bounds_m=wb,
+        base_cell_m=base_cell_m, fine_cell_m=fine_cell_m,
+        region=str(meta.get("region", region)),
+        local_datum_offset_m=float(meta.get("local_datum_offset_m", 0.0)),
+        dem_provenance=meta.get("dem_provenance"))
+
+    # ADDITIVE (schema_version stays "1.0"): the corridor / density / illumination provenance.
+    meta["scene_name"] = meta.get("scene_name", "lunar_dem/haworth_10km_5m")
+    meta["dem_corridor"] = {
+        "fine_cell_m": fine_cell_m,
+        "refine_factor_k": int(mosaic.k),
+        "tile_base_cells": int(mosaic.tile_base_cells),
+        "radius_m": float(radius_m),
+        "world_seed": int(world_seed),
+        "with_craters": bool(with_craters),
+        "dem_effres_m": eff_res,
+        "fine_tiles_materialized": len(fine_tiles),
+        "demand_driven_note": "fine 2 cm tiles materialized at runtime around the LIVE pose "
+                              "(contract §0); 100 m roughness is carried by the REAL base, the "
+                              "overlay adds only sub-DEM detail (zero-mean per base cell).",
+    }
+    if corridor_conservation is not None:
+        meta["dem_corridor"]["conservation_check"] = corridor_conservation
+    # Sourced density provenance ([CALIB] ChaSTE; honest scalar-broadcast tag).
+    meta["density_source"] = {
+        "tag": "[CALIB]",
+        "model": "ChaSTE depth-integrated bulk density over [0, mantle_m] (Durga Prasad 2026)",
+        "rho_bar_kg_m3": round(rho_bar, 4),
+        "mantle_m": mantle_m,
+        "range_kg_m3": [K.RHO_SURFACE_POLAR, K.RHO_BULK_POLAR_10CM],
+        "note": "single mass-weighted-mean scalar BROADCAST over the grid (NOT a spatial field, "
+                "ChaSTE is one vertical probe at 69.4S); density cancels in derive_height so the "
+                "DEM surface is untouched (dem_import.polar_mantle_density_fn).",
+    }
+    meta["fbm_nu0_fine"] = nu0
+    # Illumination: CLEARLY tagged terrain-derived single-epoch local-horizon, NOT a Product-69.
+    meta["illumination"] = {
+        "tag": "terrain-derived",
+        "method": "illumination.horizon_clip (per-pixel local-horizon ray-march)",
+        "sun_az_deg": sun_az,
+        "sun_el_deg": sun_el,
+        "lit_fraction": round(lit_fraction, 6),
+        "shadow_fraction": round(1.0 - lit_fraction, 6),
+        "honesty": "single-epoch single-tile geometric horizon for ONE (az,el); NOT a PGDA "
+                   "Product-69 illumination/PSR ingest (no Product-69 reader/data on disk). "
+                   "Feeds the demo's per-face shadow attribution (demo_spiral_contract.md §4).",
+    }
+    meta["features"] = sorted(set(meta.get("features", []))
+                              | {"dem_backbone", "dem_corridor", "density_chaste",
+                                 "illumination_horizon"})
+
+    # --- Step 7: assemble the returned loadable fields (5 required + re-derived datum) ------
+    fields = {
+        "heightmap": heightmap,
+        "mass_areal": mass_areal,
+        "density": density,
+        "disturbance": disturbance,
+        "state_label": state_label,
+        "datum": datum,
+    }
+    return fields, meta
+
+
+def build_dem_scene() -> None:
+    """main() hook for build_from_dem — ALONGSIDE the nine legacy builders (degrades gracefully).
+
+    A missing committed DEM scene (e.g. a fresh checkout without samples/lunar_dem/) is logged
+    and skipped, NOT fatal — the nine legacy builders above are unaffected. We do NOT re-write
+    the committed DEM rasters here (the build is in-RAM); we only report the wired stack so the
+    serial-join is visible when running ``python -m terrain_authority.scenes``.
+    """
+    scene_dir = os.path.join(ROOT, "samples", "lunar_dem", "haworth_10km_5m")
+    if not os.path.exists(os.path.join(scene_dir, "metadata.json")):
+        print(f"  [build_from_dem] SKIP — no committed DEM scene at {scene_dir} "
+              "(degrades gracefully; the nine legacy scenes are unaffected).")
+        return
+    try:
+        fields, meta = build_from_dem(scene_dir)
+    except Exception as exc:  # noqa: BLE001 — never let the DEM join break the legacy builders
+        print(f"  [build_from_dem] SKIP — DEM build failed ({exc!r}); legacy scenes unaffected.")
+        return
+    h = fields["heightmap"]
+    dc = meta.get("dem_corridor", {})
+    cc = dc.get("conservation_check", {})
+    print(f"  build_from_dem  region={meta.get('region')} grid={h.shape} "
+          f"rho_bar={meta['density_source']['rho_bar_kg_m3']} kg/m^3  "
+          f"fine_tiles={dc.get('fine_tiles_materialized')} "
+          f"coarsen==base={cc.get('coarsen_equals_base')}  "
+          f"lit={meta['illumination']['lit_fraction']:.3f}")
+
+
 def main() -> int:
     os.makedirs(SAMPLES_DIR, exist_ok=True)
     print(f"Building sample scenes into {SAMPLES_DIR}")
@@ -897,6 +1177,9 @@ def main() -> int:
     # scenes above are byte-identical to before (HARD RULE 3).
     build_tread_track_4wheel()
     build_excavation_marks()
+    # W2-SCENES (serial join): the DEM corridor builder, ALONGSIDE the nine legacy builders
+    # above (which are byte-unchanged). Guarded so a missing committed DEM scene is non-fatal.
+    build_dem_scene()
     print("done.")
     return 0
 
