@@ -592,6 +592,18 @@ func _build_clasts() -> void:
 	mat.set_shader_parameter("hapke_B0", sf.hapke_B0)
 	mat.set_shader_parameter("hapke_h", sf.hapke_h)
 	mat.set_shader_parameter("hapke_gain", sf.hapke_gain)
+	# Procgen relief tuned for ANGULAR / faceted rock (spec §9 "Angular, minimally eroded — sharp
+	# grains, no water/wind rounding"). The shader's low-freq displacement is now ridged + terraced
+	# (see clast.gdshader), so we push the amplitudes up enough that the faceting reads clearly at
+	# both a grazing (~5 deg) and a raised (~28 deg) sun without breaking the silhouette: surf_amp
+	# up from 0.15 -> 0.34 (deeper facets), detail_amp up from 0.6 -> 1.1 (crisper micro-fracture).
+	# facet_levels=3 -> a few big flat faces; ridge_mix=0.95 -> nearly fully sharp (angular) crests.
+	mat.set_shader_parameter("surf_amp", 0.34)
+	mat.set_shader_parameter("surf_freq", 1.9)
+	mat.set_shader_parameter("facet_levels", 3.0)
+	mat.set_shader_parameter("ridge_mix", 0.95)
+	mat.set_shader_parameter("detail_amp", 1.1)
+	mat.set_shader_parameter("detail_freq", 16.0)
 	sphere.material = mat
 
 	var mm := MultiMesh.new()

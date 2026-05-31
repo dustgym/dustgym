@@ -19,16 +19,27 @@ uniform float clast_roughness = 0.93;
 // Today every clast renders as an identical smooth SphereMesh. These add object-space relief so the
 // boulders read as fractured rock, NOT CG spheres, while the physics-chosen diameter (Golombek SFD)
 // is preserved: sidecar.gd already applies a TRIAXIAL non-uniform scale renormalized to geo-mean 1.0
-// for the silhouette; THIS shader adds finer organic lumps + a high-freq fracture detail-normal.
-//   surf_amp  : low-freq lump displacement along the object normal, as a fraction of the unit radius
-//               (~0.15 -> ~15% radius bulges/dimples for irregular-but-rocklike silhouette variety).
-//   surf_freq : spatial frequency of those lumps in object (unit-sphere) space.
+// for the silhouette; THIS shader adds FACETED relief + a high-freq fracture detail-normal.
+//
+// ANGULARITY (spec §9 "Angular, minimally eroded — No water/wind rounding -> sharp grains"): lunar
+// clasts are fractured/faceted rock, NOT water-rounded river pebbles. A smooth fbm bulge reads as a
+// dome/bun (geologically wrong). So the low-freq displacement here is deliberately made ANGULAR two
+// ways: (1) RIDGED noise — fold fbm through 1-|2v-1| so its crests become sharp arêtes instead of
+// rounded humps; (2) TERRACING — quantize the displacement into a few discrete levels so the coarse
+// (24x16) mesh resolves them as flat faces meeting at sharp edges (conchoidal-fracture facets). This
+// also makes each boulder visually DISTINCTIVE (later fiducial track) where smooth domes would not.
+//   surf_amp  : low-freq faceted displacement along the object normal, as a fraction of the unit radius
+//               (bulges/cuts for an angular-but-rocklike silhouette). surf_freq sets facet spatial freq.
+//   facet_levels : number of discrete terrace steps the displacement is quantized into (sharp edges).
+//   ridge_mix    : 0=smooth fbm, 1=fully ridged (sharp crests). Blends rounded vs angular character.
 //   void_amp  : OPTIONAL subtractive concavity ("void"/spall scar) — thresholded low-freq noise carved
 //               INWARD. Conservative default; per-instance gated by INSTANCE_CUSTOM.z so only some
 //               boulders show a scar. Kept small so buried_frac / resting geometry stay sane.
 //   detail_amp: strength of the FRAGMENT-stage high-freq fracture detail-normal (faded with distance).
 uniform float surf_amp   = 0.15;
 uniform float surf_freq  = 1.7;
+uniform float facet_levels = 4.0;   // discrete terrace steps in the low-freq displacement (faceting)
+uniform float ridge_mix    = 0.8;   // 0=rounded fbm crests, 1=sharp ridged crests (angular arêtes)
 uniform float void_amp   = 0.10;
 uniform float void_freq  = 1.1;
 uniform float detail_amp = 0.6;
@@ -102,6 +113,26 @@ float fbm3(vec3 p) {
 	return a / max(wsum, 1e-4);
 }
 
+// RIDGED fractal noise in [0,1]: each octave is folded through 1-|2v-1| so the noise CRESTS become
+// sharp creases (V-shaped) instead of smooth domes, and squared to sharpen further. This is the
+// angular-rock primitive (spec §9): ridges read as fracture arêtes, valleys as cleavage planes.
+// Cheaper-friendly: reuses vnoise3, so no extra hash machinery vs fbm3.
+float ridged3(vec3 p) {
+	float a = 0.0;
+	float w = 0.5;
+	float wsum = 0.0;
+	for (int i = 0; i < 3; i++) {
+		float v = vnoise3(p);
+		float r = 1.0 - abs(2.0 * v - 1.0);   // fold: crest at v=0.5 -> sharp ridge line
+		r = r * r;                            // square -> crisper crease, flatter flanks
+		a += w * r;
+		wsum += w;
+		p = p * 2.03 + vec3(5.7, 13.9, 3.3);
+		w *= 0.5;
+	}
+	return a / max(wsum, 1e-4);
+}
+
 // 2-term Henyey-Greenstein phase function P(g) vs cos(phase angle) (mirror of terrain.gdshader).
 float hg_phase(float cg, float b, float c) {
 	float b2 = b * b;
@@ -127,10 +158,22 @@ void vertex() {
 
 	vec3 n = normalize(NORMAL);
 
-	// --- LOW-FREQ LUMP (silhouette variety): displace along the object normal by a zero-centred
-	// fbm so each boulder gains organic bulges/dimples. Unit sphere -> displacement is a fraction
-	// of the unit radius; the per-instance triaxial scale (sidecar.gd) then stretches it. ---
-	float lump = fbm3(VERTEX * surf_freq + sd) - 0.5;   // [-0.5, 0.5]
+	// --- LOW-FREQ FACETED DISPLACEMENT (silhouette variety + ANGULARITY, spec §9). Displace along
+	// the object normal, but build the height field so it reads as fractured rock, not a smooth dome:
+	//   1) RIDGED noise (ridged3) gives sharp crests; blend with smooth fbm by ridge_mix so we keep
+	//      some rounded mass but get angular arêtes where ridge_mix is high.
+	//   2) TERRACE/QUANTIZE the result into facet_levels discrete steps -> flat faces separated by
+	//      sharp edges that the coarse (24x16) mesh resolves as conchoidal-fracture facets.
+	// Unit sphere -> displacement is a fraction of the unit radius; the per-instance triaxial scale
+	// (sidecar.gd) then stretches it. ---
+	float smooth_h = fbm3(VERTEX * surf_freq + sd);             // [0,1] rounded
+	float ridge_h  = ridged3(VERTEX * surf_freq + sd);          // [0,1] sharp crests
+	float h = mix(smooth_h, ridge_h, clamp(ridge_mix, 0.0, 1.0));
+	// Quantize to discrete terraces (faces) — floor to the nearest of facet_levels steps. The fract
+	// part is dropped, so adjacent vertices that land in different bins create a sharp step (edge).
+	float L = max(facet_levels, 1.0);
+	float terr = floor(h * L) / L;                              // [0, (L-1)/L] flat faces
+	float lump = terr - 0.5;                                    // zero-centred so mass is preserved
 	VERTEX += n * (lump * surf_amp);
 
 	// --- OPTIONAL SUBTRACTIVE VOID / concavity (spall scar). Threshold a low-freq fbm and carve
@@ -158,9 +201,11 @@ void fragment() {
 	float fade = 1.0 - smoothstep(fade_near_m, fade_far_m, cam_dist);
 	vec3 N = normalize(NORMAL);
 	if (detail_amp > 1e-4 && fade > 1e-3) {
-		// Object-space fracture height in [0,1], keyed per-instance so it doesn't swim.
+		// Object-space fracture height in [0,1], keyed per-instance so it doesn't swim. RIDGED (not
+		// smooth fbm) so the micro-relief is sharp/angular (spec §9 "sharp grains"), not soft dimples;
+		// gamma-contrast (pow) deepens the creases for unmistakable faceting under the grazing sun.
 		vec3 hp = v_objpos * detail_freq + vec3(v_seed * 13.7, v_seed * 7.3 + 4.1, v_seed * 19.1 + 9.7);
-		float h = fbm3(hp);
+		float h = pow(ridged3(hp), 1.6);
 		// Screen-space gradient of the height -> tilt in view space, with a TBN built (like terrain)
 		// from dFdx/dFdy(VERTEX). VERTEX/NORMAL are VIEW-space in the fragment stage.
 		vec3 dpdx = dFdx(VERTEX);
