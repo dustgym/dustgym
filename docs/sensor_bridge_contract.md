@@ -24,8 +24,8 @@ section noted, are:
    `pose_in_lander` so M1 stays correct.
 4. **`frame_index` becomes a real monotonic int** in multi-frame egress (§2.2, §2.5) — it is no longer
    hardcoded `0` once a producer emits a sequence.
-5. **SLAM pose channel** `/slam/odom` (`nav_msgs/msg/Odometry`, **`map`** frame) registered for the
-   Workstream-C scorer (§2.3).
+5. **SLAM pose channel** — canonical TF `map`→`base_link` (loop-closed), optional `/slam/odom` relay —
+   registered for the Workstream-C scorer (§2.3).
 6. **Per-face AprilTag relabel** `R_face` (§1) — the front face (id 0) reduces exactly to the existing
    `frames.R_LANDER_TAG`, so the M1 reading is unchanged.
 7. **Multi-frame egress directory convention** frozen as a contract artifact (§2.5).
@@ -218,24 +218,27 @@ Rules:
 | `lander.pose_in_world` (converted) | `/tf_static` (`map`→`lander`) | static TF (identity for M1) |
 | computed camera→tag truth | `/lander/apriltag_truth` | `geometry_msgs/PoseStamped` (in the detecting cam's optical frame) |
 | `stereo_rear.left/right` + intrinsics *(v1.1, opt.)* | `/rear_left/image_raw`+`/rear_left/camera_info`, `/rear_right/…` | `sensor_msgs/Image`, `CameraInfo` (only when `stereo_rear` present) |
-| rtabmap SLAM pose *(v1.1, see below)* | `/slam/odom` | `nav_msgs/msg/Odometry` — `header.frame_id == "map"`, `child_frame_id == "base_link"` |
+| rtabmap SLAM pose *(v1.1, see below)* | **TF `map`→`base_link`** (canonical) · `/slam/odom` (optional relay) | loop-closed pose via the TF tree; optional relay republishes it as `nav_msgs/msg/Odometry` (`header.frame_id == "map"`, `child_frame_id == "base_link"`) |
 - `camera_info.P` right-cam baseline term: `P[3] = -fx · baseline_m` (else stereo depth scale is silently wrong).
   For the optional rear pair this uses `stereo_rear.baseline_m`.
 - rosbag2 format: **MCAP** (`rosbag2_storage_mcap`). Written **inside the container** (or via the pure-Python
   `rosbags` lib **in the container**, NOT into the repo `.venv`).
 
-**SLAM pose channel `/slam/odom`** (v1.1 — the Workstream-C scorer seam, lane C): the scorer (lane C)
-consumes the loop-closed pose published by **rtabmap in the `map` frame** (NOT the drifting `odom` frame).
-This channel is PINNED:
-- topic **`/slam/odom`**, type **`nav_msgs/msg/Odometry`**,
-- `header.frame_id == "map"` (the loop-closed, globally-consistent frame),
-- `child_frame_id == "base_link"`.
-There is **NO aliasing / republisher node**: lane C subscribes to `/slam/odom` directly and **ASSERTS
-`header.frame_id == "map"`**, failing LOUD on any mismatch (a `odom`-frame message is a hard error, not a
-silent drift source). rtabmap **natively emits map-frame odometry** on this topic; the M2-slam lane
-configures rtabmap to publish its map-frame pose here (so the contract artifact exists before M2-egress
-does). This is the SLAM half of the Workstream-C two-channel eval (the AprilTag half is
-`/lander/apriltag_truth` above); see [`../scripts/ros2_bridge/eval_schema.py`](../scripts/ros2_bridge/eval_schema.py).
+**SLAM pose channel** (v1.1 — the Workstream-C scorer seam, lane C): the scorer (lane C) consumes the
+loop-closed pose **rtabmap publishes as the TF transform `map`→`base_link`** (NOT the drifting `odom`
+frame). Stock `rtabmap_slam` does NOT advertise a renamable `nav_msgs/Odometry` in the `map` frame — it
+exposes the globally-consistent pose through the **TF tree**: it publishes the `map`→`odom` loop-closure
+correction, and stereo VO (`rtabmap_odom`) publishes `odom`→`base_link`, which compose to `map`→`base_link`.
+The drifting VO estimate stays on `/odom`. This channel is therefore PINNED as:
+- **CANONICAL: TF `map`→`base_link`** — lane C samples this transform at each stereo-frame stamp as the
+  SLAM estimate, and **ASSERTS the parent frame is `map`**, failing LOUD on any mismatch (an `odom`-parented
+  sample is a hard error, not a silent drift source).
+- **OPTIONAL relay `/slam/odom`** (`nav_msgs/msg/Odometry`, `header.frame_id == "map"`, `child == "base_link"`):
+  a thin node MAY republish the sampled TF as a topic for convenience/recording; it is OPTIONAL — C consumes
+  the TF directly when the relay is absent. (Refined v1.1: the original pin assumed rtabmap emitted the topic
+  natively; the M2-slam lane confirmed it emits via TF, so TF is canonical and the topic is an optional relay.)
+This is the SLAM half of the Workstream-C two-channel eval (the AprilTag half is `/lander/apriltag_truth`
+above); see [`../scripts/ros2_bridge/eval_schema.py`](../scripts/ros2_bridge/eval_schema.py).
 
 ### 2.4 The fixture (unblocks C1 before G1 lands)
 C1 ships `scripts/ros2_bridge/fixtures/000/` — a hand-authored `sensors.json` (this exact schema) + two

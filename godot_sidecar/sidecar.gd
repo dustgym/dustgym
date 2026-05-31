@@ -204,15 +204,17 @@ func _ready() -> void:
 	# Wave-1 lane dispatch (skeletons land in L0; the owning lane fills its .gd in).
 	if _cameras_seq_mode:
 		# M2-egress: multi-frame egress (contract v1.1 §7). --cameras-seq set _drums_up.
-		CaptureSeqScript.run_capture_seq(self)
+		# MUST await: the entry is a coroutine (awaits frame_post_draw per frame); an
+		# un-awaited call before quit(0) renders only one post-quit frame -> black egress.
+		await CaptureSeqScript.run_capture_seq(self)
 		get_tree().quit(0); return
 	if _sun_sweep_mode:
 		# A2-sweep: sun sweep + boulder manifest (docs/sun_sweep_manifest.md).
-		SunSweepScript.run_sun_sweep(self)
+		await SunSweepScript.run_sun_sweep(self)
 		get_tree().quit(0); return
 	if _lander_faces_mode:
 		# M3-tag: 4-face AprilTag bundle (contract v1.1 §3/§6). Reuses --cameras path.
-		LanderBundleScript.build_lander_faces(self)
+		await LanderBundleScript.build_lander_faces(self)
 		get_tree().quit(0); return
 
 	_setup_camera()
@@ -666,14 +668,15 @@ func _cameras_capture() -> void:
 
 	# --- assemble + write sensors.json (contract §2.2 / v1.1, all Godot-frame) ---
 	# Delegate to the shared sink (SensorsEmit). Single-frame --cameras passes
-	# frame_index 0 + the live sun block; the v1.1 OPTIONAL faces[]/stereo_rear are
-	# left null (inert) so this output is byte-for-byte the v1.0 schema EXCEPT the
-	# version bump (1.0->1.1) + the additive top-level "sun" block (contract §1).
+	# frame_index 0 + the live sun block; faces[] stays null (single id-0 tag until
+	# the M3-tag lane lands). The 8-cam rig (M3-cam) carries a rear pair, so
+	# rear_pair_descriptor populates the v1.1 additive top-level "stereo_rear"
+	# (NEVER replacing "stereo" = front pair; contract §2.2 / §4).
 	var sun := SensorsEmitScript.sun_block(_sun_elev_deg, _sun_azim_deg, 0.0)
 	var doc := SensorsEmitScript.build_sensors_json(
 		scene, 0, _viewport_size, rover_root, lander_root, cams,
 		Callable(CameraRigScript, "intrinsics"), CameraRigScript.FOV_X_DEG,
-		sun, null, null)
+		sun, null, CameraRigScript.rear_pair_descriptor(cams, rover_root))
 	var json_path := "%s/sensors.json" % out_dir
 	var jf := FileAccess.open(json_path, FileAccess.WRITE)
 	if jf == null:

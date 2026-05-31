@@ -89,3 +89,12 @@ godot_sidecar/out/grit_check_grey.png
 godot_sidecar/out/grit_tread.png
 godot_sidecar/out/rover_worn.png
 godot_sidecar/out/clast_grey_check.png
+
+# ── Wave-1 lane scratch at repo-root out/ (regenerable; only godot_sidecar/out/ was covered) ──
+# COLMAP SfM/MVS staging (views + sparse/dense model + trajectory JSON), multi-frame stereo
+# egress smoke dirs, and sun-sweep frames. The committed deliverables live elsewhere; these are
+# rebuilt by scripts/colmap/colmap_recon.py, --cameras-seq, and --sun-sweep respectively.
+/out/colmap/
+/out/cam/
+/out/sun_sweep/
+/out/_smoke/
