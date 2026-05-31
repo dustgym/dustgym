@@ -79,6 +79,12 @@ godot_sidecar/out/probe_multicam_sheet.png
 # committed .gd source; sensors.json + PNGs are render output, NOT committed.
 godot_sidecar/out/cam/
 
+# ── Wave-2a lane render egress (regenerable; res:// = godot_sidecar/) ──
+# A2-sweep --sun-sweep -> out/sun_sweep/<scene>/{manifest.json,NNN.png};
+# M3-tag --lander-faces -> out/lander_faces/<scene>/{face PNGs, sensors.json}.
+godot_sidecar/out/sun_sweep/
+godot_sidecar/out/lander_faces/
+
 # ── detour: stereo staging for the ROS depth/fiducial outputs (scratch, regenerable) ──
 # `out/detour/<name>/` holds the staged stereo pairs + sensors.json fed to depth_map.py /
 # fiducial_overlay.py; the committed deliverables live in out/ros/. Also the working hero render.

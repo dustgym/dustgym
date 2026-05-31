@@ -53,9 +53,9 @@ out/sun_sweep/<scene>/
   "cadence": {                          // the sweep parameters that generated the frames
     "time_delta_s_step": 88560.0,       // seconds advanced between consecutive frames
     "az0": 215.0,                       // azimuth at frame 0   [deg]
-    "az1": 245.0,                       // azimuth at frame N-1 [deg]
+    "az1": 352.475,                     // azimuth at frame N-1 [deg] (realized §3 output, n=12, step=88560s)
     "el0": 0.0,                         // elevation at frame 0   [deg]
-    "el1": 7.0,                         // elevation at frame N-1 [deg]
+    "el1": 6.079,                       // elevation at frame N-1 [deg] (realized; within the 0–7° grazing band)
     "n": 12                             // number of frames (== len(frames))
   },
 
@@ -77,10 +77,9 @@ out/sun_sweep/<scene>/
           "world_pos": [3.8963, 0.0406, 3.25], // pose position (Godot frame); see §5
           "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0], // pose orientation; see §5
           "buried_frac": 0.223,         // clasts[].buried_frac (copied)
-          "shadow": {                   // cast-shadow estimate at this sun; null if none
-            "azimuth_deg": 35.0,        // direction the shadow points [deg], Godot azimuth
-            "length_m": 0.124           // shadow length on the local plane [m]
-          }
+          "shadow": null                // frame 0 has el<=0 -> no resolvable shadow (§6).
+          // A non-zero-elevation frame instead carries an object, e.g.:
+          //   "shadow": { "azimuth_deg": <sun_az + 180>, "length_m": <2*r*(1-buried)/tan(el)> }
         }
         // ... one per clast
       ]
