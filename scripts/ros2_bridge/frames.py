@@ -46,6 +46,46 @@ R_CAM_G2R = np.array(
     dtype=np.float64,
 )
 
+# --- Lander frame -> apriltag tag-frame relabel (contract §1) ----------------------------
+#
+# `apriltag_ros` (christianrauch 3.x) reports a tag-frame whose ORIGIN is the tag centre but
+# whose AXES follow the pose-estimator's convention -- and that convention differs between the
+# two estimators it ships.  We run the **`pnp`** estimator (tags_36h11.yaml
+# `pose_estimation_method: "pnp"`), i.e. raw `cv::solvePnP` against the object points
+# {(-s/2,-s/2,0),(+s/2,-s/2,0),(+s/2,+s/2,0),(-s/2,+s/2,0)}; it does NOT apply the
+# "swap x/y, invert z" fix-up that the `homography` estimator does.  EMPIRICALLY (verified by
+# the M1 integration: a near-fronto-parallel tag reads q_xyzw=[0.998,0.001,0.007,-0.062] in the
+# optical frame, i.e. ~R_x(180 deg)), this build's detector reports the tag axes as:
+#   tag +X = image-right = optical +X ;  tag +Y = image-UP = optical -Y ;
+#   tag +Z = OUT of the tag toward the camera = optical -Z.
+# (So +Z is the OUTWARD normal here, not "into the tag" -- that latter wording applies to the
+# `homography` estimator, which we are not using.)
+#
+# Our `lander` placement frame (contract §1) uses +X = the tag's OUTWARD normal (toward the
+# rover), +Y = up.  The two frames share an origin (pose_in_lander identity) but differ by a
+# FIXED rotation independent of the camera viewpoint, so identity pose_in_lander is NOT enough:
+# the tag *orientation* must be relabelled into the detector's tag convention before comparison.
+#
+# Derivation from the actual axis definitions (sidecar.gd `_build_lander` + the QuadMesh, then
+# pinned to the detector reading above):
+#   * Detector tag +Z = outward normal toward the camera = lander +X.
+#   * Detector tag +Y = image-up.  The QuadMesh (printed bitmap) is yawed +90 deg about lander
+#     +Y; its rendered "up" runs along lander +Z, so tag +Y = lander +Z.
+#   * Detector tag +X = image-right = lander +Y (right-handed completion).
+# Columns of R_LANDER_TAG are therefore the detector tag axes expressed in lander coords:
+#   tag +X = lander +Y ; tag +Y = lander +Z ; tag +Z = lander +X.
+# This is a proper rotation (det=+1) -- a 120 deg cyclic axis-permutation -- applied by
+# right-multiplying the tag's OWN-FRAME transform in bag_writer._compute_truth.  Because it is a
+# constant own-frame relabel it corrects ALL camera viewpoints, not just the fronto-parallel one
+# (an oblique view is exact too -- see test_frames.test_e); it is the principled replacement for
+# the historical ~120 deg / q=[.5,.5,-.5,.5] orientation error.
+R_LANDER_TAG = np.array(
+    [[0.0, 0.0, 1.0],   # tag axes as columns in lander coords:
+     [1.0, 0.0, 0.0],   #   col0 = tag+X = lander +Y
+     [0.0, 1.0, 0.0]],  #   col1 = tag+Y = lander +Z ;  col2 = tag+Z = lander +X
+    dtype=np.float64,
+)
+
 
 # --- Quaternion <-> matrix helpers (XYZW order) -----------------------------------------
 

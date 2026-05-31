@@ -213,6 +213,17 @@ def _compute_truth(sensors, left_cam):
         tag["position_m"], tag["quaternion_xyzw"]
     )
     T_lander_tag = frames.make_transform(tpos, tquat)
+    # Relabel the tag's OWN-FRAME axes from the contract-§1 lander convention (+X = outward
+    # normal, +Y = up) into the apriltag_ros `pnp` detector convention (+X image-right,
+    # +Y image-up, +Z outward-normal-toward-camera).  This is a FIXED rotation
+    # (frames.R_LANDER_TAG) derived from the lander/QuadMesh axis definitions and pinned to the
+    # detector's fronto-parallel reading, right-multiplied so it acts purely on the tag's own
+    # frame -- pose_in_lander stays the contract's identity and the TRANSLATION (tag centre ==
+    # lander origin) is untouched.  Without it /lander/apriltag_truth is off by a fixed ~120 deg
+    # axis-permutation vs the detector (the historical q=[.5,.5,-.5,.5] / 124.6 deg error).
+    T_relabel = np.eye(4, dtype=np.float64)
+    T_relabel[:3, :3] = frames.R_LANDER_TAG
+    T_lander_tag = T_lander_tag @ T_relabel
     T_map_tag = T_map_lander @ T_lander_tag
 
     cpos, cquat = frames.godot_world_cam_pose_to_ros_optical(

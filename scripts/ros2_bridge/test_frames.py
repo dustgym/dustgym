@@ -118,12 +118,58 @@ def test_d_camera_pose_optical_consistency():
     np.testing.assert_allclose(t_pos, [0.0, 0.0, 0.0], atol=1e-12)
 
 
+def test_e_lander_tag_relabel():
+    """The contract-§1 lander->apriltag tag-frame relabel (frames.R_LANDER_TAG).
+
+    Guards the orientation fix: the tag frame the `pnp` detector reports (+X image-right, +Y
+    image-up, +Z outward-normal-toward-camera) differs from the lander placement frame (+X =
+    outward normal, +Y = up) by a FIXED rotation.
+    (1) R_LANDER_TAG is a proper rotation (det=+1) -- a relabel, not a reflection.
+    (2) detector tag +Z (col 2) is the outward normal == +lander +X.
+    (3) End-to-end: a fronto-parallel camera looking straight at the tag must read the corrected
+        camera->tag truth as the detector's fronto-parallel reading R_x(180 deg) (= the empirical
+        q_xyzw=[0.998,..,-0.062] convention), and because the correction is a constant own-frame
+        relabel it is pose-independent (an oblique view is exact too).
+    """
+    R = frames.R_LANDER_TAG
+    assert np.isclose(np.linalg.det(R), 1.0, atol=1e-12)
+    np.testing.assert_allclose(R.T @ R, np.eye(3), atol=1e-12)
+    # detector tag +Z (3rd column) is the outward normal == lander +X (pnp estimator).
+    np.testing.assert_allclose(R[:, 2], [1.0, 0.0, 0.0], atol=1e-12)
+
+    # --- end-to-end: lander placed ahead of a camera that looks straight at it -------------
+    def _lander_basis(fwd):
+        fwd = np.asarray(fwd, float); fwd[1] = 0.0; fwd /= np.linalg.norm(fwd)
+        nx = -fwd; ny = np.array([0.0, 1.0, 0.0])
+        nz = np.cross(nx, ny); nz /= np.linalg.norm(nz)
+        ny = np.cross(nz, nx); ny /= np.linalg.norm(ny)
+        return np.column_stack([nx, ny, nz])
+
+    def _ry(t):
+        c, s = np.cos(t), np.sin(t)
+        return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+    def _corrected_truth_rot(fwd, cam_yaw_deg):
+        r_map_l = frames.R_WORLD_G2R @ _lander_basis(fwd) @ frames.R_WORLD_G2R.T
+        r_map_opt = frames.R_WORLD_G2R @ _ry(np.radians(cam_yaw_deg)) @ frames.R_CAM_G2R.T
+        return r_map_opt.T @ (r_map_l @ R)  # camera_optical -> tag(detector frame)
+
+    # fronto-parallel: rover faces Godot +X, camera yawed -90 deg so its -Z points to +X.
+    # The detector reads a fronto-parallel tag as R_x(180 deg) under the `pnp` convention.
+    rx180 = np.diag([1.0, -1.0, -1.0])
+    r_front = _corrected_truth_rot([1.0, 0.0, 0.0], -90.0)
+    delta = r_front.T @ rx180
+    ang = np.degrees(np.arccos(max(-1.0, min(1.0, (np.trace(delta) - 1.0) / 2.0))))
+    assert ang < 1e-6, f"fronto-parallel corrected truth not R_x(180): off by {ang} deg"
+
+
 def _run_all():
     tests = [
         ("a_world_axes", test_a_world_axes),
         ("b_camera_view_direction", test_b_camera_view_direction),
         ("c_pose_roundtrip", test_c_pose_roundtrip),
         ("d_camera_pose_optical_consistency", test_d_camera_pose_optical_consistency),
+        ("e_lander_tag_relabel", test_e_lander_tag_relabel),
     ]
     failures = 0
     for name, fn in tests:
