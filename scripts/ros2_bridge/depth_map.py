@@ -35,13 +35,17 @@ def main() -> None:
         raise SystemExit("could not read front_left.png / front_right.png")
 
     # SGBM tuned for ~1-6 m at 0.1 m baseline, 1280-wide (disparity ~40 px @ 2.3 m, ~90 px @ 1 m).
+    # Tuned for low-contrast, low-texture lunar regolith: small block (fine grit is ~6 px at a
+    # few m, so big windows wash it out), permissive uniqueness (the speckle contrast is modest),
+    # generous speckle filter to drop isolated mismatches. Passive stereo on uniform regolith is
+    # inherently sparse; these recover what's recoverable without inventing matches.
     num_disp = 160  # multiple of 16
-    block = 7
+    block = 5
     sgbm = cv2.StereoSGBM_create(
         minDisparity=0, numDisparities=num_disp, blockSize=block,
         P1=8 * block * block, P2=32 * block * block,
-        disp12MaxDiff=1, uniquenessRatio=10, speckleWindowSize=100, speckleRange=2,
-        mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
+        disp12MaxDiff=2, uniquenessRatio=5, speckleWindowSize=80, speckleRange=4,
+        preFilterCap=31, mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
     )
     disp = sgbm.compute(left, right).astype(np.float32) / 16.0  # SGBM returns fixed-point ×16
 

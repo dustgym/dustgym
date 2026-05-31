@@ -84,3 +84,5 @@ godot_sidecar/out/cam/
 # fiducial_overlay.py; the committed deliverables live in out/ros/. Also the working hero render.
 godot_sidecar/out/detour/
 godot_sidecar/out/crater_drop_hero.png
+godot_sidecar/out/grit_check.png
+godot_sidecar/out/grit_tread.png

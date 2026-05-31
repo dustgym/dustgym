@@ -26,6 +26,12 @@ uniform float lod_step_m = 0.08;                   // world meters per low-res t
 // appearance. (GDShader has no shared include here, so hash/vnoise are duplicated.)
 uniform float macro_albedo_amp = 0.13;
 uniform float macro_scale_m = 0.42;
+// Fine granular ALBEDO speckle (mirror of terrain.gdshader): world-anchored high-freq brightness
+// grit so the far ground reads gritty + gives passive stereo matchable texture at distance, stable
+// across sun angles. Per-state amp via state_grain_factor (TREAD smoothed). The far plane has NO
+// detail-NORMAL pass (coarse geometry), so this albedo speckle is the far-field's grit contribution.
+uniform float grain_albedo_amp = 0.19;
+uniform float speckle_size_m = 0.018;
 
 // State + disturbance at full field res (render_fidelity track fix): the far-field mesh is
 // coarse, so the rover rut was rendering as undersampled geometric dimples. Reading the state
@@ -72,6 +78,16 @@ float vnoise(vec2 p) {
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// Per-state micro-texture amplitude (mirror of terrain.gdshader; spec §6 state profiles). VIRGIN
+// full grit, TREAD way down (compaction smooths), EXCAVATED/SPOIL coarse, BERM packed smoother.
+float state_grain_factor(int lbl) {
+	if (lbl == 1) return 0.20;
+	if (lbl == 2) return 1.10;
+	if (lbl == 3) return 1.15;
+	if (lbl == 4) return 0.45;
+	return 1.0;
+}
+
 // 2-term Henyey-Greenstein phase function P(g) vs cos(phase angle) (mirror of terrain.gdshader).
 float hg_phase(float cg, float b, float c) {
 	float b2 = b * b;
@@ -112,6 +128,7 @@ void fragment() {
 	col *= (1.0 - 0.18 * dist);
 	float rough = 0.97;
 	int lbl = int(round(texture(state_tex, fuv).r * 255.0));
+	float state_grain = state_grain_factor(lbl);
 	if (lbl == 1) {            // TREAD: compacted rut -> darker, a touch smoother
 		col *= 0.82;
 		rough = 0.90;
@@ -124,6 +141,15 @@ void fragment() {
 	} else if (lbl == 4) {     // COMPACTED_BERM: packed mound -> a touch brighter
 		col *= 1.12;
 		rough = 0.92;
+	}
+
+	// Fine granular ALBEDO speckle (world-anchored, mirror of terrain.gdshader): high-freq grit
+	// keyed to real metres (fuv*span) so the far ground reads gritty + stereo-matchable at
+	// distance; per-state amp (TREAD smoothed). The far plane's grit contribution (no detail-normal).
+	{
+		vec2 sp = fuv * (span / max(speckle_size_m, 1e-4));
+		float spk = 0.6 * vnoise(sp) + 0.4 * vnoise(sp * 2.3 + vec2(19.7, 4.1));
+		col *= (1.0 + grain_albedo_amp * state_grain * (spk * 2.0 - 1.0));
 	}
 
 	// Cut-depth / exposed-sublayer albedo (continuous; mirror of terrain.gdshader).

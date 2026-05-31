@@ -108,7 +108,15 @@ uniform float field_span_m = 5.12;
 // Base granularity (§4.2.2): grain size and bump strength. ~8 mm grains read at the
 // mesh scale; strength is the max normal tilt (radians-ish) scaled by disturbance.
 uniform float grain_size_m = 0.008;
-uniform float grain_strength = 0.55;
+uniform float grain_strength = 0.72;
+// Fine granular ALBEDO speckle (Apollo-surface grit; lpi.usra.edu apollo_14 ref). World-anchored
+// high-frequency BRIGHTNESS variation at the granule scale so the ground reads as gritty regolith
+// instead of a smooth/interpolated slab, AND so passive stereo has matchable intensity texture (it
+// was previously NORMAL-only -> too low-texture for SGBM to match -> blank depth). ONE fine layer
+// (+ a finer fleck) — the MACRO structure comes from the physics heightmap + macro mottle, so no
+// deep fbm. Amplitude is per-state (state_grain_factor): TREAD turned way down (compaction smooths).
+uniform float grain_albedo_amp = 0.19;    // peak +/- fractional brightness speckle
+uniform float speckle_size_m = 0.018;     // granule cell size (m) for the albedo speckle
 // Grouser cleat pitch + depth (§4.2.3; EZ-RASSOR wheel). 2 cm pitch sits in the
 // 1-3 cm band; transverse ridges.
 uniform float cleat_pitch_m = 0.02;
@@ -163,6 +171,18 @@ float grain_height(vec2 gp) {
 	return 0.65 * vnoise(gp) + 0.35 * vnoise(gp * 2.7 + 11.3);
 }
 
+// Per-state micro-texture amplitude (the "different noise profiles" of spec §6 states). VIRGIN is
+// full natural grit; TREAD is turned WAY down because wheel compaction packs the fines smooth (the
+// rut reads polished — spec §6 "compaction ... paving"); EXCAVATED/SPOIL stay coarse (fresh,
+// un-compacted firm sublayer + loose clods); COMPACTED_BERM is deliberately packed -> smoother.
+float state_grain_factor(int lbl) {
+	if (lbl == 1) return 0.20;   // TREAD — compaction smooths
+	if (lbl == 2) return 1.10;   // EXCAVATED — fresh coarse cut
+	if (lbl == 3) return 1.15;   // SPOIL — loose dumped, grainiest
+	if (lbl == 4) return 0.45;   // COMPACTED_BERM — packed smoother
+	return 1.0;                  // VIRGIN — full natural grit
+}
+
 // 2-term Henyey-Greenstein single-particle phase function P(g) as a function of cos(phase
 // angle). cg = cos(g), where g is the angle between the directions to the Sun and to the
 // camera (g=0 at opposition / full backscatter). c>0 weights the BACKscattering lobe — lunar
@@ -180,6 +200,7 @@ void fragment() {
 	int lbl = state_label(field_uv);
 	float dens = texture(density_tex, field_uv).r;
 	float dens_n = clamp((dens - density_lo) / max(density_hi - density_lo, 1.0), 0.0, 1.0);
+	float state_grain = state_grain_factor(lbl);   // per-state micro-texture amplitude (TREAD low)
 
 	vec3 col = base_albedo;
 	float rough = 0.96;  // dusty regolith: very rough, near-Lambertian (spec §8)
@@ -219,6 +240,18 @@ void fragment() {
 		rough = mix(rough, 0.85, 0.5);
 	}
 	// (lbl == 0 VIRGIN: untouched base look.)
+
+	// --- fine granular ALBEDO speckle (world-anchored, persistent; Apollo-surface grit) ---
+	// Peppered brightness variation at the granule scale so the ground reads as gritty regolith,
+	// not a smooth/interpolated slab — and so passive stereo has matchable intensity texture.
+	// field_uv->metres anchors it to the SURFACE, so both stereo cameras see identical speckle at
+	// a world point (stereo-consistent) and it is STABLE across sun angles (matters for the
+	// boulder-fiducial-across-the-lunar-day idea). Per-state amp (state_grain): TREAD smoothed.
+	{
+		vec2 sp = field_uv * (field_span_m / max(speckle_size_m, 1e-4));
+		float spk = 0.6 * vnoise(sp) + 0.4 * vnoise(sp * 2.3 + vec2(19.7, 4.1));  // [0,1]
+		col *= (1.0 + grain_albedo_amp * state_grain * (spk * 2.0 - 1.0));
+	}
 
 	// --- cut-depth / exposed-sublayer albedo (continuous; render_fidelity) ---
 	// Removed thickness from the areal-mass deficit; brighten + slightly desaturate toward
@@ -277,7 +310,10 @@ void fragment() {
 	// Grain coords: field-UV -> metres -> grains. Central-difference gradient.
 	// Floor raised (#2) from 0.25 to 0.5 so VIRGIN/undisturbed ground still reads granular
 	// (not glassy); disturbance pushes it to full strength.
-	float grain_amp = grain_strength * (0.5 + 0.5 * dist) * fade;
+	// Amplitude driven by the PER-STATE factor (state_grain) rather than disturbance alone, so
+	// VIRGIN ground reads persistently granular and TREAD ruts read smooth (compaction); a small
+	// disturbance term still adds extra churn on freshly worked cells.
+	float grain_amp = grain_strength * state_grain * (0.85 + 0.15 * dist) * fade;
 	if (grain_amp > 1e-4) {
 		vec2 gp = field_uv * (m_per_uv / max(grain_size_m, 1e-4));
 		float eps = 0.75;
