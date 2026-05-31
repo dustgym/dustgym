@@ -194,3 +194,314 @@ STATE_EXCAVATED = 2
 STATE_SPOIL = 3
 STATE_COMPACTED_BERM = 4
 STATE_NAMES = ["VIRGIN", "TREAD", "EXCAVATED", "SPOIL", "COMPACTED_BERM"]
+
+# ===========================================================================
+# DEM-TERRAIN THRUST — sourced procgen parameters (Lane B, ADDITIVE block).
+# ===========================================================================
+# Added 2026-05-31 for the real-DEM 10 km terrain work (docs/dem_terrain_contract.md
+# §6, docs/lunar_dem_10km_eval.md §6 + papers/CITATIONS.md "Lunar DEM / terrain-
+# statistics references"). NOTHING above this line is modified — every name here is
+# NEW, so existing scenes/tests are byte-for-byte unaffected (HARD BACKWARD-COMPAT).
+#
+# HONESTY-TAG legend (extends the file header; the binding "every parameter sourced,
+# never eyeballed" rule means the tag carries onto the PARAMETER, not just prose):
+#     [FIXED]               well-constrained physical constant / model with a real
+#                           primary citation, used in its valid regime.
+#     [CALIB]               a calibration CHOICE — a fit (often Earth/Apollo/mare era)
+#                           or a transcribed-from-secondary value; not ground truth.
+#     [prior-applied-to-pole] a global / equatorial / mare value used AT THE POLE
+#                           because no polar in-situ measurement exists.
+#     [ASSUMPTION]          an engineering bound stated explicitly so it is auditable.
+#     [UNKNOWN]             a genuine wide-envelope unknown with no numeric source.
+# A parameter may NOT be called "sourced" without one of these tags + a citation.
+
+# ---------------------------------------------------------------------------
+# Crater PRODUCTION — Neukum production-function coefficient vector. [CALIB]
+# ---------------------------------------------------------------------------
+#: Neukum/Ivanov/Hartmann (2001) crater-production polynomial coefficients a0..a11.
+#: Model: log10 N_cum(>=D) = sum_{j=0..11} a_j * (log10 D_km)^j  [craters km^-2 Gyr^-1
+#: at the 1 Gyr reference], with D in KILOMETRES. Valid for ~10 m .. ~1000 km;
+#: DO NOT extrapolate below ~10 m (the sub-DEM band is governed by the equilibrium
+#: cap eq_sfd(D) below, NOT by extrapolating this polynomial).
+#:
+#: [CALIB] — primary table (Ivanov/Neukum/Hartmann 2001, Space Sci. Rev. 96:55) NOT
+#: directly verified here: this vector is TRANSCRIBED from the MintonGroup/cratermaker
+#: project's encoding of the Neukum PF. KNOWN DISCREPANCY: the linear coefficient a1
+#: appears here as -3.557528 (10**a0-anchored set) whereas some transcriptions list
+#: the standalone constant term implying 8.25e-4 vs the paper's ~8.38e-4 normalization
+#: at D=1 km — a ~1.5% normalization difference to RECONCILE against the primary table
+#: before any quantitative reliance. cratermaker's LICENSE must be verified (MIT/BSD)
+#: before copying numerics verbatim into CC0 code; the numbers themselves are published
+#: scientific facts (not copyrightable) and are cited Neukum et al. 2001 by author/year.
+NEUKUM_SFD_COEF = (
+    -3.0876,    # a0  (10**a0 ~ 8.17e-4 craters km^-2 Gyr^-1 at D=1 km; cf. paper 8.38e-4)
+    -3.557528,  # a1
+    0.781027,   # a2
+    1.021521,   # a3
+    -0.156012,  # a4
+    -0.444058,  # a5
+    0.019977,   # a6
+    0.086850,   # a7
+    -0.005874,  # a8
+    -0.006809,  # a9
+    8.25e-4,    # a10  (the 8.25e-4-vs-8.38e-4 note above lives on a0's normalization)
+    5.54e-5,    # a11
+)
+
+#: Surface age committed for the production function [Gyr]. [CALIB] — a model age
+#: choice (the 10 km Haworth tile is ancient highland terrain; 3.5 Gyr is the eval's
+#: committed value, docs/lunar_dem_10km_eval.md §6). Production scales ~linearly with
+#: this for ages < ~3 Gyr via the Neukum chronology; see neukum_chronology().
+NEUKUM_SURFACE_AGE_GYR = 3.5
+
+
+def neukum_chronology(age_gyr: float) -> float:
+    """Neukum (2001) lunar cratering CHRONOLOGY: cumulative-density scale factor vs age.
+
+    Returns the multiplier on the 1-Gyr-reference production density for a surface of
+    the given model age [Gyr]:
+
+        N(1 km, t) = 5.44e-14 * (exp(6.93 * t) - 1) + 8.38e-4 * t
+
+    (Neukum/Ivanov/Hartmann 2001, Space Sci. Rev. 96:55, eq. for N(1) vs t). The
+    production polynomial NEUKUM_SFD_COEF gives the SHAPE (relative SFD); this anchors
+    its absolute level at age t. [CALIB] — the chronology constants are the published
+    Neukum values; transcribed, primary table unverified (see NEUKUM_SFD_COEF note).
+    """
+    return 5.44e-14 * (np.exp(6.93 * age_gyr) - 1.0) + 8.38e-4 * age_gyr
+
+
+def neukum_production_cumulative(diameter_m: float | np.ndarray,
+                                 age_gyr: float = NEUKUM_SURFACE_AGE_GYR,
+                                 ) -> np.ndarray:
+    """Cumulative crater production N_cum(>= D) per m^2 for a surface of age `age_gyr`.
+
+    Evaluates the NEUKUM_SFD_COEF polynomial (giving the relative SFD shape, anchored
+    at 1 Gyr) and rescales the absolute level to `age_gyr` via neukum_chronology().
+    Input D in METRES; output is craters per SQUARE METRE (km^-2 -> m^-2 = *1e-6).
+
+    [CALIB] — see NEUKUM_SFD_COEF. Valid ~10 m..1000 km; the caller (procgen_csfd) is
+    responsible for NOT extrapolating below ~10 m and for capping at eq_sfd(D).
+    """
+    d_km = np.asarray(diameter_m, dtype=np.float64) / 1000.0
+    x = np.log10(d_km)
+    # Horner evaluation of sum a_j x^j.
+    acc = np.zeros_like(x)
+    for a in reversed(NEUKUM_SFD_COEF):
+        acc = acc * x + a
+    n_per_km2_1gyr = 10.0 ** acc
+    # Rescale the 1-Gyr reference to the committed age, then km^-2 -> m^-2.
+    scale = neukum_chronology(age_gyr) / neukum_chronology(1.0)
+    return n_per_km2_1gyr * scale * 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Small-crater EQUILIBRIUM cap. [CALIB]
+# ---------------------------------------------------------------------------
+#: Xiao & Werner (2015, JGR 120, doi:10.1002/2015JE004860) report small craters reach
+#: an empirical equilibrium ("steady state") at ~1-10% of GEOMETRIC SATURATION. We take
+#: the CENTRAL value of that band (~5.5% of saturation) as the cap coefficient below.
+#: The geometric-saturation cumulative density scales as ~D^-2; equilibrium is a
+#: fraction of it -> n_eq(>=D) = EQ_SFD_COEF * D^-2  [craters per m^2], D in METRES.
+#:
+#: [CALIB] — band central value is a calibration CHOICE. Minton et al. 2019 (Icarus,
+#: arXiv:1902.07746) fit an Apollo-15 MARE equilibrium n_eq(>=D) ~ 0.0336 * D^-2 (D in m)
+#: which, applied to this HIGHLAND/polar surface, is a LOWER BOUND (EQ_SFD_COEF_MARE_LB).
+EQ_SFD_COEF = 0.084            # central ~5.5%-of-saturation highland/polar cap [m^0]
+EQ_SFD_COEF_MARE_LB = 0.0336   # Minton 2019 Apollo-15 mare fit -> lower bound on highland
+
+
+def eq_sfd(diameter_m: float | np.ndarray) -> np.ndarray:
+    """Equilibrium (steady-state) cumulative crater density n_eq(>= D) per m^2.
+
+        n_eq(>= D) = EQ_SFD_COEF * D^-2        (D in metres)
+
+    The cap in the sub-DEM band: actual emplaced density is min(production, eq_sfd)
+    because a surface in equilibrium has erased as many small craters as it accrues
+    (Xiao & Werner 2015). [CALIB] — EQ_SFD_COEF is the central value of the X&W 1-10%
+    band; EQ_SFD_COEF_MARE_LB (Minton 2019 mare fit) is the lower bound on a highland.
+    """
+    d = np.asarray(diameter_m, dtype=np.float64)
+    return EQ_SFD_COEF * d ** (-2.0)
+
+
+# ---------------------------------------------------------------------------
+# fbm spectral fidelity — Hurst -> amplitude gain. [CALIB]
+# ---------------------------------------------------------------------------
+#: Self-affine surfaces have an fbm amplitude gain per octave of lacunarity**(-H), where
+#: H is the Hurst exponent (PSD slope beta = 2H+1 in 2-D). The repo fbm default gain=0.5
+#: at lacunarity=2 implies H=1.0 (too smooth/correlated). South-pole highland-like
+#: terrain in the DEM-resolved band (>= ~30 m) measures H ~ 0.95 (Rosenburg et al. 2011,
+#: JGR doi:10.1029/2010JE003716; Barker et al. 2025, PSJ doi:10.3847/PSJ/adbc9d), NOT the
+#: maria 0.76. [CALIB] — a calibration choice anchored to those measurements.
+HURST_RESOLVED_BAND = 0.95     # >= ~30 m, south-pole highland-like [CALIB]
+
+#: cm / rover-band Hurst. [prior-applied-to-pole] — H ~ 0.5-0.7 at mm-cm scale from
+#: Helfenstein & Shepard 1999 (Icarus 141), which is APOLLO CLOSE-UP / EQUATORIAL; no
+#: polar in-situ cm-scale measurement exists. H is SCALE-DEPENDENT, so a single fixed
+#: gain is wrong at one end -> H must ramp between HURST_RESOLVED_BAND and this.
+HURST_CM_BAND = 0.6            # 0.5-0.7 envelope, central [prior-applied-to-pole]
+HURST_CM_BAND_MIN = 0.5
+HURST_CM_BAND_MAX = 0.7
+
+#: Terminal RMS slope at the 2 cm sim cell [rad]. [prior-applied-to-pole] — ~20 deg
+#: (envelope 15-35 deg) at mm-cm scale, Helfenstein & Shepard 1999 (equatorial) +
+#: Bandfield et al. 2015 (Diviner, GLOBAL). Used to bound the synthesized roughness at
+#: the finest scale; no polar in-situ cm-scale slope measurement exists.
+TERMINAL_RMS_SLOPE_RAD = np.deg2rad(20.0)
+TERMINAL_RMS_SLOPE_MIN_RAD = np.deg2rad(15.0)
+TERMINAL_RMS_SLOPE_MAX_RAD = np.deg2rad(35.0)
+
+
+def hurst_to_fbm_gain(H: float, lacunarity: float = 2.0) -> float:
+    """fbm per-octave amplitude gain for a target Hurst exponent: gain = lacunarity**(-H).
+
+    H=1.0 -> gain=0.5 at lacunarity 2 (the repo default, very smooth); H=0.95 -> ~0.518;
+    H=0.6 -> ~0.660 (rougher, more high-frequency energy).
+
+    IMPORTANT CAVEAT (docs/lunar_dem_10km_eval.md §6 "fbm spectral fidelity"): fixing the
+    gain is NECESSARY BUT NOT SUFFICIENT. The repo fbm's min-max-to-[0,1] renorm
+    (procgen.py:74-77) is a realization-dependent NONLINEAR rescale that DESTROYS the PSD
+    slope this gain is meant to set. Correct spectral fidelity requires BOTH this gain AND
+    a variance/deviogram-anchored normalization (scale to a target RMS from Product-90
+    LDRM_RMSD) instead of the [0,1] renorm. Gain alone, with the min-max renorm still in
+    place, does not deliver the intended Hurst slope. See procgen.fbm(normalize="variance").
+    """
+    return float(lacunarity ** (-H))
+
+
+# ---------------------------------------------------------------------------
+# Crater SYNTHESIS cutoff (de-confliction with what the DEM already resolves). [CALIB]
+# ---------------------------------------------------------------------------
+#: Only synthesize craters BELOW the DEM's effective resolution; D_min = m * eff_px with
+#: m a Nyquist-style multiplier (~2-3). The DEM effective resolution per pixel is the
+#: SOURCED input (PGDA Product 90 LDEM_EFFRES per-pixel layer, Barker et al. 2023); the
+#: 2-3x multiplier is an engineering heuristic. [CALIB].
+LDEM_EFFRES_NYQUIST_MULT = 2.5     # m in D_min = m * eff_px [CALIB] (2-3 band, central)
+
+
+# ---------------------------------------------------------------------------
+# Crater depth/diameter — size-dependent (Stopar 2017). [FIXED]>400m / [CALIB] below
+# ---------------------------------------------------------------------------
+#: Fresh simple-crater depth/diameter is NOT a single value across all sizes:
+#:   d/D ~ 0.196 for D >= 400 m  ([FIXED]; Pike 1977, the existing repo value 0.2 is this
+#:                                regime, valid >400 m; Stoffler 2006 RiMG 60),
+#:   d/D drops to a 0.11-0.17 band BELOW 400 m, ~0.13 at 20-50 m  ([CALIB]; Stopar 2017,
+#:                                Icarus) — the small craters procgen actually adds.
+#: The existing CRATER_DEPTH_DIAMETER_RATIO=0.2 (constants.py:178) is the >400 m regime
+#: and is LEFT UNCHANGED; this is the additive size-dependent helper for the sub-DEM band.
+CRATER_DD_LARGE = 0.196            # D >= 400 m [FIXED] (Pike 1977 / Stoffler 2006)
+CRATER_DD_SMALL_MIN = 0.11         # D < 400 m band lower [CALIB] (Stopar 2017)
+CRATER_DD_SMALL_MAX = 0.17         # D < 400 m band upper [CALIB] (Stopar 2017)
+CRATER_DD_SMALL_NOMINAL = 0.13     # ~0.13 at 20-50 m [CALIB] (Stopar 2017, central)
+CRATER_DD_TRANSITION_M = 400.0     # the >400 m / <400 m morphometric break [FIXED]
+
+
+def crater_depth_ratio(diameter_m: float) -> float:
+    """Size-dependent fresh-crater depth/diameter ratio d/D.
+
+    D >= 400 m  -> CRATER_DD_LARGE (0.196) [FIXED] (Pike 1977 / Stoffler 2006).
+    D <  400 m  -> CRATER_DD_SMALL_NOMINAL (~0.13) [CALIB] (Stopar 2017), within the
+                   0.11-0.17 band. (A flat 0.2 is too DEEP for the sub-400 m craters the
+                   sub-DEM generator adds.) Constant within each regime here — a single
+                   sourced break, not a fitted curve.
+    """
+    return CRATER_DD_LARGE if diameter_m >= CRATER_DD_TRANSITION_M else CRATER_DD_SMALL_NOMINAL
+
+
+# ---------------------------------------------------------------------------
+# Crater EJECTA — McGetchin radial decay + corrected continuous extent. [FIXED]
+# ---------------------------------------------------------------------------
+#: Ejecta radial thickness ~ (r/R)^-3 (McGetchin et al. 1973, EPSL 20; Settle & Head
+#: 1977; Melosh 1989). The existing carve_crater ejecta uses a quadratic ramp keyed to
+#: the outer edge (thickest at the rim, thinning outward — the CORRECT direction, not
+#: "backwards"); the sourced refinement is the empirical (r/R)^-3 power law. [FIXED].
+CRATER_EJECTA_DECAY_EXP = -3.0     # radial thickness power-law exponent [FIXED]
+
+#: Continuous-ejecta radial extent as a multiple of crater RADIUS. Observed 2.3-2.7 R
+#: (McGetchin 1973 / Settle & Head 1977 / Melosh 1989). The existing
+#: CRATER_EJECTA_EXTENT_RADII=2.0 (constants.py:186) sits at the LOW edge of this band
+#: and is LEFT UNCHANGED; this additive central value is the sourced correction. [FIXED].
+CRATER_EJECTA_EXTENT_RADII_MIN = 2.3
+CRATER_EJECTA_EXTENT_RADII_MAX = 2.7
+CRATER_EJECTA_EXTENT_RADII_SOURCED = 2.5   # central of 2.3-2.7 R [FIXED]
+
+#: Fresh-crater rim height as a fraction of DIAMETER. ~0.036 D -> rim/depth ~ 0.18
+#: (Stoffler 2006, RiMG 60). The existing CRATER_RIM_HEIGHT_FRAC=0.2 is rim-AS-FRACTION-
+#: OF-DEPTH (a different ratio) and is LEFT UNCHANGED; this is the sourced rim/diameter.
+CRATER_RIM_HEIGHT_DIAM_FRAC = 0.036   # h_rim/D [FIXED] (Stoffler 2006)
+
+
+# ---------------------------------------------------------------------------
+# Spatial boulder abundance k (Golombek SFD total fractional area). [CALIB]
+# ---------------------------------------------------------------------------
+#: The Golombek SFD model golombek_q(k)/sample_boulders is correct AS-IS (Golombek &
+#: Rapp 1997, doi:10.1029/96JE03319; Golombek 2003). What is sourced/refined here is
+#: making the total-fractional-area k SPATIAL: a sparse polar BACKGROUND (Bandfield 2011
+#: Diviner rock abundance <1% over most terrain) ramping UP only in fresh ejecta / rims.
+#: [CALIB] — the spatial k field is a calibration choice anchored to those abundances;
+#: the per-region areal densities (Bernhardt/Boazman 2022, Watkins 2019, Bickel & Kring
+#: 2020) are SECONDARY-SOURCED (primary PDFs unverified) and cross-checked vs USGS LROC
+#: NAC Boulder DB v1.
+BOULDER_K_BACKGROUND = 0.005       # 0.001-0.01 sparse polar background [CALIB] (~<1%)
+BOULDER_K_BACKGROUND_MIN = 0.001
+BOULDER_K_BACKGROUND_MAX = 0.01
+BOULDER_K_EJECTA = 0.20            # 0.05-0.40 fresh-ejecta/rim ramp [CALIB]
+BOULDER_K_EJECTA_MIN = 0.05
+BOULDER_K_EJECTA_MAX = 0.40
+
+#: Boulder buried-fraction distribution. [UNKNOWN] — kept at the repo's U(0.1, 0.7)
+#: (procgen.py:246). Ruesch & Woehler 2021 (arXiv:2109.00052) give only a QUALITATIVE
+#: age-monotonic direction (older boulders more buried); NO numeric distribution exists.
+#: This stays a genuine wide-envelope unknown, tagged on the parameter.
+BOULDER_BURIED_FRAC_MIN = 0.1      # [UNKNOWN] (repo value; no numeric source)
+BOULDER_BURIED_FRAC_MAX = 0.7      # [UNKNOWN]
+
+
+# ---------------------------------------------------------------------------
+# POLAR regolith density profile (ChaSTE, Chandrayaan-3). [CALIB]
+# ---------------------------------------------------------------------------
+#: ChaSTE in-situ two-layer polar density profile from Chandrayaan-3 (Durga Prasad et
+#: al. 2026, ApJ doi:10.3847/1538-4357/ae5228; Mathew et al. 2025, Sci. Rep.
+#: doi:10.1038/s41598-025-91866-4), measured at 69.4 deg S (~20 deg FROM the pole):
+#:   ~750 kg/m^3   over 0-3 cm   (very loose top fines),
+#:   ~1300 kg/m^3  over 3-6.5 cm,
+#:   ~1940 kg/m^3  bulk average over 0-10 cm.
+#: [CALIB] — a calibration choice; sub-polar (not AT the pole), and only ~10 cm deep.
+#:
+#: These are NEW polar-tagged SIBLINGS. They DO NOT overwrite the existing equatorial/
+#: Apollo profile RHO_SURFACE=1300 / RHO_DEEP=1920 / Z_T=0.12. CRITICAL CAVEAT: ChaSTE's
+#: ~1940 kg/m^3 @ 0-10 cm does NOT "confirm" the repo RHO_DEEP=1920 @ ~100 cm — they are
+#: DIFFERENT DEPTHS (10 cm vs ~1 m). Different measurements; do not conflate.
+RHO_SURFACE_POLAR = 750.0          # 0-3 cm [CALIB] (ChaSTE, Durga Prasad 2026)
+RHO_MID_POLAR = 1300.0             # 3-6.5 cm [CALIB] (ChaSTE)
+RHO_BULK_POLAR_10CM = 1940.0       # 0-10 cm bulk avg [CALIB] (ChaSTE); != RHO_DEEP@~1m
+Z_POLAR_TOP_M = 0.03               # 0-3 cm top-layer base [CALIB] (ChaSTE)
+Z_POLAR_MID_M = 0.065              # 3-6.5 cm mid-layer base [CALIB] (ChaSTE)
+
+
+def polar_density_profile(depth_m: float | np.ndarray) -> np.ndarray:
+    """ChaSTE two-layer polar bulk density [kg/m^3] vs depth below surface [m].
+
+    Piecewise: RHO_SURFACE_POLAR over [0, 3cm), RHO_MID_POLAR over [3, 6.5cm), and
+    RHO_BULK_POLAR_10CM at/below 6.5 cm (the 0-10 cm bulk average stands in for the
+    deeper-than-measured column — ChaSTE only reached ~10 cm). [CALIB], sub-polar
+    (69.4 deg S), do NOT conflate with the repo equatorial profile (see constants note).
+    """
+    z = np.asarray(depth_m, dtype=np.float64)
+    return np.where(z < Z_POLAR_TOP_M, RHO_SURFACE_POLAR,
+                    np.where(z < Z_POLAR_MID_M, RHO_MID_POLAR, RHO_BULK_POLAR_10CM))
+
+
+# ---------------------------------------------------------------------------
+# Regolith column thickness (the m-scale column, distinct from Z_T). [ASSUMPTION]
+# ---------------------------------------------------------------------------
+#: Highland regolith column ~10-15 m thick (Bart/Fa crater-morphology methods; a site-
+#: specific bound is read from PGDA Product 90). This is the M-SCALE regolith column,
+#: explicitly DISTINCT from Z_T=0.12 m (the CM-SCALE loose-over-dense transition the
+#: bearing/sinkage model uses). [ASSUMPTION] — an engineering bound stated for audit; the
+#: DEM bridge (dem_to_base) injects the cm-scale loose mantle ~Z_T, the datum carries the
+#: rest of this column.
+REGOLITH_THICKNESS_M = 12.0        # 10-15 m highland column, central [ASSUMPTION]
+REGOLITH_THICKNESS_MIN_M = 10.0
+REGOLITH_THICKNESS_MAX_M = 15.0
