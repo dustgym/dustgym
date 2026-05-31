@@ -14,17 +14,32 @@ FROM osrf/ros:jazzy-desktop
 
 SHELL ["/bin/bash", "-lc"]
 
-# --- apt layer: the detector + stereo + MCAP storage (cached unless this line changes) -----
+# --- apt layer: the detector + stereo + SLAM + MCAP storage (cached unless this line changes)
 #   ros-jazzy-apriltag-ros          christianrauch/apriltag_ros -- node `apriltag_node`
 #   ros-jazzy-apriltag-msgs         AprilTagDetectionArray msg (pulled in, pinned explicit)
+#   ros-jazzy-apriltag              base AprilTag detector lib (apriltag 3.4.5; M3-bundle)
 #   ros-jazzy-stereo-image-proc     M2 disparity (perception tier usually has it; explicit)
+#   ros-jazzy-image-pipeline        meta-pkg over image_proc/stereo_image_proc (resolves for Jazzy)
+#   ros-jazzy-rtabmap-ros           rtabmap ROS2 meta-pkg (rtabmap 0.22.1; M2-slam)
+#   ros-jazzy-rtabmap-slam          rtabmap graph-SLAM node -- emits map-frame nav_msgs/Odometry
+#   ros-jazzy-rtabmap-odom          stereo/RGB-D visual odometry node (odom frame)
+#   ros-jazzy-rtabmap-sync          rgbd_sync / stereo_sync approx-time synchronizers
 #   ros-jazzy-rosbag2-storage-mcap  MCAP storage plugin for `ros2 bag play/info`
 #   ros-jazzy-rosbag2-transport     `ros2 bag` CLI verbs
 #   python3-pip / python3-venv      to install the pure-python `rosbags` writer
+# NOTE: stereo-image-proc / image-pipeline both resolve for Jazzy and are included. Even if they
+# were absent, rtabmap stereo_odometry works WITHOUT them because the Godot images are pre-rectified
+# pinhole (camera_info D=[0,0,0,0,0]) -- no rectification/rectify_node pre-stage is required.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-apriltag-ros \
         ros-jazzy-apriltag-msgs \
+        ros-jazzy-apriltag \
         ros-jazzy-stereo-image-proc \
+        ros-jazzy-image-pipeline \
+        ros-jazzy-rtabmap-ros \
+        ros-jazzy-rtabmap-slam \
+        ros-jazzy-rtabmap-odom \
+        ros-jazzy-rtabmap-sync \
         ros-jazzy-rosbag2-storage-mcap \
         ros-jazzy-rosbag2-transport \
         ros-jazzy-rosbag2-py \

@@ -90,6 +90,14 @@ const StateFieldsScript := preload("res://state_fields.gd")
 const TerrainScript := preload("res://terrain.gd")
 const AprilTagGenScript := preload("res://apriltag_gen.gd")
 const CameraRigScript := preload("res://camera_rig.gd")
+# THE shared schema-assembly sink (contract v1.1). _build_sensors_json + _build_lander
+# moved here in L0 so the Wave-1 lanes never collide on sidecar.gd; sidecar keeps ONE
+# delegating call-site per render path.
+const SensorsEmitScript := preload("res://sensors_emit.gd")
+# Wave-1 lane NO-OP skeletons (each owned by its lane; sidecar only DISPATCHES to them):
+const CaptureSeqScript := preload("res://capture_seq.gd")        # M2-egress (--cameras-seq)
+const SunSweepScript := preload("res://sun_sweep.gd")            # A2-sweep (--sun-sweep)
+const LanderBundleScript := preload("res://lander_bundle.gd")    # M3-tag (--lander-faces)
 
 var _viewport_size := Vector2i(1024, 768)
 var _out_path := DEFAULT_OUT
@@ -124,6 +132,14 @@ var _probe_multicam := false
 # sensors.json per docs/sensor_bridge_contract.md §2. The Godot->ROS conversion is
 # NOT done here (sensors.json is 100% Godot-frame; §3 is C1's job).
 var _cameras_mode := false
+# Wave-1 lane dispatch modes (skeletons land in L0; lanes fill their owned .gd in).
+# --cameras-seq -> M2-egress multi-frame egress (capture_seq.gd). Inherits the live
+#   --cameras side effect (_drums_up=true) so the drum arms clear the front-stereo FOV.
+var _cameras_seq_mode := false
+# --sun-sweep -> A2-sweep sun sweep + boulder manifest (sun_sweep.gd / boulder_manifest.gd).
+var _sun_sweep_mode := false
+# --lander-faces -> M3-tag 4-face AprilTag bundle (lander_bundle.gd).
+var _lander_faces_mode := false
 # --cameras tuning (detour ROS outputs): tag distance/angle + a rover sink (drop into a crater).
 var _lander_standoff := -1.0    # metres ahead of rover; <0 -> LANDER_STANDOFF_M default (--lander-standoff)
 var _lander_yaw_deg := 0.0      # yaw the tag face off-square for oblique fiducial views (--lander-yaw)
@@ -183,6 +199,20 @@ func _ready() -> void:
 
 	if _cameras_mode:
 		await _cameras_capture()
+		get_tree().quit(0); return
+
+	# Wave-1 lane dispatch (skeletons land in L0; the owning lane fills its .gd in).
+	if _cameras_seq_mode:
+		# M2-egress: multi-frame egress (contract v1.1 §7). --cameras-seq set _drums_up.
+		CaptureSeqScript.run_capture_seq(self)
+		get_tree().quit(0); return
+	if _sun_sweep_mode:
+		# A2-sweep: sun sweep + boulder manifest (docs/sun_sweep_manifest.md).
+		SunSweepScript.run_sun_sweep(self)
+		get_tree().quit(0); return
+	if _lander_faces_mode:
+		# M3-tag: 4-face AprilTag bundle (contract v1.1 §3/§6). Reuses --cameras path.
+		LanderBundleScript.build_lander_faces(self)
 		get_tree().quit(0); return
 
 	_setup_camera()
@@ -437,6 +467,13 @@ func _parse_args() -> void:
 			"--cameras":
 				_cameras_mode = true
 				_drums_up = true                 # the camera module needs the drums lifted out of view
+			"--cameras-seq":
+				_cameras_seq_mode = true
+				_drums_up = true                 # mirror --cameras: drums clear the front-stereo FOV
+			"--sun-sweep":
+				_sun_sweep_mode = true
+			"--lander-faces":
+				_lander_faces_mode = true
 			"--drums-up":
 				_drums_up = true
 			"--lander-standoff":
@@ -599,7 +636,11 @@ func _cameras_capture() -> void:
 		fwd = Vector3(1, 0, 0)
 	fwd = fwd.normalized()
 
-	var lander_root := _build_lander(rover_xf.origin, fwd)
+	# Delegate the procedural lander build into the shared sink (SensorsEmit). Pass the
+	# sidecar's live --lander-standoff / --lander-yaw tuning + the preloaded AprilTagGen
+	# so the behavior is unchanged from the in-sidecar _build_lander it replaced.
+	var lander_root := SensorsEmitScript.build_lander(
+		self, sf, AprilTagGenScript, rover_xf.origin, fwd, _lander_standoff, _lander_yaw_deg)
 
 	# Build the front-stereo cameras (shared World3D SubViewports riding the rover).
 	var world := get_viewport().world_3d
@@ -623,8 +664,16 @@ func _cameras_capture() -> void:
 			print("sidecar: --cameras wrote %s (%dx%d)" % [
 				ProjectSettings.globalize_path(path), img.get_width(), img.get_height()])
 
-	# --- assemble + write sensors.json (contract §2.2, all Godot-frame) -------
-	var doc := _build_sensors_json(scene, rover_root, lander_root, cams)
+	# --- assemble + write sensors.json (contract §2.2 / v1.1, all Godot-frame) ---
+	# Delegate to the shared sink (SensorsEmit). Single-frame --cameras passes
+	# frame_index 0 + the live sun block; the v1.1 OPTIONAL faces[]/stereo_rear are
+	# left null (inert) so this output is byte-for-byte the v1.0 schema EXCEPT the
+	# version bump (1.0->1.1) + the additive top-level "sun" block (contract §1).
+	var sun := SensorsEmitScript.sun_block(_sun_elev_deg, _sun_azim_deg, 0.0)
+	var doc := SensorsEmitScript.build_sensors_json(
+		scene, 0, _viewport_size, rover_root, lander_root, cams,
+		Callable(CameraRigScript, "intrinsics"), CameraRigScript.FOV_X_DEG,
+		sun, null, null)
 	var json_path := "%s/sensors.json" % out_dir
 	var jf := FileAccess.open(json_path, FileAccess.WRITE)
 	if jf == null:
@@ -653,165 +702,6 @@ func _find_rover_root() -> Node3D:
 		if ch is Node3D and _collect_mesh_instances(ch).size() > 0:
 			return ch as Node3D                   # chassis-only glTF root
 	return null
-
-# Build the procedural CC0 lander: a BoxMesh body on 4 cylinder legs (plain grey
-# StandardMaterial), with the apriltag_gen id-0 tag quad on its ROVER-FACING
-# vertical face. The lander frame ORIGIN coincides with the TAG CENTER (contract
-# §1 M1 simplification), and the lander +X axis = the tag outward normal (pointing
-# back toward the rover). So apriltag.pose_in_lander is identity.
-#
-# Placement: LANDER_STANDOFF_M metres ahead of the rover along its forward (+X
-# yawed) direction `fwd`, on the local surface, so both front cameras see the tag.
-# Returns the lander root (its global_transform == the lander/tag pose we report).
-func _build_lander(rover_pos: Vector3, fwd: Vector3) -> Node3D:
-	# Ground position ahead of the rover; snap to the surface height there.
-	var standoff: float = _lander_standoff if _lander_standoff > 0.0 else LANDER_STANDOFF_M
-	var ground := rover_pos + fwd * standoff
-	var u: float = clampf((ground.x - sf.world_min.x) / maxf(sf.extent_m().x, 1e-6), 0.0, 1.0)
-	var v: float = clampf((ground.z - sf.world_min.y) / maxf(sf.extent_m().y, 1e-6), 0.0, 1.0)
-	var surf_y: float = sf.height_uv(u, v)
-
-	# Lander root frame: ORIGIN = the tag center (per §1), placed at tag height on
-	# the rover-facing face. +X (lander) = the tag outward normal = back toward the
-	# rover = -fwd. We build a basis whose +X column = -fwd, +Y = up.
-	var nx := (-fwd).normalized()                 # lander +X = tag normal (toward rover)
-	var ny := Vector3(0, 1, 0)                     # lander +Y = up
-	var nz := nx.cross(ny).normalized()            # lander +Z (right-handed)
-	ny = nz.cross(nx).normalized()
-	var tag_h := surf_y + 0.45                      # [CALIB] tag center height (mast-eye level)
-	var lander_basis := Basis(nx, ny, nz)
-	# Optional yaw of the whole lander/tag about world +Y so the tag face is OFF-SQUARE
-	# to the camera ray -> oblique fiducial views (--lander-yaw; for the angle sweep).
-	if absf(_lander_yaw_deg) > 1e-3:
-		lander_basis = Basis(Vector3(0, 1, 0), deg_to_rad(_lander_yaw_deg)) * lander_basis
-
-	var root := Node3D.new()
-	root.name = "Lander"
-	# The lander ROOT origin == the tag center (§1). The lander body sits BEHIND the
-	# tag face (along -X, away from the rover) so the box does not occlude the tag.
-	root.transform = Transform3D(lander_basis, Vector3(ground.x, tag_h, ground.z))
-	add_child(root)
-
-	var grey := StandardMaterial3D.new()
-	grey.albedo_color = Color(0.55, 0.56, 0.58)
-	grey.metallic = 0.2
-	grey.roughness = 0.7
-
-	# Local-Y reference points (the lander origin / tag center is local y = 0):
-	#   surface (foot)   = surf_y - tag_h   (negative; tag sits tag_h above ground)
-	#   body base        = a bit below the tag so the tag reads on the lower-front face
-	var foot_y := surf_y - tag_h                  # surface plane, local y
-	var body_size := Vector3(0.55, 0.6, 0.9)      # [CALIB] x(depth) y(height) z(width)
-	# Body sits BEHIND the tag (local -X) so it never occludes it, and is raised so
-	# its base clears the surface (legs span the gap). Body center put just above the
-	# tag center so the tag is on the lower portion of the rover-facing face.
-	var body_center_y := 0.15                     # [CALIB] body center local y (tag at y=0)
-	var body := MeshInstance3D.new()
-	body.name = "lander_body"
-	var box := BoxMesh.new()
-	box.size = body_size
-	box.material = grey
-	body.mesh = box
-	# Front face pulled 2 cm BEHIND the tag plane (local x = -0.02) so the matte tag
-	# sits proud of the body and never z-fights with it; tag center stays at x=0.
-	body.position = Vector3(-body_size.x * 0.5 - 0.02, body_center_y, 0.0)
-	root.add_child(body)
-
-	# 4 cylinder legs from the body base corners down to the surface (local frame).
-	var body_base_y := body_center_y - body_size.y * 0.5
-	var leg_height: float = maxf(body_base_y - foot_y, 0.25)
-	for sx in [-1.0, 1.0]:
-		for sz in [-1.0, 1.0]:
-			var leg := MeshInstance3D.new()
-			var cyl := CylinderMesh.new()
-			cyl.top_radius = 0.03
-			cyl.bottom_radius = 0.04
-			cyl.height = leg_height
-			cyl.material = grey
-			leg.mesh = cyl
-			leg.position = Vector3(
-				-body_size.x * 0.5 + sx * body_size.x * 0.25,
-				foot_y + leg_height * 0.5,
-				sz * body_size.z * 0.4)
-			root.add_child(leg)
-
-	# The AprilTag id-0 quad: centred on the lander ORIGIN (== tag center, §1). The
-	# QuadMesh faces local +Z by default; rotate it so its +Z points along the
-	# lander +X (the tag outward normal, toward the rover). pose_in_lander = identity.
-	var tag := AprilTagGenScript.build_tag_quad(APRILTAG_SIZE_M, 32)
-	# Map quad-local +Z -> lander-local +X (the tag outward normal, toward the rover):
-	# a +90deg yaw about local +Y sends +Z->+X (verified against Godot's convention).
-	tag.transform = Transform3D(Basis(Vector3(0, 1, 0), PI / 2.0), Vector3.ZERO)
-	root.add_child(tag)
-
-	print("sidecar: --cameras built procedural lander at (%.2f,%.2f,%.2f); tag id0 size_m=%.3f, normal toward rover" % [
-		ground.x, tag_h, ground.z, APRILTAG_SIZE_M])
-	return root
-
-# Assemble the sensors.json Dictionary (contract §2.2). ALL poses are Godot-frame.
-# Builds rover/lander/cameras/stereo blocks; asserts the baseline invariant.
-func _build_sensors_json(scene: String, rover_root: Node3D, lander_root: Node3D,
-		cams: Array) -> Dictionary:
-	var w := _viewport_size.x
-	var h := _viewport_size.y
-
-	var rover_pose := _pose_dict(rover_root.global_transform)
-	var lander_pose := _pose_dict(lander_root.global_transform)
-	lander_pose["frame_id"] = "lander"
-	lander_pose["apriltag"] = {
-		"family": "tag36h11",
-		"id": 0,
-		"size_m": APRILTAG_SIZE_M,
-		"pose_in_lander": {"position_m": [0, 0, 0], "quaternion_xyzw": [0, 0, 0, 1]},
-	}
-	rover_pose["frame_id"] = "base_link"
-
-	var intr := CameraRigScript.intrinsics(CameraRigScript.FOV_X_DEG, w, h)
-	var rover_inv: Transform3D = rover_root.global_transform.affine_inverse()
-	var cameras: Array = []
-	var extr_pos: Dictionary = {}       # name -> extrinsic position (for baseline check)
-	for e in cams:
-		var cam: Camera3D = e["cam"]
-		var world_xf: Transform3D = cam.global_transform
-		var extr_xf: Transform3D = rover_inv * world_xf
-		extr_pos[String(e["name"])] = extr_xf.origin
-		cameras.append({
-			"name": String(e["name"]),
-			"frame_id": String(e["frame_id"]),
-			"image": String(e["image"]),
-			"width": w,
-			"height": h,
-			"intrinsics": intr.duplicate(true),
-			"pose_in_world": _pose_dict(world_xf),
-			"extrinsic_in_base_link": _pose_dict(extr_xf),
-		})
-
-	# baseline_m = world distance between the two cameras; MUST equal the extrinsic
-	# delta magnitude (contract §2.2). We compute from the extrinsics so the two are
-	# identical by construction.
-	var baseline := 0.0
-	if extr_pos.has("front_left") and extr_pos.has("front_right"):
-		baseline = (extr_pos["front_left"] as Vector3).distance_to(extr_pos["front_right"])
-
-	return {
-		"schema_version": "sensor_bridge/1.0",
-		"scene": scene,
-		"frame_index": 0,
-		"frame_convention": "godot",
-		"rover": rover_pose,
-		"lander": lander_pose,
-		"cameras": cameras,
-		"stereo": {"left": "front_left", "right": "front_right", "baseline_m": baseline},
-	}
-
-# Transform3D -> {position_m:[x,y,z], quaternion_xyzw:[x,y,z,w]} (Godot frame).
-func _pose_dict(xf: Transform3D) -> Dictionary:
-	var p := xf.origin
-	var q := xf.basis.get_rotation_quaternion()
-	return {
-		"position_m": [p.x, p.y, p.z],
-		"quaternion_xyzw": [q.x, q.y, q.z, q.w],
-	}
 
 # ---------------------------------------------------------------------------
 func _build_layers() -> void:

@@ -235,25 +235,23 @@ def _compute_truth(sensors, left_cam):
     return frames.transform_to_pos_quat(T_optical_tag)
 
 
-def write_bag(in_dir: str, out_dir: str, sec: int = 0, nanosec: int = 0,
-              store: str = "ros2_jazzy") -> str:
-    if not _HAVE_ROSBAGS:
-        raise RuntimeError(
-            "rosbags not importable -- run bag_writer.py INSIDE the container "
-            "(it is not installed in the repo .venv by design)."
-        )
+def _load_sensors(in_dir: str):
+    """Read + validate sensors.json from a capture dir; return the parsed dict."""
     sensors = json.load(open(os.path.join(in_dir, "sensors.json")))
     assert sensors["schema_version"].startswith("sensor_bridge/1."), \
         f"unexpected schema_version {sensors['schema_version']!r}"
     assert sensors.get("frame_convention") == "godot", \
         "sensors.json must be Godot-native (frame_convention=='godot')"
+    return sensors
 
-    store_enum = {
-        "ros2_jazzy": getattr(Stores, "ROS2_JAZZY", None),
-        "latest": getattr(Stores, "LATEST", None),
-    }.get(store) or Stores.LATEST
-    ts = get_typestore(store_enum)
 
+def _resolve_stereo(sensors):
+    """Resolve the FRONT stereo pair BY NAME (contract §2.2: 'stereo' always carries it).
+
+    Returns (left_cam, right_cam, baseline_m).  The stereo reader resolves cams via
+    sensors['stereo']['left'/'right'] by name -- the front pair is always present per
+    the frozen contract, so multi-frame egress can rely on it identically per frame.
+    """
     cams = {c["name"]: c for c in sensors["cameras"]}
     left = cams[sensors["stereo"]["left"]]
     right = cams[sensors["stereo"]["right"]]
@@ -266,6 +264,125 @@ def write_bag(in_dir: str, out_dir: str, sec: int = 0, nanosec: int = 0,
     if abs(sep - baseline) > 1e-6:
         print(f"WARNING: baseline_m={baseline} != |L-R| extrinsic sep={sep:.6f}",
               file=sys.stderr)
+    return left, right, baseline
+
+
+def _msgtypes(ts):
+    """The four __msgtype__ constants the topics use (resolved once per typestore)."""
+    return {
+        "IMG": ts.types["sensor_msgs/msg/Image"].__msgtype__,
+        "CINFO": ts.types["sensor_msgs/msg/CameraInfo"].__msgtype__,
+        "TFM": ts.types["tf2_msgs/msg/TFMessage"].__msgtype__,
+        "POSE": ts.types["geometry_msgs/msg/PoseStamped"].__msgtype__,
+    }
+
+
+def register_connections(writer, ts, left, right):
+    """Register the §2.3 topic connections on an ALREADY-OPEN Writer -- call ONCE.
+
+    A single MCAP carries ONE connection set; when the per-frame core is looped over many
+    frames on one open Writer (the future bag_seq_writer.py / M2-slam path) the topics are
+    registered here exactly once, NOT per frame.  Returns the ``conns`` dict (topic -> id)
+    that :func:`write_frame` then writes into.
+    """
+    mt = _msgtypes(ts)
+    conns = {}
+
+    def conn(topic, msgtype):
+        conns[topic] = writer.add_connection(topic, msgtype, typestore=ts)
+
+    for c in (left, right):
+        conn(f"/{c['name']}/image_raw", mt["IMG"])
+        conn(f"/{c['name']}/camera_info", mt["CINFO"])
+    conn("/tf", mt["TFM"])
+    conn("/tf_static", mt["TFM"])
+    conn("/lander/apriltag_truth", mt["POSE"])
+    return conns
+
+
+def write_frame(writer, ts, conns, in_dir, sensors, left, right, baseline,
+                t_ns, sec, nanosec):
+    """Write ONE frame's §2.3 topics onto an ALREADY-OPEN Writer at bag time ``t_ns``.
+
+    REUSABLE CORE.  Does NOT open/close the Writer and does NOT register connections or
+    raise FileExistsError -- the caller owns the Writer lifecycle + connection registration
+    (see :func:`register_connections`).  ``t_ns`` is the explicit bag write time (int ns);
+    ``sec``/``nanosec`` populate the message header stamps.  A multi-frame caller advances
+    ``t_ns`` (and the matching stamp) monotonically across frames on one open Writer => one
+    MCAP, one connection set.
+
+    The Godot(Y-up) -> ROS(Z-up, REP-103) conversion happens via ``frames`` exactly here.
+    """
+    mt = _msgtypes(ts)
+    IMG, CINFO, TFM, POSE = mt["IMG"], mt["CINFO"], mt["TFM"], mt["POSE"]
+
+    # --- images + camera_info (left P[3]=0, right P[3]=-fx*baseline) --------------------
+    for c, is_right in ((left, False), (right, True)):
+        w, h, ch, data = _read_png(os.path.join(in_dir, c["image"]))
+        assert (w, h) == (c["width"], c["height"]), \
+            f"{c['image']} dims {(w, h)} != sensors.json {(c['width'], c['height'])}"
+        intr = c["intrinsics"]
+        fx, fy, cx, cy = intr["fx"], intr["fy"], intr["cx"], intr["cy"]
+        p3 = -fx * baseline if is_right else 0.0
+        img = _image_msg(ts, sec, nanosec, c["frame_id"], w, h, ch, data)
+        info = _camera_info(ts, sec, nanosec, c["frame_id"], w, h,
+                            fx, fy, cx, cy, intr["D"], p3)
+        writer.write(conns[f"/{c['name']}/image_raw"], t_ns,
+                     ts.serialize_cdr(img, IMG))
+        writer.write(conns[f"/{c['name']}/camera_info"], t_ns,
+                     ts.serialize_cdr(info, CINFO))
+
+    # --- /tf : map -> base_link (rover pose, converted) ---------------------------------
+    rover = sensors["rover"]
+    rpos, rquat = frames.godot_world_pose_to_ros(
+        rover["position_m"], rover["quaternion_xyzw"]
+    )
+    tf_dyn = _tf_msg(ts, [_transform_stamped(
+        ts, sec, nanosec, "map", rover["frame_id"], rpos, rquat)])
+    writer.write(conns["/tf"], t_ns, ts.serialize_cdr(tf_dyn, TFM))
+
+    # --- /tf_static : base_link -> *_optical, map -> lander -----------------------------
+    static_tfs = []
+    for c in (left, right):
+        epos, equat = frames.godot_cam_extrinsic_to_ros_optical(
+            c["extrinsic_in_base_link"]["position_m"],
+            c["extrinsic_in_base_link"]["quaternion_xyzw"],
+        )
+        static_tfs.append(_transform_stamped(
+            ts, sec, nanosec, rover["frame_id"], c["frame_id"], epos, equat))
+    lpos, lquat = frames.godot_world_pose_to_ros(
+        sensors["lander"]["position_m"], sensors["lander"]["quaternion_xyzw"]
+    )
+    static_tfs.append(_transform_stamped(
+        ts, sec, nanosec, "map", sensors["lander"]["frame_id"], lpos, lquat))
+    writer.write(conns["/tf_static"], t_ns,
+                 ts.serialize_cdr(_tf_msg(ts, static_tfs), TFM))
+
+    # --- /lander/apriltag_truth : camera(left optical) -> tag, computed ----------------
+    truth_pos, truth_quat = _compute_truth(sensors, left)
+    truth = _pose_stamped(ts, sec, nanosec, left["frame_id"], truth_pos, truth_quat)
+    writer.write(conns["/lander/apriltag_truth"], t_ns,
+                 ts.serialize_cdr(truth, POSE))
+    print(f"apriltag_truth (left optical -> tag): pos={np.round(truth_pos, 4).tolist()} "
+          f"quat_xyzw={np.round(truth_quat, 4).tolist()}")
+
+
+def write_bag(in_dir: str, out_dir: str, sec: int = 0, nanosec: int = 0,
+              store: str = "ros2_jazzy") -> str:
+    if not _HAVE_ROSBAGS:
+        raise RuntimeError(
+            "rosbags not importable -- run bag_writer.py INSIDE the container "
+            "(it is not installed in the repo .venv by design)."
+        )
+    sensors = _load_sensors(in_dir)
+
+    store_enum = {
+        "ros2_jazzy": getattr(Stores, "ROS2_JAZZY", None),
+        "latest": getattr(Stores, "LATEST", None),
+    }.get(store) or Stores.LATEST
+    ts = get_typestore(store_enum)
+
+    left, right, baseline = _resolve_stereo(sensors)
 
     os.makedirs(os.path.dirname(out_dir) or ".", exist_ok=True)
     if os.path.exists(out_dir):
@@ -277,74 +394,10 @@ def write_bag(in_dir: str, out_dir: str, sec: int = 0, nanosec: int = 0,
     writer = Writer(out_dir, **kwargs)
     writer.open()
     try:
-        conns = {}
-
-        def conn(topic, msgtype):
-            conns[topic] = writer.add_connection(topic, msgtype, typestore=ts)
-
-        IMG = ts.types["sensor_msgs/msg/Image"].__msgtype__
-        CINFO = ts.types["sensor_msgs/msg/CameraInfo"].__msgtype__
-        TFM = ts.types["tf2_msgs/msg/TFMessage"].__msgtype__
-        POSE = ts.types["geometry_msgs/msg/PoseStamped"].__msgtype__
-
-        for c in (left, right):
-            conn(f"/{c['name']}/image_raw", IMG)
-            conn(f"/{c['name']}/camera_info", CINFO)
-        conn("/tf", TFM)
-        conn("/tf_static", TFM)
-        conn("/lander/apriltag_truth", POSE)
-
+        conns = register_connections(writer, ts, left, right)
         t_ns = sec * 1_000_000_000 + nanosec
-
-        # --- images + camera_info (left P[3]=0, right P[3]=-fx*baseline) ----------------
-        for c, is_right in ((left, False), (right, True)):
-            w, h, ch, data = _read_png(os.path.join(in_dir, c["image"]))
-            assert (w, h) == (c["width"], c["height"]), \
-                f"{c['image']} dims {(w, h)} != sensors.json {(c['width'], c['height'])}"
-            intr = c["intrinsics"]
-            fx, fy, cx, cy = intr["fx"], intr["fy"], intr["cx"], intr["cy"]
-            p3 = -fx * baseline if is_right else 0.0
-            img = _image_msg(ts, sec, nanosec, c["frame_id"], w, h, ch, data)
-            info = _camera_info(ts, sec, nanosec, c["frame_id"], w, h,
-                                fx, fy, cx, cy, intr["D"], p3)
-            writer.write(conns[f"/{c['name']}/image_raw"], t_ns,
-                         ts.serialize_cdr(img, IMG))
-            writer.write(conns[f"/{c['name']}/camera_info"], t_ns,
-                         ts.serialize_cdr(info, CINFO))
-
-        # --- /tf : map -> base_link (rover pose, converted) -----------------------------
-        rover = sensors["rover"]
-        rpos, rquat = frames.godot_world_pose_to_ros(
-            rover["position_m"], rover["quaternion_xyzw"]
-        )
-        tf_dyn = _tf_msg(ts, [_transform_stamped(
-            ts, sec, nanosec, "map", rover["frame_id"], rpos, rquat)])
-        writer.write(conns["/tf"], t_ns, ts.serialize_cdr(tf_dyn, TFM))
-
-        # --- /tf_static : base_link -> *_optical, map -> lander -------------------------
-        static_tfs = []
-        for c in (left, right):
-            epos, equat = frames.godot_cam_extrinsic_to_ros_optical(
-                c["extrinsic_in_base_link"]["position_m"],
-                c["extrinsic_in_base_link"]["quaternion_xyzw"],
-            )
-            static_tfs.append(_transform_stamped(
-                ts, sec, nanosec, rover["frame_id"], c["frame_id"], epos, equat))
-        lpos, lquat = frames.godot_world_pose_to_ros(
-            sensors["lander"]["position_m"], sensors["lander"]["quaternion_xyzw"]
-        )
-        static_tfs.append(_transform_stamped(
-            ts, sec, nanosec, "map", sensors["lander"]["frame_id"], lpos, lquat))
-        writer.write(conns["/tf_static"], t_ns,
-                     ts.serialize_cdr(_tf_msg(ts, static_tfs), TFM))
-
-        # --- /lander/apriltag_truth : camera(left optical) -> tag, computed ------------
-        truth_pos, truth_quat = _compute_truth(sensors, left)
-        truth = _pose_stamped(ts, sec, nanosec, left["frame_id"], truth_pos, truth_quat)
-        writer.write(conns["/lander/apriltag_truth"], t_ns,
-                     ts.serialize_cdr(truth, POSE))
-        print(f"apriltag_truth (left optical -> tag): pos={np.round(truth_pos, 4).tolist()} "
-              f"quat_xyzw={np.round(truth_quat, 4).tolist()}")
+        write_frame(writer, ts, conns, in_dir, sensors, left, right, baseline,
+                    t_ns, sec, nanosec)
     finally:
         writer.close()
 
