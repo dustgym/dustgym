@@ -48,9 +48,17 @@ Chrono authority (same on-disk contract); `[STUB]`/`[TODO]` is named-but-not-imp
   geometry, not Chrono. But Path A is bootstrapped — **PyChrono 10.0.0** runs an `SCMTerrain` rover at
   lunar g and a partial exporter writes the *exact* `INTERFACE.md` format via the frozen `io_fields`, so
   the producer swap is proven end to end, not just asserted (`docs/chrono_bringup_log.md`; §4 #2).
-- **STUB / TODO:** camera custom-projection + Brown-Conrady distortion (a render-only barrel-warp demo
-  exists, not a calibrated intrinsic model), the downstream Robot/ROS2 + SLAM env, and the two-channel
-  evaluation (SLAM pose vs. true pose; observed map vs. true terrain at time t, spec §2/§10).
+- **BRIDGE / DEMO (M1, landed early — the diagram's ROS2 column, now real for the *pose* half):** a
+  containerized **Godot-camera → ROS2 → AprilTag** pose chain (`scripts/ros2_bridge/`,
+  `docs/sensor_bridge_contract.md`) closes the §10 *pose* channel on a real render — camera→tag
+  pose-vs-truth **12.7 mm / 7.15°** on `flat_compact`. Built on it, a **mission-scale spiral demo**
+  (D5 / `out/panels/composite_*.gif`) drives a kinematically-conforming rover out from a fixed-center
+  AprilTag lander on a real 220 m Haworth DEM window, localizing per-frame with a lit/unlit failure A/B.
+  Camera **intrinsics** are now a real calibrated pinhole; only lens **distortion** stays a stub.
+- **STUB / TODO:** calibrated lens distortion (a render-only Brown-Conrady barrel-warp demo exists, not a
+  fitted radial-tangential intrinsic), downstream sensor-noise injection, and the §10 *map* channel
+  (observed map vs. true terrain at time t) + its scoring harness — the *pose* channel is live, the *map*
+  channel is not (spec §2/§10).
 
 ---
 
@@ -171,6 +179,37 @@ Outputs (all 1024×768 unless noted):
 > crater wall terraces and bands under the 5° sun, and the far field shades flat. Both are in
 > `terrain.gd` / `terrain_farfield.gdshader`.
 
+### D5 — mission-scale demo: M1 camera→ROS2→AprilTag bridge + spiral localization battery
+The capstone that closes the §10 **pose** channel on real renders (the diagram's ROS2/SLAM column, made
+real for pose). Two parts, both documented in [`ARTIFACTS.md`](ARTIFACTS.md) and
+[`docs/sensor_bridge_contract.md`](docs/sensor_bridge_contract.md).
+
+**M1 sensor bridge (`scripts/ros2_bridge/`).** The second frozen seam: `sidecar.gd --cameras` writes a
+schema-valid `sensors.json` (real calibrated pinhole intrinsics + 0.100 m stereo extrinsics) + stereo
+PNGs; the `foss_ipex/ros2_bridge:jazzy` container runs `bag_writer.py`→rosbag2 MCAP and `apriltag_ros`,
+and `compare_pose.py` reports camera→tag pose-vs-truth — **12.7 mm / 7.15°** on `flat_compact`. The
+REP-103 **Godot Y-up ↔ ROS Z-up** conversion is solved in one place (`frames.py`, 5/5 unit tests) — the
+classic silent-sign-flip SLAM bug, named→solved.
+
+**Spiral localization battery (`scripts/demo/`).** On a real **220 m Haworth DEM window**, a rover
+**spirals out 80 frames** (16/lap × 5, 15→~105 m) from a fixed-center LM-class lander carrying a 2.5 m
+four-face AprilTag bundle, localizing per-frame off the bundle (container-side detect+PnP →
+`rover_localize`). The rover is a **kinematically-conforming** driven body (`rover.conform_pose`: 4-wheel
+plane-fit pitch/roll + capped clast ride-over, travel-tangent heading) leaving **accumulating
+mass-conserving ruts**; a **top-down LIT/UNLIT** pass (with the live quadtree-LOD overlay) frames the
+whole patch. The failures are the data point: localization holds **22/80 lit vs 45/80 unlit** (aimed
+front-stereo) / **21/80 lit, 47/80 unlit** (travel-tangent side-mono) — a real illumination +
+range/shadow/occlusion A/B. An `instrument_spiral.py` 2 cm-corridor record stays **~21 MB resident vs
+3.99 GB** dense (the §4 LOD payoff). Deliverables (committed, `out/panels/`):
+[`composite_2x2.gif`](godot_sidecar/out/panels/composite_2x2.gif),
+[`composite_3x2.gif`](godot_sidecar/out/panels/composite_3x2.gif), plus
+`position_slam_{lit,unlit}.gif`, `resource.gif`, `failure_breakdown.png`.
+
+> Honesty rails: idealized **noiseless pinhole** (errors are the geometric/subpixel floor + PnP
+> fronto-parallel flips at range, not distortion-inclusive); the rover pose is **kinematic, not
+> force-accurate** (no contact forces/slip — Chrono::Vehicle+SCM is the deferred producer swap). Render
+> egress (`out/cam/`, `out/scenes/`) + the `_driven` scene are gitignored; only the composites/panels ship.
+
 ### Sample scenes (`samples/`, the frozen-contract corpus)
 `flat_compact`, `rolling_hills`, `crater`, `boulder_field`, `crater_boulders` (crater + Golombek boulder
 field together), and two time series: `crater_caveins` (102-frame `t000…t101` rim slump) and `tread_track`
@@ -242,14 +281,14 @@ paper that anchors the eventual fix. Cite by filename in `papers/` (do not bulk-
 | 1 | **Earth/Apollo-era Bekker moduli, no 1g→⅙g correction.** `k_φ` and sinkage exponent `n` use classic Mitchell/Costes fits; the low-g drop is *not* applied, so the surrogate under-predicts lunar sinkage. | Geometry/state-accurate is the bar (forces are engineered small, §9); the correction is a calibration step, not a structural change. Flagged `[CALIB]` in `constants.py`. | §5.2, §10 | `lyasko2010.pdf` |
 | 2 | **Live authority is still the NumPy surrogate; Chrono is bootstrapped, not yet wired in.** Path A is now *executed* — a conda env with **PyChrono 10.0.0** runs an `SCMTerrain` rover at lunar g headless, and a *partial* exporter (`scripts/chrono_scm_export.py`) writes a contract-valid scene via the frozen `io_fields`, proving the drop-in seam. Still papered over: scene generation still uses the surrogate; the exporter leaves `mass_areal`/`density` as honest placeholders (SCM doesn't conserve mass), and the §4.4 hybrid + a real Chrono::Vehicle model (vs. the bare test cylinder) are not done. | §2's single-authority + decoupled-render design made literal: the frozen `INTERFACE.md` contract makes Chrono a producer swap with zero consumer changes — now demonstrated end to end, not just asserted. | §2, §4 | `ascend24-ipex-trl-5-design-overview.pdf`, `docs/chrono_bringup_log.md` |
 | 3 | **Single-pass rover, geometry-only.** Compaction + rut sink + TREAD relabel; multi-pass "paving" emerges by re-applying. **No slip-sinkage / runaway entrapment.** | Static bearing sinkage self-limits in ⅙ g; slip-sinkage runaway (the Spirit failure) is exactly what a real Chrono::Vehicle slip solver would surface — named, not faked. | §6, §9 | `asce-es-2024-isru-pilot-excavator-wheel-testing.pdf`, `lyasko2010.pdf` |
-| 4 | **Quadtree manages render/space LOD, not solve cost.** It now does *live, interaction-keyed* promotion/eviction — leaves promote to fine under the driving rover and evict behind it (`terrain_authority/quadtree.py`, demonstrated over the `tread_track` drive and written per-frame as additive `active_leaves`/`quadtree_nodes` metadata, INTERFACE v1.0.1). But the underlying **physics grid stays uniform-fine**: the whole 256² field is solved every step, so eviction buys LOD/render-budget legibility, not compute savings. | Spec §4's thesis is that space-management + LOD are *keyed to interaction* — now literally true and visible (`viz/out/quadtree_demo.gif`); making eviction actually skip solve work (sparse/active-only stepping) is the optimization follow-on. | §4 | — |
+| 4 | **Quadtree manages render/space LOD, not solve cost.** It now does *live, interaction-keyed* promotion/eviction — leaves promote to fine under the driving rover and evict behind it (`terrain_authority/quadtree.py`, demonstrated over the `tread_track` drive and written per-frame as additive `active_leaves`/`quadtree_nodes` metadata, INTERFACE v1.0.1). But the underlying **physics grid stays uniform-fine**: the whole 256² field is solved every step, so eviction buys LOD/render-budget legibility, not compute savings. | Spec §4's thesis is that space-management + LOD are *keyed to interaction* — now literally true and visible (`viz/out/quadtree_demo.gif`), and the spiral demo (D5) makes the payoff concrete: a 2 cm-corridor record stays **~21 MB resident vs 3.99 GB** for a dense tiling. Making eviction actually skip *solve* work (sparse/active-only stepping) is the optimization follow-on. | §4 | — |
 | 5 | **Ballistic dust is render-only.** GPUParticles3D lofted from disturbed cells, lunar g, no drag — never enters the mass balance. | This is the spec's explicit instruction: no atmosphere → ballistic, not suspended; the lens/coating budget is µg–g against kg, negligible for conservation. Dust lives entirely in the render/sensor layer. | §8 | `2021-ASCEND-Mass-Inference-RASSOR.pdf` (gentle counter-rotating-drum excavation) |
 | 6 | **Camera distortion is a stub.** A Brown-Conrady radial barrel-warp post-process exists, but there's no calibrated custom projection matrix or radial-tangential intrinsic fit. | Demonstrates the post-chain attaches to the real 3D frame; the calibrated intrinsics are a known few-hundred-line follow-on (CARLA gives it natively; here you own it). | §8 | — |
-| 7 | **No SLAM / no two-channel evaluation.** No observed-map-vs-true-terrain or SLAM-pose-vs-true-pose scoring yet. | The ground-truth *producer* side is what this slice proves; D1b renders the exact "true terrain at time t" that evaluation will score against. | §2, §10 | — |
-| 8 | **No ROS2 bridge; Y-up/Z-up TF trap named, not solved.** `INTERFACE.md` §3 documents the Godot Y-up ↔ ROS Z-up (REP-103) mapping but defers it. | Both bridge options (compiled module vs. rosbridge) are third-party/low-bus-factor; out of weekend scope by charter. The trap is named so it isn't a silent bug later. | §11 | — |
+| 7 | **Two-channel eval: only the *pose* channel is live; the *map* channel is unbuilt.** The M1 bridge + spiral demo (D5) read a real SLAM-pose-vs-truth number (12.7 mm / 7.15°; 21–22/80 localized across the 80-frame spiral), but observed-map-vs-true-terrain scoring + a harness do not exist yet. | The ground-truth *producer* side and the pose channel are now proven; D1b renders the exact "true terrain at time t" the *map* channel will score against. | §2, §10 | — |
+| 8 | **ROS2 bridge built (M1); higher-level autonomy not.** A containerized Godot→ROS2→AprilTag pose chain is live — `bag_writer.py`→rosbag2 MCAP, `apriltag_ros` detects id 0, the REP-103 Y-up↔Z-up seam **solved + unit-tested** in `frames.py` (`docs/sensor_bridge_contract.md`). Still absent: `ros2_control`/Nav2 hooks, URDF/SDF import, sensor-noise injection. | The TF trap is now solved, not just named; the looser file/bag seam (charter Q4) was the deliberate M1 choice over a compiled module. | §11 | — |
 | 9 | **Clasts are metadata refs, not carved into mass.** Golombek-SFD boulder field lives in `metadata.clasts`; uncovered clasts become Chrono rigid bodies, not regolith. | Spec §6 explicitly: "rocks are not a soil problem" — rigid-body contact is Chrono-native; don't let rocks drag the design toward DEM. | §6 | `rock-size-freq_abstract.txt` (Golombek 2003) |
 | 10 | **Ice/volatile field optional and inert.** Schema slot exists; no sublimation/frost optics or regime-flag switching modeled. | PSR effects are throttled hard (insulating regolith, sub-mm desiccated lag crust → no dramatic venting) and are an *optics* effect, gated on a charter PSR flag. | §5.2, §8 | `geosciences-15-00207-v3.pdf`, `FULLTEXT01.pdf` |
-| 11 | **Rover is the full EZ-RASSOR assembled in a *static* pose.** Chassis + 4 wheels + 2 arms + 2 bucket drums are placed from the xacro kinematic tree (correct joint origins/axes, Z-up→Y-up, mesh-only 0.35 scale), but joint angles are **fixed constants — not driven by physics/Chrono state**, and ground-snap samples terrain height at **one point** (no per-wheel terrain following). Counter-rotation is noted as a control-layer convention (opposite-sign drum commands), not modeled. | The asset + kinematic-assembly path is fully proven and yields a recognizable articulated RASSOR for renders; live articulation belongs to the Chrono::Vehicle joint state (row #2), and per-wheel contact to the deformable-terrain coupling. | §2, §11 | `docs/ezrassor_assets.md` |
+| 11 | **Rover joints are *static*; body placement is kinematic, not force-driven.** Chassis + 4 wheels + 2 arms + 2 bucket drums are placed from the xacro kinematic tree (correct joint origins/axes, Z-up→Y-up, mesh-only 0.35 scale), but joint angles are **fixed constants — not driven by physics/Chrono state**. The single-point ground-snap is upgraded in the spiral demo (D5) to a **kinematic 4-wheel terrain conform** (`rover.conform_pose` seats the body on its four wheels + tilts pitch/roll with the surface + capped clast ride-over, travel-tangent heading) — but it stays kinematic: **no contact forces / slip-sinkage**, joints still fixed. Counter-rotation is a control-layer convention (opposite-sign drum commands), not modeled. | The asset + kinematic-assembly path is fully proven and yields a recognizable, terrain-conforming articulated RASSOR for renders; live articulation belongs to the Chrono::Vehicle joint state (row #2), and force-driven per-wheel contact to the deformable-terrain coupling. | §2, §11 | `docs/ezrassor_assets.md` |
 
 ---
 
@@ -303,4 +342,6 @@ See [`docs/chrono_integration.md`](docs/chrono_integration.md) and
 
 ---
 
-*Authority contract frozen 2026-05-30 (`INTERFACE.md` v1.0). Spec: [`ipex-terrain-sim-spec.md`](ipex-terrain-sim-spec.md).*
+*Authority contract frozen 2026-05-30 (`INTERFACE.md` v1.0.2, additive; `schema_version` still `"1.0"`).
+M1 camera→ROS2 seam frozen in [`docs/sensor_bridge_contract.md`](docs/sensor_bridge_contract.md). Spec:
+[`ipex-terrain-sim-spec.md`](ipex-terrain-sim-spec.md).*

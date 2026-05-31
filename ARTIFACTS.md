@@ -199,6 +199,65 @@ real near-fronto-parallel PnP ambiguity, not a bridge bug. Landed in commit `573
 | `out/ros/fid_far.png` | 34 KB | fiducial highlight at far range — detects id 0 with pose axes + range | GREEN |
 | `out/ros/crater_drop_hero.png` | 263 KB | hero render: the articulated EZ-RASSOR dropped into a crater bowl, grazing-sun shadows on Hapke regolith, AprilTag lander glinting in the distance | GREEN |
 
+## Spiral demo battery — the "larger, longer" Haworth visualization (commits `c560981` → `54e1ef6` → `3a3aef3`)
+
+*Added 2026-05-31 from the spiral-demo commit chain. The battery was executed at build time — the
+detection counts and resident-memory figures below are from those runs — and is recorded here **from
+the commits, not re-executed for this manifest update**. Render egress (`out/cam/`, `out/scenes/`) and
+the built `_driven` scene are gitignored (regenerable); the `out/panels/` GIFs/PNGs are the committed
+deliverables.*
+
+The capstone demo stacks the whole pipeline on a **real Haworth DEM window** (~220 m): a fixed-center
+LM-class lander carries a **2.5 m four-face AprilTag bundle** (`lander_bundle.gd`, scaled 0.15→2.5 m off
+`BODY_SIZE`/`TAG_PROUD_M`/`TAG_SIZE_M` so `size_m` + `pose_in_lander` stay parametric — ~100 m
+theoretical range at the ideal 1024 px / 74° pinhole), and a rover **spirals out 80 frames** (16/lap ×
+5 laps, 15→~105 m) localizing off the bundle. The failures — range, grazing-sun shadow, self/terrain
+occlusion — are the data point.
+
+**Rover-physics pass (`3a3aef3`).** Replaces the single-point ground-snap with a **kinematic 4-wheel
+terrain conform** (`rover.conform_pose`: a macro-slope stencil that stays stable on the coarse 0.5 m DEM
++ capped clast ride-over → the rover seats on its four wheels and tilts pitch/roll with the surface).
+Heading is **travel-tangent** (front faces the next spiral waypoint, not the lander); the **side mono**
+(`left_mono`) acquires the fiducial while the front stereo looks along travel. `drive_spiral.py`
+(producer) emits a per-frame `rover_pose.json` + carves **four separate mass-conserving ruts** into a
+`<scene>_driven` heightmap; the compaction trail accumulates as **polyline markup** on both top-downs
+(the 2 cm grouser cleats are sub-pixel at any rover+origin-in-frame zoom, so they can't render as
+in-engine terrain features). Still **kinematic** — no contact forces / slip (Chrono::Vehicle+SCM remains
+the deferred producer swap), joints still fixed constants. `terrain_authority.tests` adds a 19th check
+(`test_conform_pose_flat_ramp_clast`: flat→upright, ramp→pitch=atan(slope), clast→capped ride-over tilt)
+→ **19/19**.
+
+**Top-down render mode (`54e1ef6`).** A net-new near-overhead pass frames the whole 220 m patch: a
+**LIT** variant (grazing sun 7° / 135° az recovered from `sensors.json`, `--exposure 6` → genuine relief
++ long boulder/crater shadows) and an **UNLIT** variant (Lambert, shadows-off, spherical clasts, the
+in-engine **quadtree-LOD overlay** fed per-frame from `qt_leaves.json` — the fine LOD cells track the
+rover down the corridor). Terrain-cull fix: a perspective near-overhead camera + `_uncull_terrain()`
+extra cull margin defeats the vertex-shader-displacement AABB mismatch that frustum-culled the far-field
+plane (terrain brightness 11 → 138).
+
+**Detection / localization.** `detect_spiral.py` runs container-side detect+PnP (IPPE_SQUARE) →
+`rover_localize` back-out per face, with the solvePnP↔apriltag_ros 180°-about-X convention fix
+(`_R_X180`; established by `_diag_pose.py`). Side-mono detection on the travel-tangent run: **21/80 lit,
+47/80 unlit** — matches the old aimed front-stereo (`c560981`: **22/80 lit, 45/80 unlit**), confirming
+the "face travel, glimpse the lander with the side cam" honesty holds the localization rate.
+
+**Resource record.** `instrument_spiral.py` drives a 2 cm-corridor `TileMosaic` + `QuadtreeTracker`
+along the same path → `resource.json`: an **O(corridor) resident ~21 MB** record vs **3.99 GB** for a
+dense 2 cm tiling of the whole patch — the concrete §4 LOD payoff made legible.
+
+| Committed deliverable (`out/panels/`) | Size | Description | Status |
+|---|---|---|---|
+| `failure_breakdown.png` | 34 KB | LIT 22/80 vs UNLIT 45/80 AprilTag-localization rate — the illumination A/B at 100 m scale, attributed by range / shadow / occlusion | GREEN |
+| `position_slam_lit.gif` / `position_slam_unlit.gif` | 599 KB / 728 KB | truth vs AprilTag SLAM, lander-centered, quadrants shaded by visible face | GREEN |
+| `resource.gif` | 328 KB | ~21 MB resident corridor record vs 3.99 GB dense-2 cm | GREEN |
+| `composite_2x2.gif` | 37.1 MB | lit/unlit top-down + position-SLAM + resource, synced on the 80-frame spiral | GREEN |
+| `composite_3x2.gif` | 42.6 MB | + side-mono rover-cam + stacked LIT-vs-UNLIT failure | GREEN |
+
+Honesty rails preserved across the battery: idealized **noiseless pinhole** (errors are the
+geometric/subpixel floor + PnP fronto-parallel flips at range, **not** distortion-inclusive); the rover
+pose is **kinematic, not force-accurate**; the `_driven` scene + `out/cam/` egress are gitignored
+(regenerable from the committed `.gd`/`.py`).
+
 ## Chrono Path A (executed; separate conda env — `docs/chrono_bringup_log.md`)
 
 | Item | Result | Status |
@@ -225,9 +284,13 @@ real near-fronto-parallel PnP ambiguity, not a bridge bug. Landed in commit `573
    float64 invariant. The `.rf32` contract stores `<f4`, so recomputing mass from the saved
    rasters shows float32 storage quantization (~1e-7 relative) — storage precision, not a
    conservation error. (The in-memory refine/coarsen round-trip is bit-exact; §6.1.)
-2. **Rover is a static pose** (joints are fixed constants, not physics-driven; single-point
-   ground-snap) — README §4 #11. In the `--sequence` fly-through it is placed at `rover_rc` and
-   yawed along the path heading (forward = local +X; yaw = `atan2(-dz, dx)`).
+2. **Rover joints are static** (fixed constants, not physics-driven) — README §4 #11. In the
+   `--sequence` fly-through it is placed at `rover_rc` and yawed along the path heading (forward =
+   local +X; yaw = `atan2(-dz, dx)`). The spiral demo (`3a3aef3`) **upgrades the body placement** from
+   single-point ground-snap to a **kinematic 4-wheel terrain conform** (`rover.conform_pose` seats it on
+   its four wheels and tilts pitch/roll with the surface + capped clast ride-over, travel-tangent
+   heading) — but it stays **kinematic**: no contact forces, no slip-sinkage, and the joints are still
+   fixed constants. Chrono::Vehicle+SCM is the deferred producer swap.
 3. **`tread_track_4wheel`'s four visually-separate ruts** are clearest on a pivot/sharp turn; a
    gentle drive sweeps the fore/aft wheels into two merged bands (physically correct).
 4. **Quadtree manages render/space LOD, not solve cost** (the physics grid is still uniform-fine);
