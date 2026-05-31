@@ -54,7 +54,7 @@ uniform float density_lo = 1170.0;
 uniform float density_hi = 1456.0;
 
 // Base regolith albedo (mare-ish mid grey; spec §8 dusty surface).
-uniform vec3 base_albedo : source_color = vec3(0.46, 0.43, 0.40);
+uniform vec3 base_albedo : source_color = vec3(0.45, 0.44, 0.43);
 
 // Macro albedo mottle (render_fidelity_spec.md §8 "exposed-sublayer albedo"; #2). A
 // low-frequency value-noise variation applied to ALL states incl. VIRGIN so undisturbed

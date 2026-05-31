@@ -16,7 +16,7 @@ render_mode specular_disabled;
 uniform sampler2D height_lowres : filter_linear;   // R = elevation (m), decimated
 // Aligned with terrain.gdshader's base_albedo (#2) so the fine ACTIVE window and this
 // far-field plane don't show a brightness seam where they meet.
-uniform vec3 base_albedo : source_color = vec3(0.46, 0.43, 0.40);
+uniform vec3 base_albedo : source_color = vec3(0.45, 0.44, 0.43);
 uniform float lod_step_m = 0.08;                   // world meters per low-res texel
 
 // Macro albedo mottle (render_fidelity #2), mirrored from terrain.gdshader: the far-field
