@@ -54,3 +54,14 @@ they are recommended additions to the private library.
 | Hapke, B. (1984) *…3. Correction for macroscopic roughness.* Icarus 59, 41–59. | The mean-slope θ̄ roughness/shadowing term S(i,e,g;θ̄) — **deferred** (spec §9), cited as the next refinement. |
 | Sato, H. et al. (2014) *Resolved Hapke parameter maps of the Moon.* JGR Planets 119, 1775–1805 (doi:10.1002/2013JE004580; LROC). | The numeric lunar **mare** parameters used: 2-term Henyey–Greenstein `b=0.26, c=0.08` @643 nm (and the highlands envelope for the optional per-scene override). |
 | Hapke, B. (2012) *Theory of Reflectance and Emittance Spectroscopy*, 2nd ed. Cambridge Univ. Press. | Consolidated reference for the double-HG phase function form and the IMSA bidirectional reflectance. |
+
+## Clast-shape (boulder geometry) reference (cited by author/year; not in the corpus)
+
+The procgen boulder clasts (`godot_sidecar/clast.gdshader` + `sidecar.gd` `_build_clasts`) render with a
+literature-sourced **triaxial (non-spherical) shape** instead of identical spheres. The axial-ratio
+distribution is sourced (not eyeballed); the per-instance triaxial scale is renormalized to geometric-mean
+1.0 so the Golombek-SFD diameter the physics chose is preserved (shape varies, equivalent size does not).
+
+| Reference | What it anchors here |
+|---|---|
+| Tsuchiyama, A. et al. (2022) *Three-dimensional shape distribution of lunar regolith particles collected by the Apollo and Luna programs.* Earth, Planets and Space 74:172 (doi:10.1186/s40623-022-01737-9; X-ray microtomography). | The lunar-fragment **three-axial ratios** used for the clast triaxial scale: whole-sample means S/I=0.770, I/L=0.758, **S/L=0.581** (short/long ≈ 0.58, "more equant than Itokawa / impact fragments"). The render samples b/a∈U(0.65,0.9) (≈I/L) and c/a∈U(0.5,0.75) (≈S/L) bracketing these means, short axis constrained ~vertical (rest face). |

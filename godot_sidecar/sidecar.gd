@@ -832,8 +832,11 @@ func _build_clasts() -> void:
 	var sphere := SphereMesh.new()
 	sphere.radius = 1.0
 	sphere.height = 2.0          # unit sphere; per-instance scale sets radius
-	sphere.radial_segments = 16
-	sphere.rings = 8
+	# Denser tessellation so the per-instance triaxial scale + clast.gdshader's object-space lump/void
+	# displacement read cleanly (no gross faceting at the silhouette under the grazing sun). Cheap for
+	# the ~150 clasts in these scenes; the displacement is what makes them rock-like, not CG spheres.
+	sphere.radial_segments = 24
+	sphere.rings = 16
 	# Hapke / Lommel-Seeliger BRDF, the SAME airless-regolith photometry as the terrain
 	# (clast.gdshader), so the boulders read as lit rock rather than blown-white Lambert blobs.
 	# The --brdf flag (sf.hapke_enabled, set in _build_layers) drives them in lockstep with the
@@ -846,19 +849,83 @@ func _build_clasts() -> void:
 	mat.set_shader_parameter("hapke_B0", sf.hapke_B0)
 	mat.set_shader_parameter("hapke_h", sf.hapke_h)
 	mat.set_shader_parameter("hapke_gain", sf.hapke_gain)
+	# Procgen relief tuned for ANGULAR / faceted rock (spec §9 "Angular, minimally eroded — sharp
+	# grains, no water/wind rounding"). The shader's low-freq displacement is now ridged + terraced
+	# (see clast.gdshader), so we push the amplitudes up enough that the faceting reads clearly at
+	# both a grazing (~5 deg) and a raised (~28 deg) sun without breaking the silhouette: surf_amp
+	# up from 0.15 -> 0.34 (deeper facets), detail_amp up from 0.6 -> 1.1 (crisper micro-fracture).
+	# facet_levels=3 -> a few big flat faces; ridge_mix=0.95 -> nearly fully sharp (angular) crests.
+	mat.set_shader_parameter("surf_amp", 0.34)
+	mat.set_shader_parameter("surf_freq", 1.9)
+	mat.set_shader_parameter("facet_levels", 3.0)
+	mat.set_shader_parameter("ridge_mix", 0.95)
+	mat.set_shader_parameter("detail_amp", 1.1)
+	mat.set_shader_parameter("detail_freq", 16.0)
 	sphere.material = mat
 
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
+	# Per-instance custom data carries (seed, elong, void_gate, 0) to clast.gdshader's
+	# INSTANCE_CUSTOM so its procgen relief is stable per boulder (NOT keyed on VERTEX, which would
+	# swim/repeat). Godot 4.6 requires use_custom_data be set BEFORE instance_count is assigned.
+	mm.use_custom_data = true
 	mm.mesh = sphere
 	mm.instance_count = sf.clasts.size()
+	# Lunar fragments are equant-to-moderately-elongate, NOT spheres: Tsuchiyama et al. (2022, EPS
+	# 74:172) report whole-sample mean three-axial ratios S/I=0.770, I/L=0.758, S/L=0.581 for Apollo/
+	# Luna regolith (papers/CITATIONS.md). We sample a:b:c ~ 1.0 : U(0.65,0.9) : U(0.5,0.75) (b≈I/L,
+	# c≈S/L bands bracketing those means), then RENORMALIZE to geometric-mean 1.0 so the Golombek-SFD
+	# diameter the physics chose (radius_m) is preserved — the shape varies, the equivalent size does
+	# not. The SHORT axis is constrained ~vertical (boulders rest on a flat face; also keeps the
+	# CPU-side buried_frac, which assumes a sphere of radius_m, physically sane).
 	for i in range(sf.clasts.size()):
 		var c: Dictionary = sf.clasts[i]
 		var ctr = c.get("center_m", [0, 0, 0])
 		var rad := float(c.get("radius_m", 0.05))
 		var pos := Vector3(float(ctr[0]), float(ctr[1]), float(ctr[2]))
-		var xf := Transform3D(Basis().scaled(Vector3(rad, rad, rad)), pos)
+
+		# Deterministic per-instance RNG seeded from the clast id (fall back to a center-derived
+		# hash so seeding is stable even if id is missing). Same seed feeds the shader (custom data).
+		var cid: int = int(c.get("id", -1))
+		var seed_src: int = cid
+		if cid < 0:
+			seed_src = hash(pos)            # stable hash of the center vector
+		var rng := RandomNumberGenerator.new()
+		rng.seed = hash(seed_src)           # spread small sequential ids across the RNG space
+
+		# Triaxial axial ratios (a=1 longest, b intermediate, c shortest), lunar-fragment stats.
+		var b_ratio := rng.randf_range(0.65, 0.90)   # b/a  ~ I/L
+		var c_ratio := rng.randf_range(0.50, 0.75)   # c/a  ~ S/L
+		# Renormalize so geo-mean(1, b, c) == 1 -> the equivalent (Golombek SFD) radius is preserved.
+		var gmean := pow(1.0 * b_ratio * c_ratio, 1.0 / 3.0)
+		var sa := 1.0 / gmean                          # along longest axis
+		var sb := b_ratio / gmean                       # along intermediate axis
+		var sc := c_ratio / gmean                       # along shortest axis
+		# elongation proxy for the shader (1 = sphere; higher = more elongate) — informational.
+		var elong := clampf(sa / maxf(sc, 1e-3), 1.0, 4.0)
+
+		# Hashed rest orientation with the SHORT axis (sc) ~vertical. Build a random yaw about Y plus
+		# a small tilt so boulders aren't all axis-aligned, but the short axis stays near +Y (rests on
+		# a flat face). Local axes: X=longest, Z=intermediate, Y=shortest(~up).
+		var yaw := rng.randf_range(0.0, TAU)
+		var tilt := rng.randf_range(-0.20, 0.20)       # ~+/-11.5 deg off vertical
+		var tilt_dir := rng.randf_range(0.0, TAU)
+		var rot := Basis(Vector3.UP, yaw)
+		var tilt_axis := Vector3(cos(tilt_dir), 0.0, sin(tilt_dir))
+		rot = Basis(tilt_axis, tilt) * rot
+
+		# Compose: rotate, then scale per-axis by radius * axial ratio. X<-sa, Y<-sc, Z<-sb so the
+		# short axis sits on local Y (~vertical after the small tilt).
+		var basis := rot.scaled(Vector3(rad * sa, rad * sc, rad * sb))
+		var xf := Transform3D(basis, pos)
 		mm.set_instance_transform(i, xf)
+
+		# Per-instance custom data for clast.gdshader: stable seed, elongation, and a void/concavity
+		# gate (~35% of clasts carry a spall scar). Seed mapped to a bounded float so the shader hash
+		# is well-conditioned; r is deterministic from cid via the same rng.
+		var seed_f := float(absi(hash(seed_src)) % 100000) / 100000.0
+		var void_gate := 1.0 if rng.randf() < 0.35 else 0.0
+		mm.set_instance_custom_data(i, Color(seed_f, elong, void_gate, 0.0))
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	add_child(mmi)
