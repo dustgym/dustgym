@@ -66,3 +66,9 @@ samples/tread_track_4wheel_1cm/t*/
 # `render.sh -- --sequence ...`. Commit only the assembled quadtree_flythrough.gif (the
 # deliverable); the individual frames are heavy at 1080p and regenerable.
 godot_sidecar/out/quadtree_flythrough_*.png
+
+# ── M0 multi-camera feasibility-probe outputs (scratch, regenerable) ──
+# Per-camera frames + contact sheet from `sidecar.gd --probe-multicam`; the probe just proves
+# multi-SubViewport headless capture works, so its PNGs are scratch (rebuild with the flag).
+godot_sidecar/out/probe_cam_*.png
+godot_sidecar/out/probe_multicam_sheet.png

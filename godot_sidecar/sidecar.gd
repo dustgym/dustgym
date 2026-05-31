@@ -109,6 +109,12 @@ var _exposure := 1.2
 # the airless-regolith BRDF); --brdf lambert flips it to the Lambert baseline for the A/B render.
 var _brdf_hapke := true
 
+# M0 SLAM-rig feasibility probe (--probe-multicam). When true, build the scene once and capture it
+# from SEVERAL Camera3Ds via shared-World3D SubViewports, saving each independently — the mechanism
+# the 8-camera rover rig (front/rear stereo, side mono, drum cams) will use. Retires the risk that
+# multi-SubViewport capture works headless under xvfb+Vulkan and yields INDEPENDENT frames.
+var _probe_multicam := false
+
 var sf                       # StateFields instance (preloaded script)
 var _cam: Camera3D
 
@@ -148,8 +154,13 @@ func _ready() -> void:
 		get_tree().quit(3); return
 
 	_setup_environment()
-	_setup_camera()
 	_build_layers()
+
+	if _probe_multicam:
+		await _probe_multicam_capture()
+		get_tree().quit(0); return
+
+	_setup_camera()
 
 	await _render_to(_out_path)
 	print("sidecar: wrote ", ProjectSettings.globalize_path(_out_path),
@@ -396,6 +407,8 @@ func _parse_args() -> void:
 				i += 1; _exposure = float(args[i])
 			"--brdf":
 				i += 1; _brdf_hapke = (String(args[i]).strip_edges().to_lower() != "lambert")
+			"--probe-multicam":
+				_probe_multicam = true
 			_:
 				push_warning("sidecar: unknown arg '%s'" % a)
 		i += 1
@@ -464,6 +477,57 @@ func _setup_camera() -> void:
 		_cam_pos = Vector3(cx, maxf(ext.x, ext.y) * 0.55, cz + ext.y * 0.9)
 		_cam_target = Vector3(cx, sf.height_range.x, cz)
 	_cam.look_at_from_position(_cam_pos, _cam_target, Vector3.UP)
+
+# ---------------------------------------------------------------------------
+# M0 — multi-SubViewport headless-capture feasibility probe (--probe-multicam).
+# The scene geometry has already been built into the MAIN window's World3D by
+# _build_layers(). Here we render that SAME world from several Camera3Ds, each in
+# its own SubViewport that SHARES the world (sv.world_3d = main world), and save
+# each SubViewport's texture independently. This is exactly the 8-camera rover-rig
+# mechanism (M1): one scene, many cameras, many independent frames per render.
+func _probe_multicam_capture() -> void:
+	var world := get_viewport().world_3d
+	var ext: Vector2 = sf.extent_m()
+	var cx: float = sf.world_min.x + ext.x * 0.5
+	var cz: float = sf.world_min.y + ext.y * 0.5
+	var look := Vector3(cx, sf.height_range.x, cz)
+	var span: float = maxf(ext.x, ext.y)
+	# Four deliberately-distinct viewpoints — opposing obliques + a side + a top-down —
+	# so independence is unambiguous (front vs rear must differ; top is clearly not either).
+	var specs := [
+		{"name": "front", "pos": Vector3(cx, span * 0.55, cz + ext.y * 0.9), "up": Vector3.UP},
+		{"name": "rear",  "pos": Vector3(cx, span * 0.55, cz - ext.y * 0.9), "up": Vector3.UP},
+		{"name": "left",  "pos": Vector3(cx - ext.x * 0.9, span * 0.45, cz), "up": Vector3.UP},
+		{"name": "top",   "pos": Vector3(cx, span * 1.3, cz),                "up": Vector3(0, 0, -1)},
+	]
+	var probe_size := Vector2i(640, 480)
+	var subs: Array = []
+	for s in specs:
+		var sv := SubViewport.new()
+		sv.size = probe_size
+		sv.world_3d = world                                       # SHARE the built scene
+		sv.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		sv.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+		add_child(sv)
+		var cam := Camera3D.new()
+		cam.fov = 55.0
+		cam.near = 0.02
+		cam.far = 100.0
+		sv.add_child(cam)
+		cam.look_at_from_position(s["pos"], look, s["up"])
+		cam.current = true                                        # active cam for THIS subviewport
+		subs.append({"sv": sv, "name": String(s["name"])})
+	# Let the subviewports render a few times (first frame can sample a stale buffer).
+	for _w in range(3):
+		await RenderingServer.frame_post_draw
+	for e in subs:
+		var img: Image = e["sv"].get_texture().get_image()
+		var path := "res://out/probe_cam_%s.png" % e["name"]
+		var err := img.save_png(path)
+		print("sidecar: probe cam '%s' -> %s (%dx%d) err=%d" % [
+			e["name"], ProjectSettings.globalize_path(path),
+			img.get_width(), img.get_height(), err])
+	print("sidecar: --probe-multicam wrote %d independent SubViewport frames" % subs.size())
 
 # ---------------------------------------------------------------------------
 func _build_layers() -> void:
