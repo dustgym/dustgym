@@ -35,6 +35,25 @@ identifiers so adding them later is additive (no contract break).
   **center**, with the lander +X axis = the tag's outward normal (pointing toward the rover start). So
   `apriltag.pose_in_lander` is **identity** for M1. (M3: origin moves to the lander body center with
   per-face offsets; §4.)
+- **Tag frame = apriltag (pnp) convention (the orientation seam).** The `lander` frame above is a
+  *placement* frame (+X = outward normal toward the rover, +Y = up). The DETECTOR (`apriltag_ros`,
+  christianrauch 3.x) reports a tag frame whose origin is the tag center but whose AXES follow the
+  pose-estimator. We use the **`pnp`** estimator (`tags_36h11.yaml: pose_estimation_method: "pnp"` — raw
+  `cv::solvePnP`, which does NOT apply the `homography` estimator's "swap x/y, invert z" fix-up). The M1
+  integration pins this build's convention empirically: a near-fronto-parallel tag reads
+  `q_xyzw ≈ [0.998, 0.001, 0.007, −0.062]` in the optical frame (≈ a 180° rotation about optical +X), i.e.
+  **+X = image-right (optical +X), +Y = image-UP (optical −Y), +Z = OUT of the tag toward the camera**
+  (the outward normal). (Note: the often-quoted "+Z into the tag" applies to the `homography` estimator,
+  which we are not using.) These two frames share an origin (pose_in_lander identity) but differ by a
+  **fixed rotation** independent of the camera viewpoint, so C1's `/lander/apriltag_truth` MUST relabel the
+  tag *orientation* into the detector convention — identity `pose_in_lander` does NOT make the orientation
+  agree. The fixed lander→tag rotation (columns = detector tag axes in lander coords) is **`tag+X =
+  lander+Y`, `tag+Y = lander+Z`, `tag+Z = lander+X`** (a 120° cyclic axis-permutation,
+  `frames.R_LANDER_TAG`): `tag+Z = +lander+X` is the outward normal; the in-plane (X/Y) labelling follows
+  the QuadMesh's rendered texture orientation (sidecar.gd `_build_lander`) and is pinned by the
+  fronto-parallel reading. C1 applies this in `bag_writer._compute_truth` by right-multiplying the tag's
+  own-frame transform; the TRANSLATION (tag center == lander origin) is untouched. (M3 per-face tags each
+  carry this same relabel composed with their `pose_in_lander`.)
 
 ---
 
