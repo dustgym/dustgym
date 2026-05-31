@@ -74,6 +74,39 @@ def _is_pow2(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
 
 
+# ---------------------------------------------------------------------------
+# ADDITIVE helper (Lane C / L0 contract §5): pad a base side length to the next
+# power of two so the 10 km @ 5 m base (2000 cells) or @ 1 m (10000 cells) can be
+# fed to ``build_quadtree`` (which REQUIRES a power-of-two field_size, :134).
+# This does NOT change build_quadtree or any existing function — it only computes
+# the padded side a caller would build the tree over (the live grid stays a window
+# inside that padded extent; cells past the real data are coarse leaves never
+# refined). Pure / dependency-free.
+# ---------------------------------------------------------------------------
+
+def quadtree_pad_pow2(n: int) -> int:
+    """Smallest power of two ``>= n`` (e.g. 2000 -> 2048, 10000 -> 16384, 256 -> 256).
+
+    The interaction-keyed quadtree (``build_quadtree``) requires ``field_size`` to be a
+    power of two so the tree bottoms out cleanly at ``min_leaf`` (:134-139). A real DEM base
+    is sized to the data (2000 cells for 10 km @ 5 m, 10000 for @ 1 m), which is NOT a power
+    of two, so a caller pads the tree extent up to ``quadtree_pad_pow2(side)`` and treats the
+    live data as a window inside it (the padding cells stay coarse ROOT-side leaves that are
+    never promoted because the rover never reaches them).
+
+    Exact powers of two are returned unchanged (idempotent). Raises ``ValueError`` for
+    ``n < 1`` (a non-positive side has no power-of-two cover).
+    """
+    if not isinstance(n, (int, np.integer)) or n < 1:
+        raise ValueError(f"quadtree_pad_pow2: n must be a positive integer, got {n!r}")
+    n = int(n)
+    if _is_pow2(n):
+        return n
+    # Next power of two strictly above n: 1 << ceil(log2(n)). bit_length gives floor(log2)+1
+    # for any n>0, which for a non-pow2 n is exactly ceil(log2(n)).
+    return 1 << (n - 1).bit_length()
+
+
 @dataclass
 class QuadtreeResult:
     """Per-rover-position quadtree snapshot (all boxes are [r0, c0, r1, c1] half-open)."""
