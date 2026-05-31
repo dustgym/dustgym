@@ -1,0 +1,26 @@
+# apriltag_ros (christianrauch/apriltag_ros, ros-jazzy-apriltag-ros) detector config.
+# sensor_bridge_contract.md §1: family tag36h11, M1 tag id=0, size 0.150 m (black-border square).
+#
+# NOTE on `family`: apriltag_ros names the tag36h11 family "36h11" (the "tag" prefix is dropped
+# in this parameter). The contract's "tag36h11" and this "36h11" are the same family; the /tf
+# child frame the detector emits is "tag36h11:0".
+/**:                       # apply to the node whatever it is named/remapped to
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.150            # default tag edge (m) = the black-border square (contract §1)
+    max_hamming: 0
+    profile: false
+    pose_estimation_method: "pnp"
+    detector:
+      threads: 2           # int
+      decimate: 1.0        # double; 1.0 = no decimation (fixture tag is large & crisp)
+      blur: 0.0            # double
+      refine: true         # bool (apriltag_ros 3.3.0 declares this Boolean, NOT integer)
+      sharpening: 0.25     # double
+      debug: false         # bool
+    # M1 tracks a single known tag; pinning id 0 keeps spurious detections out.
+    tag:
+      ids: [0]
+      frames: ["tag36h11:0"]
+      sizes: [0.150]

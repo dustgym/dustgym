@@ -1,0 +1,7 @@
+# Built rosbag2 MCAPs (regenerable from fixtures/ or the G1 egress via bag_writer.py).
+bags/
+# Python bytecode.
+__pycache__/
+*.pyc
+# Local docker scratch.
+*.log
