@@ -72,3 +72,9 @@ godot_sidecar/out/quadtree_flythrough_*.png
 # multi-SubViewport headless capture works, so its PNGs are scratch (rebuild with the flag).
 godot_sidecar/out/probe_cam_*.png
 godot_sidecar/out/probe_multicam_sheet.png
+
+# ── M1 front-stereo camera egress (render output, regenerable) ──
+# `sidecar.gd --cameras` writes out/cam/<scene>/<NNN>/{front_left,front_right}.png + sensors.json
+# (sensor_bridge_contract §2.1, "under godot_sidecar/out/, git-ignored"). All regenerable from the
+# committed .gd source; sensors.json + PNGs are render output, NOT committed.
+godot_sidecar/out/cam/
