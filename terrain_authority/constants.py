@@ -224,17 +224,29 @@ STATE_NAMES = ["VIRGIN", "TREAD", "EXCAVATED", "SPOIL", "COMPACTED_BERM"]
 #: DO NOT extrapolate below ~10 m (the sub-DEM band is governed by the equilibrium
 #: cap eq_sfd(D) below, NOT by extrapolating this polynomial).
 #:
-#: [CALIB] — primary table (Ivanov/Neukum/Hartmann 2001, Space Sci. Rev. 96:55) NOT
-#: directly verified here: this vector is TRANSCRIBED from the MintonGroup/cratermaker
-#: project's encoding of the Neukum PF. KNOWN DISCREPANCY: the linear coefficient a1
-#: appears here as -3.557528 (10**a0-anchored set) whereas some transcriptions list
-#: the standalone constant term implying 8.25e-4 vs the paper's ~8.38e-4 normalization
-#: at D=1 km — a ~1.5% normalization difference to RECONCILE against the primary table
-#: before any quantitative reliance. cratermaker's LICENSE must be verified (MIT/BSD)
-#: before copying numerics verbatim into CC0 code; the numbers themselves are published
-#: scientific facts (not copyrightable) and are cited Neukum et al. 2001 by author/year.
+#: [CALIB] — the PRIMARY table (Ivanov/Neukum/Hartmann 2001, Space Sci. Rev. 96:55) is
+#: NOT directly verified here (it is absent from papers/): this vector is TRANSCRIBED from
+#: the MintonGroup/cratermaker encoding of the Neukum PF and cross-checked numerically.
+#: The three numbers that have caused confusion in earlier notes are DISTINCT quantities,
+#: NOT one "normalization":
+#:   * a0 = -3.0876  ->  10**a0 = 8.173e-4 craters km^-2 Gyr^-1 at D=1 km. This IS the
+#:     canonical Neukum-2001 production-function constant term.
+#:   * 8.38e-4 is the LINEAR-in-time coefficient of the CHRONOLOGY N(1,t) (see
+#:     neukum_chronology() below) — a DIFFERENT function, not a0's normalization.
+#:   * 8.25e-4 is the a10 polynomial SHAPE coefficient (it multiplies (log10 D_km)^10),
+#:     not a normalization at all.
+#: There IS one small, real INTERNAL mismatch: the production poly anchors the 1-km/1-Gyr
+#: level at 8.173e-4 while neukum_chronology(1) gives 8.380e-4 (~2.47%). It is within model
+#: uncertainty and does NOT move the sub-10 m band the sim actually uses — that band is
+#: governed by the eq_sfd equilibrium cap below, not by extrapolating this polynomial — so
+#: it is left as-is and documented rather than force-reconciled.
+#: LICENSE: cratermaker is GPL-3.0 (verified 2026-05-31 at github.com/MintonGroup/cratermaker).
+#: GPL-3.0 is copyleft, so NO cratermaker CODE may be copied into this CC0 repo; only the
+#: numeric coefficients are reused — uncopyrightable scientific facts, cited to Neukum/
+#: Ivanov/Hartmann 2001 by author/year. No cratermaker code is vendored or copied.
 NEUKUM_SFD_COEF = (
-    -3.0876,    # a0  (10**a0 ~ 8.17e-4 craters km^-2 Gyr^-1 at D=1 km; cf. paper 8.38e-4)
+    -3.0876,    # a0  (10**a0 = 8.173e-4 craters km^-2 Gyr^-1 at D=1 km = production-poly
+                #      constant term; this is NOT the chronology's 8.38e-4 — see note above)
     -3.557528,  # a1
     0.781027,   # a2
     1.021521,   # a3
@@ -244,7 +256,7 @@ NEUKUM_SFD_COEF = (
     0.086850,   # a7
     -0.005874,  # a8
     -0.006809,  # a9
-    8.25e-4,    # a10  (the 8.25e-4-vs-8.38e-4 note above lives on a0's normalization)
+    8.25e-4,    # a10  (a polynomial SHAPE coefficient on (log10 D_km)^10 — NOT a normalization)
     5.54e-5,    # a11
 )
 
