@@ -1,0 +1,26 @@
+# foss_ipex Track C1 -- ROS2 bridge container. sensor_bridge_contract.md §2-§5.
+#
+# Mounts (relative to this file at scripts/ros2_bridge/):
+#   ../../godot_sidecar/out  ->  /data/out   (READ-ONLY) -- the G1 camera egress (out/cam/...).
+#                                            Absent until G1 lands; the in-repo fixtures/ under
+#                                            /bridge are the stand-in for M1 acceptance.
+#   ./bags                   ->  /bridge/bags (READ-WRITE) -- written rosbag2 MCAPs (gitignored).
+#
+# Usage (see README.md for the full M1 recipe):
+#   docker compose build
+#   docker compose run --rm bridge bash      # interactive
+#   docker compose run --rm bridge python3 test_frames.py
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: foss_ipex/ros2_bridge:jazzy
+    working_dir: /bridge
+    volumes:
+      - ../../godot_sidecar/out:/data/out:ro
+      - ./bags:/bridge/bags:rw
+    # apriltag detector + rosbag CLI are CPU-only; no GPU/device needs for M1.
+    stdin_open: true
+    tty: true
+    command: ["bash"]
