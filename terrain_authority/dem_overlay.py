@@ -44,6 +44,7 @@ from typing import Callable
 
 import numpy as np
 
+from . import constants as K
 from . import refinement
 from .column_state import ColumnState
 
@@ -365,3 +366,220 @@ def overlay_residual(base_tile_fields: ColumnState | dict[str, np.ndarray], k: i
     fine["density"] = fine_density
     fine["datum"] = fine_datum
     return fine
+
+
+# ---------------------------------------------------------------------------
+# 4. make_crater_feature_fn — Wave-2 crater generator adapter (L0 §4 + §8).
+# ---------------------------------------------------------------------------
+
+def make_crater_feature_fn(*, dem_effres_m: float, d_min_m: float = 1.0,
+                           age_gyr: float = K.NEUKUM_SURFACE_AGE_GYR,
+                           base_cell_class: int = 0) -> Callable:
+    """Build a ``feature_fn`` that carves a sub-DEM crater population into the fine residual.
+
+    This is the Wave-2 adapter that bridges the two signature shapes the integration seam
+    (docs/dem_terrain_contract.md §8 "W2-CRATERS") calls out:
+
+      * ``procgen_csfd.populate_craters(cs, dem_effres_m, ...)`` carves IN-PLACE on a
+        ``ColumnState`` (``procgen_csfd.py:69``) and returns the carved grid;
+      * the FROZEN overlay hook expects ``feature_fn(residual_h, world_x0, world_y0, cell_m,
+        *, params, world_seed) -> array`` (see ``_apply_feature_hook``), an ADD onto the fine
+        residual HEIGHT array, sampled on the GLOBAL lattice.
+
+    The returned closure wraps the residual array as a TRANSIENT ``ColumnState`` at the fine
+    ``cell_m`` whose ``derive_height()`` IS the residual (datum=0, density=1, mass_areal=residual
+    -> ``height = 0 + residual/1 == residual``), derives a per-tile seed via ``coord_seed`` of
+    the tile's GLOBAL origin (explore-anywhere determinism, §3 — the same world tile re-rolls
+    bit-identically regardless of render order), runs ``populate_craters`` (Neukum production
+    capped at Xiao & Werner equilibrium, sub-DEM de-confliction), and returns the carved
+    ``derive_height()``.
+
+    It deliberately does NOT zero-mean: ``overlay_residual``/``_apply_feature_hook`` apply the
+    per-base-cell zero-mean projection AFTER the hook, so craters spanning a base-cell boundary
+    stay continuous and the ``coarsen(fine)==base`` resolution-bridge invariant survives
+    (INTERFACE.md §5.3; eval §5 step 3). ``populate_craters`` is itself mass-conserving
+    (``carve_crater`` backs every surface edit out to ``mass_areal``), so the transient column's
+    ``derive_height()`` stays the authoritative carved surface.
+
+    Parameters
+    ----------
+    dem_effres_m : float
+        DEM effective resolution [m] (PGDA Product-90 LDEM_EFFRES). Craters at/above it are
+        ALREADY in the base heightmap; ``populate_craters`` synthesizes strictly below
+        ``dem_effres_m / LDEM_EFFRES_NYQUIST_MULT`` (de-confliction).
+    d_min_m : float
+        Smallest synthesized crater diameter [m] (default 1.0).
+    age_gyr : float
+        Surface model age for the Neukum production curve (default ``K.NEUKUM_SURFACE_AGE_GYR``).
+    base_cell_class : int
+        Resolution class forwarded to ``coord_seed`` (0 = default/overlay layer; a single layer
+        sampled at 5 m vs 1 m base uses the SAME class so it agrees — see ``procgen_seed.py``).
+
+    Returns
+    -------
+    callable
+        ``feature_fn(residual_h, world_x0, world_y0, cell_m, *, params, world_seed) -> np.ndarray``
+        matching the frozen hook signature, returning a float64 array of ``residual_h``'s shape.
+    """
+    from . import procgen_csfd
+    from . import procgen_seed
+
+    def _crater_feature_fn(residual_h: np.ndarray, world_x0: float, world_y0: float,
+                           cell_m: float, *, params: dict, world_seed: int) -> np.ndarray:
+        residual_h = np.asarray(residual_h, dtype=np.float64)
+        H, W = residual_h.shape
+
+        # Wrap the residual as a transient ColumnState at the FINE cell size so the crater
+        # generator's row/col <-> metre mapping (INTERFACE.md §2) matches this tile's geometry.
+        # datum=0, density=1, mass_areal=residual -> derive_height() == residual exactly, so we
+        # carve directly on the residual height and read it straight back out. mass_areal may go
+        # negative under the residual; that is fine for a transient (it never round-trips through
+        # set_height_via_mass here — carve_crater edits the surface then re-derives mass at the
+        # local density=1, an exact pass-through).
+        cs = ColumnState(width=W, height=H, cell_m=float(cell_m),
+                         mass_areal=residual_h.copy(),
+                         density=np.ones((H, W), dtype=np.float64),
+                         datum=np.zeros((H, W), dtype=np.float64))
+
+        # Per-TILE seed: a pure function of this tile's GLOBAL origin (not render order), so
+        # exploring or re-visiting the same world tile yields byte-identical craters (§3).
+        tile_seed = procgen_seed.coord_seed(world_x0, world_y0, octave=0,
+                                            base_cell_class=base_cell_class,
+                                            world_seed=world_seed)
+
+        procgen_csfd.populate_craters(cs, dem_effres_m, d_min_m=d_min_m,
+                                      age_gyr=age_gyr, seed=tile_seed)
+
+        # Carved surface (datum=0, density=1 -> height IS the augmented residual). NOT zero-meaned
+        # here: overlay_residual zero-means per base cell AFTER this hook returns.
+        return cs.derive_height()
+
+    return _crater_feature_fn
+
+
+# ---------------------------------------------------------------------------
+# Self-test (run: python -m terrain_authority.dem_overlay).
+#   (a) the crater feature_fn matches the frozen hook signature and returns an array of
+#       residual_h's shape;
+#   (b) DETERMINISM: same (world_x0, world_y0, world_seed) -> byte-identical output; a
+#       different world_x0 -> different (explore-anywhere coord-hashed seed, §3);
+#   (c) CONSERVATION: coarsen(overlay_residual(base, k, feature_fn=craters)) == the existing
+#       non-uniform base for a couple of k (density/datum/state_label bit-exact, mass to the
+#       float64 floor) — craters do NOT break the resolution-bridge invariant (INTERFACE.md §5.3);
+#   (d) the feature actually CARVED something (per-base-cell block variance increased vs no
+#       feature_fn at the same params/seed).
+# Prints PASS/FAIL per check and "N/N checks passed."; exits nonzero on any failure.
+# ---------------------------------------------------------------------------
+
+def _self_test() -> int:
+    import inspect
+
+    results: list[tuple[str, bool, str]] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        results.append((name, bool(ok), detail))
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""))
+
+    # A DEM effective resolution of 15 m (Haworth-group median, Barker 2023) so D_max = 6 m and
+    # the [1 m, 6 m] sub-DEM band is non-empty (the same band procgen_csfd's own self-test uses).
+    eff_res = 15.0
+    feat = make_crater_feature_fn(dem_effres_m=eff_res, d_min_m=1.0)
+
+    # (a) signature + shape ------------------------------------------------------------
+    sig = inspect.signature(feat)
+    params = list(sig.parameters.values())
+    pos = [p.name for p in params if p.kind in
+           (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    kwo = [p.name for p in params if p.kind == inspect.Parameter.KEYWORD_ONLY]
+    sig_ok = (pos == ["residual_h", "world_x0", "world_y0", "cell_m"]
+              and kwo == ["params", "world_seed"])
+    # Exercise at a fine cell size; the residual is a flat zero field so any non-zero output is
+    # purely carved craters.
+    fine_cell = 0.5
+    n = 200
+    resid = np.zeros((n, n), dtype=np.float64)
+    out = feat(resid, 2000.0, -3000.0, fine_cell,
+               params=DEFAULT_OVERLAY_PARAMS, world_seed=0)
+    shape_ok = isinstance(out, np.ndarray) and out.shape == resid.shape
+    check("(a) feature_fn has the frozen signature and returns an array of residual_h's shape",
+          sig_ok and shape_ok,
+          f"pos={pos} kwo={kwo} out.shape={getattr(out, 'shape', None)}")
+
+    # (b) determinism: same world point/seed -> byte-identical; different world_x0 -> different ---
+    out_same = feat(resid, 2000.0, -3000.0, fine_cell,
+                    params=DEFAULT_OVERLAY_PARAMS, world_seed=0)
+    out_seed = feat(resid, 2000.0, -3000.0, fine_cell,
+                    params=DEFAULT_OVERLAY_PARAMS, world_seed=99)
+    out_xmove = feat(resid, 2055.0, -3000.0, fine_cell,
+                     params=DEFAULT_OVERLAY_PARAMS, world_seed=0)
+    same_bytes = (out.tobytes() == out_same.tobytes())
+    diff_x = not np.array_equal(out, out_xmove)
+    diff_seed = not np.array_equal(out, out_seed)
+    carved_any = bool(np.any(out != 0.0))   # determinism is only meaningful if craters landed
+    check("(b) determinism: same (x0,y0,world_seed)->byte-identical; diff world_x0/seed->differ",
+          same_bytes and diff_x and diff_seed and carved_any,
+          f"same_bytes={same_bytes} diff_x={diff_x} diff_seed={diff_seed} carved={carved_any}")
+
+    # (c) conservation: coarsen(overlay_residual(base, k, feature_fn=craters)) == base ----------
+    #     The SAME non-uniform base idiom the tiles_mosaic / overlay self-tests use (a genuine
+    #     heterogeneous coarsen: mass/density/datum/labels all vary), but with a DEEP regolith
+    #     column (thickness ~ REGOLITH_THICKNESS_M, like dem_to_base's mantle datum and
+    #     procgen_csfd._make_patch's deep datum) so meter-scale crater bowls never drive a fine
+    #     cell below zero. A thin (cm) base would trip overlay_residual's non-negativity clamp,
+    #     which can no longer preserve the block mean when a whole block clamps to 0 — that is the
+    #     clamp's known limit, NOT a crater-hook conservation defect, so we test on the physical
+    #     deep column the real DEM ingest produces. The crater hook runs INSIDE overlay_residual
+    #     BEFORE the per-base-cell zero-mean -> the bridge invariant must survive.
+    rng = np.random.default_rng(5)
+    H, W = 6, 7
+    deep = K.RHO_SURFACE * K.REGOLITH_THICKNESS_M       # ~15600 kg/m^2 -> ~12 m thick column
+    base = {
+        "mass_areal": rng.uniform(deep * 0.8, deep * 1.2, (H, W)),
+        "density": rng.uniform(1300, 1920, (H, W)),
+        "datum": rng.uniform(-1.0, 1.0, (H, W)),
+        "state_label": rng.integers(0, 5, (H, W)).astype(np.uint8),
+        "disturbance": rng.uniform(0, 1, (H, W)),
+    }
+    base_cell_m = 5.0
+    worst_rel, carried_ok = 0.0, True
+    for k in (5, 8):                       # base 5 m -> fine 1.0 m (k=5), 0.625 m (k=8): sub-DEM
+        cfn = make_crater_feature_fn(dem_effres_m=eff_res, d_min_m=1.0)
+        fine = overlay_residual(base, k, 1234.0, -5678.0,
+                                fine_cell_m=base_cell_m / k, world_seed=3, feature_fn=cfn)
+        back = refinement.coarsen_field(fine, k)
+        worst_rel = max(worst_rel, float(
+            np.abs((back["mass_areal"] - base["mass_areal"]) / base["mass_areal"]).max()))
+        carried_ok &= np.array_equal(back["density"], base["density"])
+        carried_ok &= np.array_equal(back["datum"], base["datum"])
+        carried_ok &= np.array_equal(back["state_label"], base["state_label"])
+        carried_ok &= np.array_equal(back["disturbance"], base["disturbance"])
+    check("(c) coarsen(overlay(base, feature_fn=craters))==base (mass float-floor, carried "
+          "density/datum/state_label/disturbance bit-exact)",
+          worst_rel < 1e-12 and carried_ok,
+          f"worst_mass_rel={worst_rel:.2e} carried_bit_exact={carried_ok}")
+
+    # (d) the feature actually CARVED something: per-base-cell block variance of the fine
+    #     thickness is strictly LARGER with the crater hook than the fbm-only overlay at the
+    #     SAME params/seed (so the increase is attributable to craters, not the fbm).
+    cfn = make_crater_feature_fn(dem_effres_m=eff_res, d_min_m=1.0)
+    k = 8
+    fc = base_cell_m / k
+    fine_no = overlay_residual(base, k, 4321.0, -8765.0, fine_cell_m=fc, world_seed=2,
+                               feature_fn=None)
+    fine_cr = overlay_residual(base, k, 4321.0, -8765.0, fine_cell_m=fc, world_seed=2,
+                               feature_fn=cfn)
+    def _blockvar(f):
+        t = (f["mass_areal"] / f["density"]).reshape(H, k, W, k)
+        return float(t.var(axis=(1, 3)).sum())
+    v_no, v_cr = _blockvar(fine_no), _blockvar(fine_cr)
+    check("(d) craters carve detail: per-base-cell block variance increases vs fbm-only overlay",
+          v_cr > v_no,
+          f"blockvar fbm_only={v_no:.3e} with_craters={v_cr:.3e}")
+
+    n_fail = sum(1 for _, ok, _ in results if not ok)
+    print(f"\n{len(results) - n_fail}/{len(results)} checks passed.")
+    return 1 if n_fail else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_self_test())
