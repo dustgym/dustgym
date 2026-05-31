@@ -54,11 +54,32 @@ def _value_noise(height: int, width: int, cells: int, rng: np.random.Generator) 
 
 def fbm(height: int, width: int, octaves: int = 5, base_cells: int = 4,
         lacunarity: float = 2.0, gain: float = 0.5,
-        seed: int = 0) -> np.ndarray:
-    """Fractional Brownian motion in [0,1]: sum of octaves of value noise.
+        seed: int = 0, *, normalize: str = "minmax",
+        target_rms: float | None = None) -> np.ndarray:
+    """Fractional Brownian motion: sum of octaves of value noise.
 
     base_cells features at octave 0, multiplied by ``lacunarity`` each octave; amplitude
-    multiplied by ``gain``. Returned normalized to [0,1]. Pure NumPy (no 'noise' pkg).
+    multiplied by ``gain``. Pure NumPy (no 'noise' pkg).
+
+    ``normalize`` selects the OUTPUT scaling (default reproduces the legacy behaviour
+    EXACTLY, so existing scenes/tests are byte-for-byte unchanged):
+
+      "minmax"   (DEFAULT, legacy): renormalize to [0, 1] via (x-min)/(max-min). This is
+                 what every existing caller gets. NOTE (docs/lunar_dem_10km_eval.md §6):
+                 this min-max renorm is a realization-dependent NONLINEAR rescale that
+                 DESTROYS the PSD slope the Hurst-derived ``gain`` is meant to set — it is
+                 fine for the cosmetic equatorial archetypes but wrong for the DEM overlay.
+
+      "variance": OPT-IN, for the DEM path. Skip the [0,1] renorm entirely; instead make
+                 the field zero-mean and scale it to a target ROOT-MEAN-SQUARE deviation
+                 ``target_rms`` (a deviogram/variance anchor, e.g. from PGDA Product-90
+                 LDRM_RMSD). This preserves the spectral slope set by ``gain`` (use
+                 constants.hurst_to_fbm_gain(H) for a sourced Hurst). Returns a zero-mean
+                 field with RMS == target_rms (in the SAME UNITS as target_rms, e.g. m).
+                 If the raw field is degenerate (RMS 0), returns zeros.
+
+    Variance-anchored mode is the spectrally-faithful path the DEM residual overlay needs;
+    "minmax" stays the default so nothing existing changes.
     """
     rng = np.random.default_rng(seed)
     total = np.zeros((height, width), dtype=np.float64)
@@ -71,10 +92,24 @@ def fbm(height: int, width: int, octaves: int = 5, base_cells: int = 4,
         amp *= gain
         cells *= lacunarity
     total /= amp_sum
-    lo, hi = total.min(), total.max()
-    if hi > lo:
-        total = (total - lo) / (hi - lo)
-    return total
+
+    if normalize == "minmax":
+        # LEGACY path — unchanged byte-for-byte from the original implementation.
+        lo, hi = total.min(), total.max()
+        if hi > lo:
+            total = (total - lo) / (hi - lo)
+        return total
+
+    if normalize == "variance":
+        if target_rms is None:
+            raise ValueError("fbm(normalize='variance') requires target_rms")
+        centered = total - total.mean()
+        rms = float(np.sqrt(np.mean(centered ** 2)))
+        if rms <= 0.0:
+            return np.zeros_like(centered)
+        return centered * (float(target_rms) / rms)
+
+    raise ValueError(f"fbm: unknown normalize={normalize!r} (use 'minmax' or 'variance')")
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +166,9 @@ def flat_compact(width: int, height: int, cell_m: float, *, seed: int = 2,
 def carve_crater(cs: ColumnState, center_rc: tuple[int, int], diameter_m: float, *,
                  depth_ratio: float = K.CRATER_DEPTH_DIAMETER_RATIO,
                  rim_height_frac: float = K.CRATER_RIM_HEIGHT_FRAC,
-                 ejecta_extent_radii: float = K.CRATER_EJECTA_EXTENT_RADII) -> ColumnState:
+                 ejecta_extent_radii: float = K.CRATER_EJECTA_EXTENT_RADII,
+                 size_dependent: bool = False,
+                 ejecta_mode: str = "quadratic") -> ColumnState:
     """Carve a parameterized fresh simple (Pike-class) crater into the surface, in-place.
 
     Profile (radial r from center, R = radius):
@@ -145,10 +182,31 @@ def carve_crater(cs: ColumnState, center_rc: tuple[int, int], diameter_m: float,
     state, no true excavation-ejecta mass balance — Pike-class fresh morphometry only.)
 
     Pike-class depth/diameter ~0.2 for fresh simple lunar craters (constants.py).
+
+    OPT-IN refinements (both default to the LEGACY behaviour, so existing callers/tests
+    are byte-for-byte unchanged; see docs/lunar_dem_10km_eval.md §6):
+
+      size_dependent (default False): when True AND the caller did not override
+        ``depth_ratio``, use constants.crater_depth_ratio(diameter_m) — d/D ~ 0.196 above
+        400 m (Pike 1977 [FIXED]) dropping to ~0.13 below 400 m (Stopar 2017 [CALIB]).
+        A flat 0.2 is too deep for the sub-400 m craters procgen_csfd actually adds. An
+        explicit ``depth_ratio`` argument always wins (back-compat: the default sentinel
+        is the legacy constant, so passing it is indistinguishable from not passing it —
+        size_dependent simply gates whether we substitute the sourced size-dependent law).
+
+      ejecta_mode (default "quadratic"): "quadratic" is the legacy edge-keyed ramp;
+        "mcgetchin" uses the empirical radial thickness ~ (r/R)^CRATER_EJECTA_DECAY_EXP
+        (=-3.0; McGetchin 1973 / Settle & Head 1977 / Melosh 1989), normalized to the
+        same rim-edge amplitude so the rim height is unchanged and the blanket thins
+        outward by the sourced power law instead of a quadratic.
     """
     h, w = cs.height, cs.width
     cm = cs.cell_m
     R = 0.5 * diameter_m
+    # Size-dependent d/D is OPT-IN and only substitutes when depth_ratio was left at its
+    # legacy default (an explicit caller value always wins — byte-exact back-compat).
+    if size_dependent and depth_ratio == K.CRATER_DEPTH_DIAMETER_RATIO:
+        depth_ratio = K.crater_depth_ratio(diameter_m)
     depth = depth_ratio * diameter_m
     rim_h = rim_height_frac * depth
     r0, c0 = center_rc
@@ -172,8 +230,22 @@ def carve_crater(cs: ColumnState, center_rc: tuple[int, int], diameter_m: float,
     # Ejecta blanket: thin positive skirt beyond the rim out to ejecta extent.
     ej_outer = ejecta_extent_radii * R
     ej_region = (r > R) & (r <= ej_outer)
-    ej_t = np.clip((ej_outer - r) / (ej_outer - R + 1e-9), 0.0, 1.0)
-    delta[ej_region] += 0.15 * rim_h * (ej_t[ej_region] ** 2)
+    if ejecta_mode == "quadratic":
+        # LEGACY edge-keyed quadratic ramp — unchanged.
+        ej_t = np.clip((ej_outer - r) / (ej_outer - R + 1e-9), 0.0, 1.0)
+        delta[ej_region] += 0.15 * rim_h * (ej_t[ej_region] ** 2)
+    elif ejecta_mode == "mcgetchin":
+        # Empirical (r/R)^-3 radial decay (McGetchin 1973 / Settle & Head 1977 / Melosh
+        # 1989). Normalize so thickness at the rim (r=R) equals the legacy rim-edge
+        # amplitude 0.15*rim_h, then decay by the power law and taper to 0 at ej_outer so
+        # the blanket ends cleanly (no discontinuity at the continuous-ejecta edge).
+        rn_ej = r[ej_region] / R                       # >= 1 over the ejecta region
+        amp = 0.15 * rim_h * (rn_ej ** K.CRATER_EJECTA_DECAY_EXP)  # =0.15*rim_h at r=R
+        taper = np.clip((ej_outer - r[ej_region]) / (ej_outer - R + 1e-9), 0.0, 1.0)
+        delta[ej_region] += amp * taper
+    else:
+        raise ValueError(
+            f"carve_crater: unknown ejecta_mode={ejecta_mode!r} (use 'quadratic' or 'mcgetchin')")
 
     new_surface = surface + delta
     cs.set_height_via_mass(new_surface)
