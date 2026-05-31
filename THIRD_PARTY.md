@@ -1,8 +1,8 @@
 # Third-Party Assets
 
 This repository's own code and content are dedicated to the public domain under
-**CC0-1.0** (see [`LICENSE`](LICENSE)). The vendored asset below is the exception:
-it retains its **own upstream license** and is **not** covered by CC0.
+**CC0-1.0** (see [`LICENSE`](LICENSE)). The vendored assets below are the exception:
+they retain their **own upstream status** and are called out here.
 
 ---
 
@@ -46,3 +46,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## LOLA south-pole DEM tile (PGDA Product 78)
+
+- **File (committed):** the cropped 10 km @ 5 m Haworth sample tile under `samples/lunar_dem/` (a pixel-window crop of `Haworth_final_adj_5mpp_surf.tif`). The full 30 km source raster is **not** committed (lives gitignored under `.vendor/lola_raw/`).
+- **Source:** NASA GSFC PGDA, *LOLA 5 m/px South-Pole DEMs* — [pgda.gsfc.nasa.gov/products/78](https://pgda.gsfc.nasa.gov/products/78), `data/LOLA_5mpp/Haworth/`.
+- **Status:** a **work of the U.S. Government** (NASA GSFC). PGDA publishes **no formal license string**; under the general principle that U.S. Government works are not subject to domestic copyright, the tile is treated as **public-domain / CC0-compatible** for inclusion in this CC0-1.0 repository. This rests on that principle, **not** on a published CC0 license — stated honestly.
+- **Frame / datum:** south polar stereographic, MOON_ME (DE421), R = 1737400 m (IAU_2015:30135); Z = surface height above the 1737400 m sphere in metres. **Cite** Barker et al. 2021 (Planet. Space Sci. 203:105119) + Mazarico et al. 2011 (Icarus 211:1066) as scholarly courtesy (see [`papers/CITATIONS.md`](papers/CITATIONS.md)).
+
+> **Not committed (license-segregated):** the higher-detail **2026 Shape-from-Shading** DEMs (Bertone et al. 2026; Zenodo 10.5281/zenodo.17954508) are **CC-BY-4.0, not CC0** — kept reference-only (download script) or, if ever committed, only in a marked CC-BY-4.0 subfolder with an attribution NOTICE. The **Neukum production-function coefficient vector** is transcribed from MintonGroup/cratermaker (verify its MIT/BSD LICENSE before committing the vector verbatim; the numeric coefficients themselves are uncopyrightable scientific facts, cited to Neukum/Ivanov/Hartmann 2001).

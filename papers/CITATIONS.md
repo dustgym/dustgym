@@ -65,3 +65,27 @@ distribution is sourced (not eyeballed); the per-instance triaxial scale is reno
 | Reference | What it anchors here |
 |---|---|
 | Tsuchiyama, A. et al. (2022) *Three-dimensional shape distribution of lunar regolith particles collected by the Apollo and Luna programs.* Earth, Planets and Space 74:172 (doi:10.1186/s40623-022-01737-9; X-ray microtomography). | The lunar-fragment **three-axial ratios** used for the clast triaxial scale: whole-sample means S/I=0.770, I/L=0.758, **S/L=0.581** (short/long ≈ 0.58, "more equant than Itokawa / impact fragments"). The render samples b/a∈U(0.65,0.9) (≈I/L) and c/a∈U(0.5,0.75) (≈S/L) bracketing these means, short axis constrained ~vertical (rest face). |
+
+## Lunar DEM / terrain-statistics references (DEM-terrain thrust; cited by author/year + dataset DOI)
+
+For the real-DEM 10 km terrain work ([`../docs/lunar_dem_10km_eval.md`](../docs/lunar_dem_10km_eval.md),
+[`../docs/dem_terrain_contract.md`](../docs/dem_terrain_contract.md)). **HONESTY TAGS carry onto the parameter**
+per the binding "every parameter sourced, never eyeballed" rule: `[CALIB]` = a calibration choice;
+`[prior]` = a global/equatorial/mare value applied to the pole because no polar in-situ measurement exists;
+`[secondary]` = number taken from an abstract/secondary snippet, primary PDF not yet verified.
+
+| Reference / dataset | What it anchors here | Tag |
+|---|---|---|
+| **PGDA LOLA 5 m South-Pole DEMs** — Barker et al. 2021, *Improved LOLA Elevation Maps for South Pole Landing Sites*, Planet. Space Sci. 203:105119 (doi:10.1016/j.pss.2020.105119); Mazarico et al. 2011, Icarus 211:1066 (doi:10.1016/j.icarus.2010.10.030). | The Haworth `_surf.tif` heightmap basis + `_slp`/`_toterr` anchors + the per-pixel effective-resolution / illumination story. NASA-GSFC US-Government work (no formal license string published). | data |
+| **USGS down-selected Artemis III nav grids** (ScienceBase doi 10.5066/P1MEQ6UK). | Explicit **CC0** coordinate grids (reproject to IAU_2015:30135, record provenance). | data (CC0) |
+| **2026 Shape-from-Shading 5 m DEMs** — Bertone et al. 2026, Planet. Sci. J. (doi:10.3847/PSJ/ae5b70; Zenodo 10.5281/zenodo.17954508). | Higher-detail fallback heightmap — **CC-BY-4.0, NOT CC0** (segregate or reference-only). | data (CC-BY) |
+| Ivanov/Neukum/Hartmann 2001, *Production function*, Space Sci. Rev. 96:55. | Crater production polynomial (T=3.5 Gyr). **Coeff vector transcribed from MintonGroup/cratermaker; primary table not directly verified** (8.25e-4 vs 8.38e-4). | `[CALIB]` |
+| Xiao & Werner 2015, JGR 120 (doi:10.1002/2015JE004860); Minton et al. 2019 (Icarus, arXiv:1902.07746). | Small-crater **equilibrium** cap (Xiao&Werner 1–10 % band for highland/polar; Minton mare fit = lower bound). | `[CALIB]` |
+| Pike 1977 (repo, `constants.py:178`); Stöffler 2006, RiMG 60:519; Stopar 2017, Icarus. | Crater depth/diameter (0.196 >400 m; 0.11–0.17 below) + rim height (0.036 D). | `[FIXED]`/`[CALIB]` |
+| McGetchin et al. 1973, EPSL 20; Settle & Head 1977; Melosh 1989. | Ejecta radial decay `(r/R)⁻³`, continuous extent 2.3–2.7 R. | `[FIXED]` |
+| Golombek & Rapp 1997 (doi:10.1029/96JE03319); Golombek 2003 (repo `rock-size-freq_abstract.txt`); Bandfield 2011 (Diviner background <1 %). | Boulder cumulative-fractional-area SFD + spatial-k background vs ejecta. | `[FIXED]`/`[CALIB]` |
+| Bernhardt/Boazman 2022 (PSJ doi 10.3847/PSJ/aca590); Watkins 2019 (JGR doi 10.1029/2019JE005963) + USGS LROC NAC Boulder DB v1; Bickel & Kring 2020 (Icarus doi 10.1016/j.icarus.2020.113850). | Boulder densities / clustering / max sizes (validate vs the USGS NAC Boulder DB). | `[secondary]` |
+| Rosenburg et al. 2011, JGR (doi:10.1029/2010JE003716); Barker et al. 2025, PSJ (doi:10.3847/PSJ/adbc9d). | Self-affine **Hurst** exponent (south pole H≈0.95 highland-like) for the fbm spectral slope. | `[CALIB]` |
+| Helfenstein & Shepard 1999, Icarus 141; Bandfield et al. 2015 (Diviner). | cm-scale Hurst (0.5–0.7) + terminal RMS slope (~20°) — **equatorial/global**. | `[prior]` |
+| Durga Prasad et al. 2026, ApJ (doi:10.3847/1538-4357/ae5228); Mathew et al. 2025, Sci. Rep. (doi:10.1038/s41598-025-91866-4). | ChaSTE polar two-layer regolith density profile (69.4°S). | `[CALIB]` |
+| Ruesch & Woehler 2021 (arXiv:2109.00052). | Boulder buried-fraction physics — **qualitative only, no numeric distribution** (stays `[UNKNOWN]`). | `[UNKNOWN]` |
