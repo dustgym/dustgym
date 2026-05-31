@@ -226,6 +226,162 @@ def build_wheel_tracks_meta(polylines: dict[str, list[tuple[float, float]]],
 
 
 # ---------------------------------------------------------------------------
+# Kinematic terrain conform — rest pose (tilt + seat height) from 4 wheel contacts.
+#
+# GEOMETRY/STATE-ACCURATE, NOT FORCE-ACCURATE (module docstring; spec §9). We seat the
+# rover ON its 4 wheel contacts (real DEM heights, riding OVER clasts) and least-squares
+# fit a rigid plane -> the resting tilt (surface normal) + seat height. NO contact forces,
+# NO settling, NO slip: that path-dependent dynamics is the deferred Chrono::Vehicle + SCM
+# job (README §4 #2-3). This is the surrogate "rover pose producer" sitting behind the same
+# INTERFACE seam a real Chrono::Vehicle would later emit (up-normal + height), zero consumer
+# change. Clasts are Python-authored (procgen.sample_boulders -> metadata.clasts), so the
+# wheel can ride a half-buried boulder instead of clipping it (README §4 "passes through
+# clasts" fixed GEOMETRICALLY here, not as collision dynamics).
+# ---------------------------------------------------------------------------
+
+
+def _bilinear_height(heightmap: np.ndarray, row: float, col: float) -> float:
+    """Bilinear DEM height at FRACTIONAL (row,col); clamps to grid bounds.
+
+    The Python authority stores height as a [row,col] array (column_state.derive_height);
+    Godot samples it bilinearly (state_fields.height_uv). We mirror that here so the 4 wheel
+    contacts read a smooth gradient even when the wheelbase is sub-cell (coarse base grids).
+    """
+    h, w = heightmap.shape
+    r = min(max(float(row), 0.0), h - 1.0)
+    c = min(max(float(col), 0.0), w - 1.0)
+    r0 = int(np.floor(r)); c0 = int(np.floor(c))
+    r1 = min(r0 + 1, h - 1); c1 = min(c0 + 1, w - 1)
+    tr = r - r0; tc = c - c0
+    top = heightmap[r0, c0] * (1.0 - tc) + heightmap[r0, c1] * tc
+    bot = heightmap[r1, c0] * (1.0 - tc) + heightmap[r1, c1] * tc
+    return float(top * (1.0 - tr) + bot * tr)
+
+
+def _clast_contact_height(clasts: list[dict], x: float, z: float, dem_h: float,
+                          climb_limit_m: float) -> float:
+    """Max of the DEM height and any clast SPHERE-CAP surface at world (x,z) — ride-over.
+
+    A clast is a Python-authored sphere (metadata.clasts): center_m=[cx,cy,cz], radius_m=r.
+    A wheel contact landing within a clast's horizontal footprint rests on the cap at
+    cy + sqrt(r^2 - d_horiz^2) when that exceeds the DEM. Geometric contact, not collision.
+
+    ``climb_limit_m`` bounds the rise above the DEM to ~one wheel radius: a rigid wheel
+    climbs onto a boulder's SHOULDER, it cannot balance on the apex of a boulder taller than
+    itself (boulders that large are obstacles a planner routes around — not modelled here;
+    flagged in drive_spiral.py). Without this the cap of a fully-exposed 0.8 m boulder lifts a
+    wheel ~1.6 m and the rover lurches to >35deg, which is an artefact, not terramechanics.
+    """
+    best = dem_h
+    ceil = dem_h + max(climb_limit_m, 0.0)
+    for cl in clasts:
+        ctr = cl.get("center_m")
+        if ctr is None:
+            continue
+        cx, cy, cz = float(ctr[0]), float(ctr[1]), float(ctr[2])
+        r = float(cl.get("radius_m", 0.0))
+        if r <= 0.0:
+            continue
+        d2 = (x - cx) ** 2 + (z - cz) ** 2
+        if d2 >= r * r:
+            continue
+        cap = cy + float(np.sqrt(r * r - d2))   # sphere top surface at (x,z)
+        cap = min(cap, ceil)                     # rigid-wheel climb limit (shoulder, not apex)
+        if cap > best:
+            best = cap
+    return best
+
+
+#: Rigid-wheel climb limit for clast ride-over (m). IPEx wheel radius ~0.18 m
+#: (asce-es-2024; sidecar.gd WHEEL bottom y=-0.179): a wheel climbs onto a boulder's
+#: shoulder at most ~one radius, never balances on the apex of a taller boulder.
+WHEEL_RADIUS_M = 0.18
+
+
+def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_rad: float, *,
+                 cell_m: float, world_x0: float = 0.0, world_y0: float = 0.0,
+                 clasts: list[dict] | None = None, climb_limit_m: float = WHEEL_RADIUS_M,
+                 min_grad_cells: float = 2.5,
+                 gauge_m: float = WHEEL_GAUGE_M, wheelbase_m: float = WHEEL_BASE_M) -> dict:
+    """Kinematic rest pose of the 4-wheel rover on the terrain at one spiral pose.
+
+    TWO terms, least-squares fit to a plane y = a*x + b*z + c in GODOT WORLD axes
+    (x = world_x0 + col*cell_m, z = world_y0 + row*cell_m, y up):
+
+      1. MACRO terrain slope over a RESOLVABLE stencil (radius = max(half-wheelbase,
+         ``min_grad_cells``*cell_m)). On a coarse base grid the 0.4 m wheelbase is sub-cell,
+         so a literal 4-wheel plane fit JITTERS as contacts cross cell boundaries (dead-flat
+         one frame, >25deg the next, untethered from the visible relief). Fitting the slope
+         over >= a few cells reports the tilt the rover actually follows at the DEM's
+         resolvable scale -- honest under-resolution, not sub-cell noise. On a FINE grid the
+         stencil collapses to the real wheelbase (half-wheelbase dominates).
+      2. CLAST ride-over at the 4 real wheel contacts: a wheel on a half-buried boulder rises
+         onto its shoulder (capped at ``climb_limit_m``), tilting the plane there. With no
+         clast the 4 contacts lie exactly on the macro plane, so the fit recovers the smooth
+         macro tilt unchanged.
+
+    Returns:
+        up      : surface normal in GODOT world axes, normalize(-a, 1, -b) -- the rover's
+                  local +Y after conform; the sidecar tilts Basis(UP,yaw) onto it.
+        z_m     : plane height at the rover center (seat height; informational).
+        pitch_rad / roll_rad : slope along the body FORWARD / LEFT axis (display/debug;
+                  the load-bearing tilt is ``up``, sign-convention-free).
+        contacts: {LF,RF,LB,RB} -> [row,col] field cells.
+
+    ``heading_rad`` is the §5.2 FIELD travel-heading (0=+col/+X, +pi/2=+row/+Z), the
+    ``wheel_contact_points`` convention (NOT the negated Godot rover yaw).
+    GEOMETRY/STATE-ACCURATE, NOT FORCE-ACCURATE (spec §9).
+    """
+    clasts = clasts or []
+    r0, c0 = float(center_rc[0]), float(center_rc[1])
+    xc = world_x0 + c0 * cell_m
+    zc = world_y0 + r0 * cell_m
+    sh, ch = np.sin(heading_rad), np.cos(heading_rad)
+    fwd = (ch, sh)            # forward world (x,z)
+    lat = (-sh, ch)           # left world (x,z)
+
+    # --- (1) MACRO slope over a resolvable stencil (center +- grad_r along fwd/lat) -------
+    grad_r = max(0.5 * wheelbase_m, max(min_grad_cells, 0.0) * cell_m)
+    sten = np.empty((4, 3), dtype=np.float64)
+    sten_h = np.empty(4, dtype=np.float64)
+    for i, (ox, oz) in enumerate((fwd, (-fwd[0], -fwd[1]), lat, (-lat[0], -lat[1]))):
+        x = xc + grad_r * ox
+        z = zc + grad_r * oz
+        sten[i] = (x, z, 1.0)
+        sten_h[i] = _bilinear_height(heightmap, (z - world_y0) / cell_m, (x - world_x0) / cell_m)
+    (a_dem, b_dem, c_dem), *_ = np.linalg.lstsq(sten, sten_h, rcond=None)
+
+    # --- (2) wheel contacts: macro height + capped clast ride-over -----------------------
+    pts = wheel_contact_points(center_rc, heading_rad, cell_m=cell_m,
+                               gauge_m=gauge_m, wheelbase_m=wheelbase_m)
+    rows = ("LF", "RF", "LB", "RB")
+    A = np.empty((4, 3), dtype=np.float64)
+    hv = np.empty(4, dtype=np.float64)
+    for i, key in enumerate(rows):
+        row, col = pts[key]
+        x = world_x0 + col * cell_m
+        z = world_y0 + row * cell_m
+        dem_local = _bilinear_height(heightmap, row, col)
+        rise = _clast_contact_height(clasts, x, z, dem_local, climb_limit_m) - dem_local
+        A[i] = (x, z, 1.0)
+        hv[i] = (a_dem * x + b_dem * z + c_dem) + max(0.0, rise)
+    (a, b, c), *_ = np.linalg.lstsq(A, hv, rcond=None)
+
+    z_center = float(a * xc + b * zc + c)
+    nrm = np.array([-a, 1.0, -b], dtype=np.float64)
+    nrm /= np.linalg.norm(nrm)
+    slope_fwd = a * ch + b * sh           # forward world (x,z)=(cos h, sin h)
+    slope_lat = a * (-sh) + b * ch        # left world=(-sin h, cos h)
+    return {
+        "up": [float(nrm[0]), float(nrm[1]), float(nrm[2])],
+        "z_m": z_center,
+        "pitch_rad": float(np.arctan(slope_fwd)),
+        "roll_rad": float(np.arctan(slope_lat)),
+        "contacts": {k: [float(pts[k][0]), float(pts[k][1])] for k in rows},
+    }
+
+
+# ---------------------------------------------------------------------------
 # Drum dig events — EXCAVATED/SPOIL swath + teeth marks (spec §5 "Drum dig
 # events", §4.2.4 drum teeth marks; INTERFACE.md §5.2 drum_marks).
 #

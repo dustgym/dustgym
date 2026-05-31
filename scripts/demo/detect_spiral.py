@@ -56,17 +56,17 @@ def _T_from_rvec_tvec(rvec, tvec):
     return T @ _R_X180
 
 
-def _frame_dirs(seq_dir):
+def _frame_dirs(seq_dir, cam="front_left"):
     out = []
     for name in sorted(os.listdir(seq_dir)):
         d = os.path.join(seq_dir, name)
         if os.path.isdir(d) and os.path.exists(os.path.join(d, "sensors.json")) \
-                and os.path.exists(os.path.join(d, "front_left.png")):
+                and os.path.exists(os.path.join(d, f"{cam}.png")):
             out.append((name, d))
     return out
 
 
-def detect_frame(d, family="tag36h11"):
+def detect_frame(d, family="tag36h11", cam="front_left"):
     sensors = json.load(open(os.path.join(d, "sensors.json")))
     lander = sensors["lander"]
     rover = sensors["rover"]
@@ -77,14 +77,17 @@ def detect_frame(d, family="tag36h11"):
         rover["position_m"], rover["quaternion_xyzw"])
     range_m = float(np.linalg.norm(np.array(rover["position_m"]) - np.array(lander["position_m"])))
 
-    left = next(c for c in sensors["cameras"] if c["name"] == sensors["stereo"]["left"])
-    intr = left["intrinsics"]
+    # Fiducial camera (default front_left stereo; --cam left_mono for the travel-tangent runs where
+    # the SIDE mono acquires the lander). Mono solvePnP works per-camera off its own intrinsics +
+    # extrinsic_in_base_link, so any named camera resolves the same rover_pose_from_tag chain.
+    cam_rec = next(c for c in sensors["cameras"] if c["name"] == cam)
+    intr = cam_rec["intrinsics"]
     fx, fy, cx, cy = (float(intr[k]) for k in ("fx", "fy", "cx", "cy"))
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
-    base_link_T_optical = rl.base_link_T_optical_from_extrinsic(left["extrinsic_in_base_link"])
+    base_link_T_optical = rl.base_link_T_optical_from_extrinsic(cam_rec["extrinsic_in_base_link"])
     by_id = {int(a["id"]): a for a in lander.get("apriltags", [])}
 
-    gray = cv2.cvtColor(cv2.imread(os.path.join(d, "front_left.png"), cv2.IMREAD_COLOR),
+    gray = cv2.cvtColor(cv2.imread(os.path.join(d, f"{cam}.png"), cv2.IMREAD_COLOR),
                         cv2.COLOR_BGR2GRAY)
     dets = apriltag(family).detect(gray)
 
@@ -129,11 +132,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seq-dir", required=True)
     ap.add_argument("--family", default="tag36h11")
+    ap.add_argument("--cam", default="front_left",
+                    help="fiducial camera name (front_left | left_mono | right_mono | ...)")
     a = ap.parse_args()
-    frame_dirs = _frame_dirs(a.seq_dir)
+    frame_dirs = _frame_dirs(a.seq_dir, a.cam)
     n_det = 0
     for name, d in frame_dirs:
-        rec = detect_frame(d, a.family)
+        rec = detect_frame(d, a.family, a.cam)
         json.dump(rec, open(os.path.join(d, "detect.json"), "w"), indent=2)
         det = rec["rover_est_map"] is not None
         n_det += int(det)

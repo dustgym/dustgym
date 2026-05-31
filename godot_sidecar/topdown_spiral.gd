@@ -78,6 +78,22 @@ static func run_topdown_spiral(sidecar) -> void:
 		qt_frames = _load_qt_leaves(sidecar._qt_leaves_path)
 		print("topdown_spiral: loaded %d qt-leaf records from %s" % [qt_frames.size(), sidecar._qt_leaves_path])
 
+	# --- per-frame conform pose track (optional; rover-physics pass) ----------------------------
+	# drive_spiral.py rover_pose.json: TRAVEL-TANGENT yaw + the wheel-plane tilt (up normal) per
+	# frame. Absent => fall back to the in-engine look-at-lander yaw + flat pose (back-compat).
+	var pose_track: Array = []
+	if sidecar._rover_pose_path != "":
+		pose_track = DepartSpiralScript.load_pose_track(sidecar._rover_pose_path)
+		print("topdown_spiral: loaded %d rover-pose records from %s" % [pose_track.size(), sidecar._rover_pose_path])
+
+	# --- full per-wheel track polylines for the ACCUMULATING cleat trail ------------------------
+	# sf.wheel_tracks was populated at load_scene from the DRIVEN scene's §5.2 metadata. Keep the
+	# FULL polylines; each frame we feed only [0..k] so the trail GROWS behind the rover (John's
+	# "accumulate per-frame"). Empty when the base scene (no wheel_tracks) is rendered.
+	var full_tracks := {}
+	for tk in sf.wheel_tracks.keys():
+		full_tracks[tk] = (sf.wheel_tracks[tk] as Dictionary)["points"]
+
 	# --- fixed-center 4-face lander, built ONCE and held constant (the depart_spiral pattern) --
 	var standoff: float = sidecar._lander_standoff if sidecar._lander_standoff > 0.0 else 2.5
 	var fixed_fwd := Vector3(-1, 0, 0)
@@ -121,12 +137,27 @@ static func run_topdown_spiral(sidecar) -> void:
 
 	# --- per-frame render loop -----------------------------------------------------------------
 	var n_written := 0
+	# Per-frame camera projection of 3 world refs (origin + 10 m along +X/+Z) so the composite can
+	# map the wheel-track polyline onto THIS panel (works for whole-patch OR frame-both framing,
+	# robust to camera changes). The 2 cm cleat detail is sub-pixel at any rover+origin-in-frame
+	# zoom, so the trail is drawn as polyline MARKUP off this affine, not rendered as cleats.
+	var proj_records: Array = []
 	for k in range(n_frames):
 		var rc: Vector2 = rc_seq[k]
-		# Drive the rover to this frame's spiral footprint + look-at-lander yaw (the same members
-		# _build_rover reads in the depart_spiral path).
+		# Drive the rover to this frame's spiral footprint. Default: look-at-lander yaw + flat.
 		sidecar._rover_rc_override = Vector2i(int(round(rc.x)), int(round(rc.y)))
 		sidecar._rover_yaw = yaw_seq[k]
+		sidecar._rover_up = Vector3.UP
+		# Conform pose track (rover-physics): TRAVEL-TANGENT yaw + wheel-plane tilt override.
+		if k < pose_track.size():
+			var prec: Dictionary = pose_track[k]
+			sidecar._rover_yaw = float(prec.get("yaw_rad", yaw_seq[k]))
+			var upv = prec.get("up", null)
+			if typeof(upv) == TYPE_ARRAY and upv.size() == 3:
+				sidecar._rover_up = Vector3(float(upv[0]), float(upv[1]), float(upv[2]))
+			var prc = prec.get("rc", null)
+			if typeof(prc) == TYPE_ARRAY and prc.size() == 2:
+				sidecar._rover_rc_override = Vector2i(int(round(float(prc[0]))), int(round(float(prc[1]))))
 
 		# Feed the live quadtree leaves to the overlay. We set ONLY the overlay inputs, NOT
 		# sf.has_rover_rc, so terrain.gd keeps the static full-patch fine mesh (the overlay does
@@ -137,6 +168,14 @@ static func run_topdown_spiral(sidecar) -> void:
 			sf.active_leaves = _coerce_boxes(rec.get("active_leaves", []))
 			var lod = rec.get("lod", {})
 			sf.quadtree_lod = lod if typeof(lod) == TYPE_DICTIONARY else {}
+
+		# ACCUMULATING cleat trail: feed only the polyline up to THIS frame, then invalidate the
+		# baked track texture so terrain.gd re-bakes the trail-so-far on this _build_layers().
+		if not full_tracks.is_empty():
+			for tk in full_tracks.keys():
+				var allpts: Array = full_tracks[tk]
+				(sf.wheel_tracks[tk] as Dictionary)["points"] = allpts.slice(0, mini(k + 1, allpts.size()))
+			sf._img_track_dir = null
 
 		# Rebuild per-frame layers; preserve the fixed lander across the clear (it is not a
 		# Camera3D/Light/WorldEnvironment, so _clear_frame_nodes would free it).
@@ -153,7 +192,28 @@ static func run_topdown_spiral(sidecar) -> void:
 
 		var rover_root = sidecar._find_rover_root()
 		if rover_root != null:
-			_add_rover_marker(rover_root)
+			# BIG heading marker only in the pure WHOLE-PATCH overview (rover is a speck there).
+			# Zoomed views (follow / frame-both) show the real chassis + resolved ruts, so a small
+			# dot just locates it without burying the tracks.
+			_add_rover_marker(rover_root, sidecar._td_follow_m <= 0.0 and not sidecar._td_frameboth)
+			# FOLLOW mode: an OBLIQUE chase cam tracking the rover at the requested span. Straight-
+			# down foreshortens pitch/roll, so we view from ~55deg elevation -> the conform tilt,
+			# wheel seating on the relief, and the trail all read. Span sets the framing distance.
+			if sidecar._td_follow_m > 0.0:
+				var rpos: Vector3 = rover_root.global_transform.origin
+				var off: Vector3 = Vector3(0.45, 0.95, 0.45).normalized() * (sidecar._td_follow_m * 0.95)
+				cam.look_at_from_position(rpos + off, rpos, Vector3(0, 1, 0))
+			elif sidecar._td_frameboth:
+				# Zoomed TOP-DOWN framing BOTH the rover and the lander (center), so the carved
+				# ruts read as terrain features while origin + rover stay in frame for the
+				# position-plot/unlit cross-reference. Span grows with the departure range.
+				var rp: Vector3 = rover_root.global_transform.origin
+				var mid := (rp + center_world) * 0.5
+				var dist: float = Vector2(rp.x - center_world.x, rp.z - center_world.z).length()
+				var fb_span: float = maxf(dist * 1.35 + 8.0, 24.0)
+				var fb_h: float = (fb_span * 0.55) / tan(deg_to_rad(30.0))
+				cam.look_at_from_position(Vector3(mid.x, sf.height_range.y + fb_h, mid.z),
+					Vector3(mid.x, sf.height_range.x, mid.z), Vector3(0, 0, -1))
 		else:
 			push_warning("topdown_spiral: frame %d found no rover root after rebuild" % k)
 
@@ -174,7 +234,23 @@ static func run_topdown_spiral(sidecar) -> void:
 			var rng: float = Vector2(rc.x - center_rc.x, rc.y - center_rc.y).length() * float(sf.cell_m)
 			print("topdown_spiral: frame %s wrote %s (%dx%d) range=%.1fm" % [
 				nnn, ProjectSettings.globalize_path(path), img.get_width(), img.get_height(), rng])
+		# World->pixel affine refs for the composite polyline markup (cam transform final here).
+		var ref_m := 10.0
+		var po: Vector2 = cam.unproject_position(center_world)
+		var pex: Vector2 = cam.unproject_position(center_world + Vector3(ref_m, 0.0, 0.0))
+		var pez: Vector2 = cam.unproject_position(center_world + Vector3(0.0, 0.0, ref_m))
+		proj_records.append({"frame": k, "ref_m": ref_m,
+			"o": [po.x, po.y], "x": [pex.x, pex.y], "z": [pez.x, pez.y]})
 		n_written += 1
+
+	# Projection sidecar for the composite markup (one affine per frame next to the PNGs).
+	var proj_path := "res://out/cam/%s/proj.json" % out_scene
+	var pf := FileAccess.open(proj_path, FileAccess.WRITE)
+	if pf != null:
+		pf.store_string(JSON.stringify(proj_records))
+		pf.close()
+		print("topdown_spiral: wrote %d projection records -> %s" % [
+			proj_records.size(), ProjectSettings.globalize_path(proj_path)])
 
 	print("topdown_spiral: --topdown-spiral wrote %d frames to %s" % [
 		n_written, ProjectSettings.globalize_path("res://out/cam/%s" % out_scene)])
@@ -201,19 +277,44 @@ static func _make_unlit(sidecar) -> void:
 # A bright UNSHADED marker pinning the rover position so it reads at the ~220 m ortho scale
 # (the articulated rover is a speck from this height). Parented to the rover root so it is freed
 # with the rover on the next _clear_frame_nodes (rebuilt each frame).
-static func _add_rover_marker(rover_root: Node3D) -> void:
+static func _add_rover_marker(rover_root: Node3D, big: bool) -> void:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = Color(1.0, 0.12, 0.85)              # magenta: not a regolith/overlay hue
-	var sph := SphereMesh.new()
-	sph.radius = 2.5
-	sph.height = 5.0
-	sph.material = mat
-	var ball := MeshInstance3D.new()
-	ball.mesh = sph
-	ball.position = Vector3(0.0, 3.0, 0.0)                 # lift above the chassis so top-down sees it
-	ball.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	rover_root.add_child(ball)
+	if big:
+		# WHOLE-PATCH scale: the articulated rover is a speck, so pin a HEADING marker -- a pivot
+		# ball + a bar extending FORWARD (+X local) so the rover's facing reads from directly
+		# above (and, via foreshortening, the conform tilt dips the bar). Parented to rover_root
+		# so it inherits the yaw+tilt and is freed with the rover on the next _clear_frame_nodes.
+		var sph := SphereMesh.new()
+		sph.radius = 2.5
+		sph.height = 5.0
+		sph.material = mat
+		var ball := MeshInstance3D.new()
+		ball.mesh = sph
+		ball.position = Vector3(0.0, 3.0, 0.0)             # lift above the chassis so top-down sees it
+		ball.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		rover_root.add_child(ball)
+		var bar := BoxMesh.new()
+		bar.size = Vector3(9.0, 0.8, 1.6)                  # long axis = local +X (rover forward)
+		var barmi := MeshInstance3D.new()
+		barmi.mesh = bar
+		barmi.material_override = mat
+		barmi.position = Vector3(5.0, 3.0, 0.0)            # offset FORWARD of the pivot -> shows heading
+		barmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		rover_root.add_child(barmi)
+	else:
+		# FOLLOW close-up: the real articulated rover is visible at this span, so just a small
+		# unobtrusive dot locates the pivot without burying the chassis/tilt.
+		var sph := SphereMesh.new()
+		sph.radius = 0.18
+		sph.height = 0.36
+		sph.material = mat
+		var ball := MeshInstance3D.new()
+		ball.mesh = sph
+		ball.position = Vector3(0.0, 0.7, 0.0)
+		ball.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		rover_root.add_child(ball)
 
 # Load the host-emitted per-frame quadtree-leaf records (instrument_spiral.py qt_leaves.json):
 # a plain JSON list [{frame, nodes:[{level,row0,col0,size,leaf}], active_leaves:[[r0,c0,r1,c1]],

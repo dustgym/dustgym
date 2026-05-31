@@ -94,6 +94,30 @@ static func _look_at_yaw(rover_rc: Vector2, center_rc: Vector2) -> float:
 		return 0.0
 	return atan2(-dz, dx)
 
+# Load the host-emitted per-frame conform pose track (drive_spiral.py rover_pose.json):
+# {"records":[{frame, rc:[row,col], yaw_rad, up:[x,y,z], z_m, pitch_deg, roll_deg, fiducial_cam}]}
+# (or a bare list). Returns the records Array, or [] on any failure so a missing file simply
+# falls back to the in-engine look-at-lander yaw + flat pose (back-compat). Shared by both the
+# --depart-spiral (rover-cam) and --topdown-spiral drivers; reuses the _load_qt_leaves idiom.
+static func load_pose_track(path: String) -> Array:
+	var p := path
+	if not (p.begins_with("res://") or p.begins_with("user://") or p.begins_with("/")):
+		p = "res://" + p
+	var f := FileAccess.open(p, FileAccess.READ)
+	if f == null:
+		push_warning("depart_spiral: cannot open rover-pose '%s' (err %d) -- using look-at-lander" % [
+			p, FileAccess.get_open_error()])
+		return []
+	var txt := f.get_as_text()
+	f.close()
+	var parsed = JSON.parse_string(txt)
+	if typeof(parsed) == TYPE_ARRAY:
+		return parsed
+	if typeof(parsed) == TYPE_DICTIONARY and parsed.has("records"):
+		return parsed["records"]
+	push_warning("depart_spiral: rover-pose '%s' did not parse to records" % p)
+	return []
+
 # ENTRY POINT (dispatched by sidecar.gd at merge: `await run_depart_spiral(self)` then
 # get_tree().quit(0)). VOID coroutine (the capture_seq.gd pattern): builds the constant
 # lander once, then per frame places the rover at the spiral rover_rc + look-at yaw and
@@ -132,9 +156,20 @@ static func run_depart_spiral(sidecar) -> void:
 	for k in range(n_frames):
 		yaw_seq.append(_look_at_yaw(rc_seq[k], center_rc))
 
+	# Optional conform pose track (drive_spiral.py): overrides look-at-lander with the
+	# TRAVEL-TANGENT heading + wheel-plane tilt, so the rover faces its direction of travel and
+	# the SIDE mono (not the front stereo) acquires the lander fiducial. Absent => legacy behavior.
+	var pose_track: Array = []
+	if sidecar._rover_pose_path != "":
+		pose_track = load_pose_track(sidecar._rover_pose_path)
+		print("depart_spiral: loaded %d rover-pose records from %s" % [pose_track.size(), sidecar._rover_pose_path])
+
 	var scene: String = sf.scene_name
-	print("depart_spiral: --depart-spiral scene='%s' frames=%d center_rc=(%.1f,%.1f) turns=%.1f r0_cells=%.1f r_growth_cells=%.1f" % [
-		scene, n_frames, center_rc.x, center_rc.y, TURNS, R0_CELLS, R_GROWTH_CELLS])
+	# Output dir override (mirrors topdown_spiral): separate lit/unlit rover-cam runs off one
+	# driven scene (e.g. --out-scene-name haworth_spiral_lit / haworth_spiral_unlit).
+	var out_scene: String = sidecar._out_scene_name if sidecar._out_scene_name != "" else scene
+	print("depart_spiral: --depart-spiral scene='%s' out='%s' frames=%d center_rc=(%.1f,%.1f) turns=%.1f r0_cells=%.1f r_growth_cells=%.1f" % [
+		scene, out_scene, n_frames, center_rc.x, center_rc.y, TURNS, R0_CELLS, R_GROWTH_CELLS])
 
 	# --- build the 4-face lander bundle ONCE at the scene center (held constant) ------
 	# lander_bundle._build_4face_lander places the lander at rover_pos + fwd*standoff and
@@ -178,6 +213,17 @@ static func run_depart_spiral(sidecar) -> void:
 		# rover pose reported in sensors.json comes from rover_root.global_transform below.
 		sidecar._rover_rc_override = Vector2i(int(round(rc.x)), int(round(rc.y)))
 		sidecar._rover_yaw = yaw_seq[k]
+		sidecar._rover_up = Vector3.UP
+		# Conform pose track override: TRAVEL-TANGENT yaw + wheel-plane tilt (rover-physics pass).
+		if k < pose_track.size():
+			var prec: Dictionary = pose_track[k]
+			sidecar._rover_yaw = float(prec.get("yaw_rad", yaw_seq[k]))
+			var upv = prec.get("up", null)
+			if typeof(upv) == TYPE_ARRAY and upv.size() == 3:
+				sidecar._rover_up = Vector3(float(upv[0]), float(upv[1]), float(upv[2]))
+			var prc = prec.get("rc", null)
+			if typeof(prc) == TYPE_ARRAY and prc.size() == 2:
+				sidecar._rover_rc_override = Vector2i(int(round(float(prc[0]))), int(round(float(prc[1]))))
 
 		# Rebuild ONLY the per-frame layer nodes (terrain/clasts/rover) -- this re-places the
 		# articulated rover at the new spiral rover_rc/yaw, leaving the sun + WorldEnvironment
@@ -211,22 +257,25 @@ static func run_depart_spiral(sidecar) -> void:
 		# pair (a rig pitch, NOT a per-camera toe-in, so the baseline/extrinsics stay rigid).
 		var cams: Array = sidecar.CameraRigScript.build(
 			sidecar, rover_root, world, sidecar._viewport_size, sidecar._cam_pitch_deg)
-		var cam_o: Vector3 = rover_root.global_transform.origin
-		for e in cams:
-			if String(e.get("image", "")).begins_with("front_left"):
-				cam_o = (e["cam"] as Node3D).global_transform.origin
-				break
-		var tag_c: Vector3 = lander_xf_const.origin
-		var horiz: float = Vector2(tag_c.x - cam_o.x, tag_c.z - cam_o.z).length()
-		# pitch_deg POSITIVE = downward tilt (camera_rig.gd:234). Camera sits above the tag, so
-		# the look-down angle atan2(cam_y - tag_y, horiz) is ADDED (positive = down onto the tag).
-		var look_pitch: float = clampf(
-			sidecar._cam_pitch_deg + rad_to_deg(atan2(cam_o.y - tag_c.y, maxf(horiz, 1e-3))),
-			-20.0, 75.0)
-		for e in cams:
-			(e["sv"] as SubViewport).queue_free()
-		cams = sidecar.CameraRigScript.build(
-			sidecar, rover_root, world, sidecar._viewport_size, look_pitch)
+		# TRAVEL-TANGENT runs (pose track present) leave the front stereo looking along travel and
+		# let the SIDE mono frame the lander; only the LEGACY look-at-lander path aims the stereo
+		# pitch onto the ground tag (steep-down near, level far) so the tag stays in frustum.
+		if pose_track.is_empty():
+			var cam_o: Vector3 = rover_root.global_transform.origin
+			for e in cams:
+				if String(e.get("image", "")).begins_with("front_left"):
+					cam_o = (e["cam"] as Node3D).global_transform.origin
+					break
+			var tag_c: Vector3 = lander_xf_const.origin
+			var horiz: float = Vector2(tag_c.x - cam_o.x, tag_c.z - cam_o.z).length()
+			# pitch_deg POSITIVE = downward tilt (camera_rig.gd:234); cam above tag -> add atan2.
+			var look_pitch: float = clampf(
+				sidecar._cam_pitch_deg + rad_to_deg(atan2(cam_o.y - tag_c.y, maxf(horiz, 1e-3))),
+				-20.0, 75.0)
+			for e in cams:
+				(e["sv"] as SubViewport).queue_free()
+			cams = sidecar.CameraRigScript.build(
+				sidecar, rover_root, world, sidecar._viewport_size, look_pitch)
 
 		# Settle the subviewports, then capture. Geometry added this tick registers into the
 		# world scenario only on the NEXT tree frame, so we MUST await frame_post_draw (the
@@ -236,7 +285,7 @@ static func run_depart_spiral(sidecar) -> void:
 
 		# --- write this frame's directory out/cam/<scene>/<NNN>/ -----------------------
 		var nnn := "%03d" % k
-		var out_dir := "res://out/cam/%s/%s" % [scene, nnn]
+		var out_dir := "res://out/cam/%s/%s" % [out_scene, nnn]
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out_dir))
 		for e in cams:
 			var img: Image = e["sv"].get_texture().get_image()
@@ -282,7 +331,7 @@ static func run_depart_spiral(sidecar) -> void:
 		n_written += 1
 
 	print("depart_spiral: --depart-spiral wrote %d frames to %s (lander held constant)" % [
-		n_written, ProjectSettings.globalize_path("res://out/cam/%s" % scene)])
+		n_written, ProjectSettings.globalize_path("res://out/cam/%s" % out_scene)])
 
 # ---------------------------------------------------------------------------
 # SELF-TEST. The deliverable is a RefCounted (preloaded by sidecar.gd for its static

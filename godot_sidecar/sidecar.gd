@@ -144,6 +144,9 @@ var _topdown_spiral_mode := false       # --topdown-spiral: bird's-eye ortho ren
 var _scene_unlit := false               # --scene-unlit: bland Lambert + no shadows + spherical clasts (top-down diagnostic)
 var _out_scene_name := ""               # --out-scene-name: override the out/cam/<name> dir (separate lit/unlit runs)
 var _qt_leaves_path := ""               # --qt-leaves <path>: per-frame quadtree leaves for the top-down overlay
+var _rover_pose_path := ""              # --rover-pose <path>: per-frame conform pose track (drive_spiral.py rover_pose.json)
+var _td_follow_m := 0.0                 # --td-follow <span_m>: top-down camera FOLLOWS the rover at this span (0 = whole-patch fixed)
+var _td_frameboth := false              # --td-frameboth: top-down cam frames BOTH rover + lander (zoomed lit so ruts resolve)
 # --sun-sweep -> A2-sweep sun sweep + boulder manifest (sun_sweep.gd / boulder_manifest.gd).
 var _sun_sweep_mode := false
 # --lander-faces -> M3-tag 4-face AprilTag bundle (lander_bundle.gd).
@@ -175,6 +178,10 @@ var _seq_stride := 2
 # of the static demo offset, so single-frame rover renders stay unchanged.
 var _rover_rc_override := Vector2i(-1, -1)
 var _rover_yaw := 0.0
+# Terrain-conform tilt (rover-physics pass): the surface normal the rover's local +Y is
+# tilted onto in _build_rover. Vector3.UP (the default) = flat -> non-conform paths render
+# byte-identically. Set per frame by the spiral drivers from the drive_spiral.py pose track.
+var _rover_up := Vector3.UP
 
 func _ready() -> void:
 	_parse_args()
@@ -511,6 +518,12 @@ func _parse_args() -> void:
 				i += 1; _out_scene_name = String(args[i])
 			"--qt-leaves":
 				i += 1; _qt_leaves_path = String(args[i])
+			"--rover-pose":
+				i += 1; _rover_pose_path = String(args[i])
+			"--td-follow":
+				i += 1; _td_follow_m = float(args[i])
+			"--td-frameboth":
+				_td_frameboth = true
 			"--drums-up":
 				_drums_up = true
 			"--lander-standoff":
@@ -909,6 +922,24 @@ func _build_clasts() -> void:
 # only the MESHES are 0.35-scaled; joint origins are absolute). If the sub-part
 # glbs are missing it FALLS BACK to the chassis-only path (rover_base.glb, the
 # prior README #11 behavior) so the layer never hard-fails.
+# Tilt a yaw-only basis so its local +Y aligns to `up` (a surface normal), preserving the
+# heading as much as possible (geodesic up-align — the SAME idiom as the clast rest tilt at
+# ~877). up==Vector3.UP (the flat default) returns the yaw basis UNCHANGED, so every
+# non-conform path (static demo pose, sequence frames without --rover-pose) renders
+# byte-identically. The ground-snap below still seats the lowest wheel at the surface.
+func _tilt_to_up(yaw_basis: Basis, up: Vector3) -> Basis:
+	var u := up.normalized()
+	if u.length() < 0.5:
+		return yaw_basis                      # degenerate / unset -> flat
+	var ang := Vector3.UP.angle_to(u)
+	if ang < 1e-4:
+		return yaw_basis                      # already upright
+	var axis := Vector3.UP.cross(u)
+	if axis.length() < 1e-6:
+		return yaw_basis                      # antiparallel guard (never for a surface normal)
+	return Basis(axis.normalized(), ang) * yaw_basis
+
+
 func _build_rover() -> void:
 	var body_path := "res://assets/rover_body.glb"
 	var have_parts := FileAccess.file_exists(body_path) \
@@ -993,7 +1024,9 @@ func _build_rover() -> void:
 		rx = sf.world_min.x + place_rc.y * sf.cell_m   # col -> +X
 		rz = sf.world_min.y + place_rc.x * sf.cell_m   # row -> +Z
 		surf_y = sf.height_uv(u, v)
-		yaw = Basis(Vector3.UP, _rover_yaw)
+		# Terrain conform (rover-physics pass): tilt the yaw basis so local +Y aligns to the
+		# wheel-plane normal _rover_up (drive_spiral.py conform_pose). _rover_up==UP -> unchanged.
+		yaw = _tilt_to_up(Basis(Vector3.UP, _rover_yaw), _rover_up)
 	else:
 		var ext: Vector2 = sf.extent_m()
 		rx = sf.world_min.x + ext.x * 0.5 + ext.x * 0.22

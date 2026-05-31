@@ -490,8 +490,16 @@ func tex_track_dir() -> ImageTexture:
 func has_track_marks() -> bool:
 	return has_track_dir
 
+# Adaptive track-dir field size so the 0.18 m wheel bands resolve at the FIELD scale: texel
+# pitch ~0.10 m, clamped [TRACK_DIR_TEX_SIZE, 2048]. Small (5 m) scenes stay 256 (2 cm/texel,
+# unchanged); the 220 m spiral patch climbs to ~2048 (~0.11 m/texel) so the carved ruts read
+# as terrain features in the zoomed lit top-down instead of sub-texel smears.
+func _track_tex_size() -> int:
+	var extent_m := maxf(float(width), float(height)) * cell_m
+	return clampi(int(round(extent_m / 0.10)), TRACK_DIR_TEX_SIZE, 2048)
+
 func _bake_track_dir() -> Image:
-	var sz := TRACK_DIR_TEX_SIZE
+	var sz := _track_tex_size()
 	var img := Image.create(sz, sz, false, Image.FORMAT_RGB8)
 	img.fill(TRACK_DIR_NEUTRAL)
 	if not has_track_dir or width <= 1 or height <= 1:

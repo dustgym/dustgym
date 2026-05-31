@@ -21,6 +21,7 @@ Run: .venv/bin/python scripts/demo/spiral_composites.py
 """
 from __future__ import annotations
 import argparse, json, os, sys
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -63,6 +64,65 @@ def _tile(im, cw, ch, caption=None):
     return cell
 
 
+#: Per-wheel track hues for the accumulating compaction-trail markup (LF/RF/LB/RB).
+_TRACK_HUES = {"LF": (255, 90, 90), "RF": (255, 170, 50), "LB": (90, 170, 255), "RB": (90, 255, 170)}
+
+
+class _Markup:
+    """Draws the accumulating 4-wheel compaction-trail polyline onto a top-down PNG.
+
+    The 2 cm grouser cleats are sub-pixel at any rover+origin-in-frame zoom, so the trail
+    can't render as in-engine terrain features -- instead we MARK UP the rendered frame with
+    the real per-wheel track polylines (the driven scene's INTERFACE.md §5.2 wheel_tracks),
+    mapped to pixels via the per-frame camera affine the renderer emitted (proj.json: the
+    pixel projections of the scene origin + 10 m along +X/+Z). Works for BOTH the whole-patch
+    unlit framing and the zoomed lit frame-both framing with no per-camera math here.
+    """
+
+    def __init__(self, driven_scene_dir):
+        self.ok = False
+        mp = os.path.join(driven_scene_dir, "metadata.json")
+        if not os.path.exists(mp):
+            return
+        m = json.load(open(mp))
+        self.wt = m.get("wheel_tracks", {})
+        if not self.wt:
+            return
+        self.cell = float(m["grid"]["cell_m"])
+        wb = m["world_bounds_m"]
+        self.x0, self.y0 = float(wb["x0"]), float(wb["y0"])
+        self.cx, self.cz = (self.x0 + float(wb["x1"])) / 2.0, (self.y0 + float(wb["y1"])) / 2.0
+        self._proj_cache = {}
+        self.ok = True
+
+    def _proj(self, run_dir):
+        if run_dir not in self._proj_cache:
+            p = os.path.join(run_dir, "proj.json")
+            self._proj_cache[run_dir] = json.load(open(p)) if os.path.exists(p) else None
+        return self._proj_cache[run_dir]
+
+    def draw(self, img, run_dir, idx, width=3):
+        """Overlay the trail-so-far (frames 0..idx) on `img` (native render resolution)."""
+        if not self.ok:
+            return img
+        proj = self._proj(run_dir)
+        if not proj or idx >= len(proj):
+            return img
+        pr = proj[idx]
+        o = np.array(pr["o"], dtype=float)
+        ex = (np.array(pr["x"], dtype=float) - o) / float(pr["ref_m"])   # px per world-metre +X
+        ez = (np.array(pr["z"], dtype=float) - o) / float(pr["ref_m"])   # px per world-metre +Z
+        img = img.convert("RGB").copy()
+        d = ImageDraw.Draw(img)
+        for wheel, hue in _TRACK_HUES.items():
+            pts = self.wt.get(wheel, {}).get("points", [])[:idx + 1]
+            px = [tuple(o + (self.x0 + col * self.cell - self.cx) * ex
+                        + (self.y0 + row * self.cell - self.cz) * ez) for row, col in pts]
+            if len(px) > 1:
+                d.line(px, fill=hue, width=width)
+        return img
+
+
 def _draw_legend(img, entries, pad=10, sw=18, fs=15):
     """Draw a compact swatch legend in the bottom-left of `img`. entries = [((r,g,b), label), ...]."""
     img = img.convert("RGB").copy()
@@ -86,6 +146,7 @@ _QT_LEGEND = [
     ((63, 143, 216), "coarse far-field"),
     ((255, 30, 217), "rover"),
     ((235, 235, 235), "lander"),
+    ((90, 170, 255), "wheel tracks (compaction)"),
 ]
 
 
@@ -143,6 +204,13 @@ def build_composites(cam_root, scene_dir, out_dir, *, cell=512):
         if not os.path.isdir(d):
             print(f"(warn: top-down run absent: {d} -- tiles will be placeholders)")
 
+    # Accumulating compaction-trail markup (driven scene carries the §5.2 wheel_tracks; each
+    # top-down run carries proj.json). The 2 cm cleats are sub-pixel at this zoom, so the trail
+    # is drawn as polyline markup on both top-downs rather than rendered as in-engine cleats.
+    driven = scene_dir + "_driven"
+    mk = _Markup(driven if os.path.isdir(driven) else scene_dir)
+    print(f"composites: compaction-trail markup {'ON' if mk.ok else 'OFF (no wheel_tracks found)'}")
+
     # shared fixed axes for the position panel (LIT run feeds both composites' position+SLAM tile),
     # and the static lit-vs-unlit failure breakdown pasted into every 3x2 frame.
     axes_lit = P.position_axes(lander_xy["lit"], runs["lit"]) if n_lit else None
@@ -151,9 +219,10 @@ def build_composites(cam_root, scene_dir, out_dir, *, cell=512):
     frames2, frames3 = [], []
     for idx in range(N):
         nnn = f"{idx:03d}"
-        tdl = _load_png(os.path.join(td_lit, nnn, "topdown.png"), "top-down LIT")
-        tdu = _draw_legend(_load_png(os.path.join(td_unlit, nnn, "topdown.png"), "top-down UNLIT"), _QT_LEGEND)
-        rcu = _load_png(os.path.join(rovercam_unlit, nnn, "front_left.png"), "rover-cam UNLIT")
+        tdl = mk.draw(_load_png(os.path.join(td_lit, nnn, "topdown.png"), "top-down LIT"), td_lit, idx)
+        tdu = _draw_legend(mk.draw(_load_png(os.path.join(td_unlit, nnn, "topdown.png"), "top-down UNLIT"),
+                                   td_unlit, idx), _QT_LEGEND)
+        rcu = _load_png(os.path.join(rovercam_unlit, nnn, "left_mono.png"), "rover-cam UNLIT")
         pos = (P.position_frame(lander_xy["lit"], runs["lit"], idx + 1, *axes_lit,
                                 "truth vs AprilTag-SLAM (lit)")
                if axes_lit else _load_png("", "position+SLAM"))
@@ -172,7 +241,7 @@ def build_composites(cam_root, scene_dir, out_dir, *, cell=512):
         cells3 = [
             (tdl, "top-down: 7° grazing sun (exp-boosted)"),
             (tdu, "top-down: unlit — quadtree LOD"),
-            (rcu, "rover-cam: unlit-tag front-left"),
+            (rcu, "rover-cam: side-mono (lander fiducial)"),
             (pos, None),
             (fail_pil if fail_pil is not None else _load_png("", "failure breakdown"), None),
             (res, None),

@@ -22,8 +22,8 @@ from . import procgen
 from . import refinement
 from .column_state import ColumnState, StateLabel, loose_mask
 from .quadtree import build_quadtree, leaves_cover_field
-from .rover import (WHEEL_GAUGE_M, build_wheel_tracks_meta, four_wheel_pass,
-                    straight_path, wheel_contact_points, wheel_pass)
+from .rover import (WHEEL_GAUGE_M, build_wheel_tracks_meta, conform_pose,
+                    four_wheel_pass, straight_path, wheel_contact_points, wheel_pass)
 from .sandpile import Sandpile
 
 _results: list[tuple[str, bool, str]] = []
@@ -649,6 +649,48 @@ def test_four_wheel_pass_preserves_mass() -> None:
           f"ruts_sank={sank} height_err={err_h:.2e}")
 
 
+def test_conform_pose_flat_ramp_clast() -> None:
+    """Kinematic conform: flat -> upright; planar ramp -> pitch==atan(slope); clast ride-over tilts.
+
+    GEOMETRY-ACCURATE check (no forces): the rover sits on the plane through its 4 wheel
+    contacts, and a half-buried boulder under one wheel lifts that contact (README §4 fix).
+    """
+    cell_m = 0.05
+    H = W = 64
+    center = (32.0, 32.0)
+
+    # (a) FLAT -> perfectly upright, zero tilt.
+    flat = np.zeros((H, W), dtype=np.float64)
+    pf = conform_pose(flat, center, 0.0, cell_m=cell_m)
+    flat_ok = (abs(pf["pitch_rad"]) < 1e-9 and abs(pf["roll_rad"]) < 1e-9
+               and abs(pf["up"][0]) < 1e-9 and abs(pf["up"][2]) < 1e-9
+               and abs(pf["up"][1] - 1.0) < 1e-9)
+
+    # (b) planar RAMP rising in +x (world). heading 0 -> forward=+col/+X, so the fore/aft
+    #     wheels straddle the slope -> pitch == atan(slope), roll == 0, up tilts toward -x.
+    slope = 0.1
+    ramp = np.tile(np.arange(W) * cell_m * slope, (H, 1)).astype(np.float64)  # height = slope*x
+    pr = conform_pose(ramp, center, 0.0, cell_m=cell_m)
+    ramp_ok = (abs(pr["pitch_rad"] - float(np.arctan(slope))) < 1e-6
+               and abs(pr["roll_rad"]) < 1e-9
+               and pr["up"][0] < 0.0 and abs(pr["up"][2]) < 1e-9)
+
+    # (c) CLAST ride-over: a boulder centred under the LF wheel lifts that contact -> tilt.
+    cpts = wheel_contact_points(center, 0.0, cell_m=cell_m)
+    lf_r, lf_c = cpts["LF"]
+    clast = {"center_m": [lf_c * cell_m, 0.0, lf_r * cell_m], "radius_m": 0.30}
+    pc = conform_pose(flat, center, 0.0, cell_m=cell_m, clasts=[clast])
+    tilt_flat = abs(pf["pitch_rad"]) + abs(pf["roll_rad"])
+    tilt_clast = abs(pc["pitch_rad"]) + abs(pc["roll_rad"])
+    clast_ok = tilt_clast > tilt_flat + 1e-3
+
+    check("conform_pose: flat upright / ramp pitch=atan(slope) / clast ride-over tilts",
+          flat_ok and ramp_ok and clast_ok,
+          f"flat={flat_ok} ramp_pitch={np.degrees(pr['pitch_rad']):.3f}deg"
+          f"(exp {np.degrees(np.arctan(slope)):.3f}) clast_tilt "
+          f"{np.degrees(tilt_flat):.2f}->{np.degrees(tilt_clast):.2f}deg")
+
+
 def main() -> int:
     test_cut_dump_relax_conserves_mass()
     test_height_consistency_all_ops()
@@ -665,6 +707,7 @@ def main() -> int:
     test_refinement_toggle_equivalence()     # §6.3
     test_four_wheel_separability()           # §6.4
     test_four_wheel_pass_preserves_mass()    # §6.5
+    test_conform_pose_flat_ramp_clast()      # kinematic terrain conform (rover-physics pass)
 
     n_fail = sum(1 for _, ok, _ in _results if not ok)
     n_pass = len(_results) - n_fail
