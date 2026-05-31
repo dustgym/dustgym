@@ -11,7 +11,11 @@ shader_type spatial;
 // (blown-white) clast look on its side of the comparison.
 render_mode specular_disabled;
 
-uniform vec3 base_albedo : source_color = vec3(0.55, 0.52, 0.49);  // rock single-scatter albedo w
+// Rock single-scatter albedo w. NEUTRAL-grey to MATCH the regolith tint (terrain base_albedo
+// 0.45,0.44,0.43): lunar rocks don't stand out by COLOR — they read as grey blocks distinguished by
+// shape/shadow/brightness, not hue. Same faint-warm-grey ratio as the fines (R/B~1.04), just
+// marginally brighter (less-weathered block); was a warmer 0.55,0.52,0.49 (R/B~1.12, rendered brown).
+uniform vec3 base_albedo : source_color = vec3(0.50, 0.49, 0.48);  // rock w, grey to match the fines
 uniform float albedo_jitter = 0.12;     // +/- per-instance brightness spread (anti-uniformity)
 uniform float clast_roughness = 0.93;
 
