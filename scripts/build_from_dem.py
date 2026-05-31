@@ -63,8 +63,16 @@ def build(src: str, out_dir: str, *, extent_m: float = 10000.0,
     print(f"cropped {n}x{n} @ {px} m at row0,col0=({r0},{c0})  relief={relief:.1f} m")
 
     # --- 2. inject the surface via the datum path -> ColumnState ----------
+    # Density now rides the ChaSTE polar profile via the density_fn hook (Wave-2
+    # W2-DENSITY): a single depth-integrated (mass-weighted-mean) bulk density over
+    # the loose mantle [0, Z_T], broadcast as a constant grid (NOT a spatial field —
+    # ChaSTE is one vertical probe at 69.4 deg S). It REPLACES the equatorial-Apollo
+    # K.RHO_SURFACE stand-in. derive_height()==Z is unchanged (density cancels in the
+    # inversion); only the loose mantle's areal MASS becomes the sourced polar value.
+    density_fn = di.polar_mantle_density_fn(K.Z_T)
     cs = di.dem_to_base(Z_crop, affine_crop, base_cell_m,
-                        mantle_m=K.Z_T, density=K.RHO_SURFACE)
+                        mantle_m=K.Z_T, density_fn=density_fn)
+    rho_bar = density_fn.rho_bar
     aff_base = cs._dem_affine  # global-frame affine at base_cell_m
     surf = cs.derive_height()
     inject_err = float(np.max(np.abs(surf - _resampled_ref(Z_crop, affine_crop, base_cell_m))))
@@ -117,12 +125,20 @@ def build(src: str, out_dir: str, *, extent_m: float = 10000.0,
         "regolith_model": {
             "uniform_mantle": True,
             "mantle_thickness_m": K.Z_T,
-            "surface_density": K.RHO_SURFACE,
-            "mantle_areal_kg_m2": round(K.Z_T * K.RHO_SURFACE, 4),
+            "mantle_density_kg_m3": round(rho_bar, 4),
+            "mantle_density_source": "ChaSTE depth-integrated (mass-weighted-mean) bulk "
+                                     "density over [0, Z_T]; constant broadcast, NOT a "
+                                     "spatial field [CALIB]",
+            "mantle_areal_kg_m2": round(K.Z_T * rho_bar, 4),
             "note": "DEM surface injected via the datum path: datum=Z-Z_T, "
-                    "mass_areal=Z_T*RHO_SURFACE, derive_height()==Z. Z_T is the cm-scale "
+                    "mass_areal=Z_T*rho_bar, derive_height()==Z. Z_T is the cm-scale "
                     "loose layer; the datum carries everything below it (eval §5 step 1). "
-                    "UNIFORM density (Lane B's polar profile is wired in Wave-2).",
+                    "rho_bar is the mass-weighted mean of the ChaSTE polar profile "
+                    "(constants.polar_density_profile: 750/1300/1940 over 0-3/3-6.5/"
+                    ">6.5 cm) integrated over [0, Z_T] via dem_import."
+                    "polar_mantle_density_fn (Wave-2 W2-DENSITY) — REPLACES the prior "
+                    "equatorial-Apollo RHO_SURFACE stand-in. Density CANCELS in "
+                    "derive_height, so only the loose mantle's areal mass changes.",
         },
         "dem_provenance": {
             "source": "PGDA LOLA_5mpp Haworth_final_adj_5mpp_surf.tif (Product 78)",

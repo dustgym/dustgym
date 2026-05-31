@@ -36,13 +36,15 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
 from . import constants as K
 from .column_state import ColumnState
 
-__all__ = ["Affine", "load_lola_geotiff", "crop_square", "dem_to_base"]
+__all__ = ["Affine", "load_lola_geotiff", "crop_square", "dem_to_base",
+           "polar_mantle_density_fn"]
 
 
 # ---------------------------------------------------------------------------
@@ -404,3 +406,150 @@ def dem_to_base(Z_crop: np.ndarray, affine: Affine, base_cell_m: float, *,
     # without re-deriving it (a plain attribute; ColumnState ignores extras).
     cs._dem_affine = affine_out  # type: ignore[attr-defined]
     return cs
+
+
+# ---------------------------------------------------------------------------
+# 4. polar_mantle_density_fn — fill dem_to_base's density_fn hook with the
+#    depth-integrated ChaSTE bulk density (Wave-2 W2-DENSITY).
+# ---------------------------------------------------------------------------
+
+def polar_mantle_density_fn(mantle_m: float = K.Z_T
+                            ) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+    """Build the ``density_fn(X, Y)`` hook for ``dem_to_base`` from the ChaSTE profile.
+
+    Resolves an AXIS MISMATCH (contract §8, W2-DENSITY): ``dem_to_base`` calls its
+    ``density_fn(X, Y)`` with per-cell WORLD-coordinate arrays [m], but
+    ``constants.polar_density_profile`` takes DEPTH below the surface [m]. They live
+    on different axes, so the profile cannot be handed in directly.
+
+    The bridge is to collapse the depth axis: integrate the ChaSTE profile over the
+    loose mantle ``[0, mantle_m]`` and divide by ``mantle_m`` to get the
+    DEPTH-INTEGRATED (mass-weighted-mean) bulk density of that column — one scalar
+
+        rho_bar = (1/mantle_m) * integral_0^mantle_m polar_density_profile(z) dz .
+
+    Be honest about what this is: a SINGLE mass-weighted-mean scalar BROADCAST across
+    the whole grid, NOT a spatial density field. The returned closure IGNORES X, Y and
+    returns a constant grid of ``rho_bar`` shaped to the inputs. (A true spatial polar
+    field would need lateral density data we do not have; ChaSTE is one vertical probe
+    at 69.4 deg S.) The mass-weighting follows ``polar_density_profile``'s own piecewise
+    constants — RHO_SURFACE_POLAR over [0, 3 cm), RHO_MID_POLAR over [3, 6.5 cm), and
+    the RHO_BULK_POLAR_10CM stand-in beyond the ~6.5 cm ChaSTE band (constants §ChaSTE,
+    eval §6 row). With the default ``mantle_m == Z_T == 0.12 m`` the deeper-than-6.5-cm
+    remainder is the dominant slab, so ``rho_bar`` sits between RHO_MID_POLAR and
+    RHO_BULK_POLAR_10CM (and always within [RHO_SURFACE_POLAR, RHO_BULK_POLAR_10CM]).
+
+    Why it does not change the surface: in ``dem_to_base`` density CANCELS out of the
+    height inversion (``datum = Z - mantle_m``, ``mass = mantle_m * rho``,
+    ``height = datum + mass/rho == Z`` for any positive rho). So the loose mantle now
+    carries a sourced polar AREAL MASS (``mantle_m * rho_bar`` kg/m^2) instead of the
+    equatorial-Apollo ``RHO_SURFACE`` stand-in, with ``derive_height()`` untouched.
+    """
+    mantle_m = float(mantle_m)
+    if mantle_m <= 0.0:
+        raise ValueError(f"polar_mantle_density_fn: mantle_m={mantle_m} must be > 0")
+
+    # Mass-weighted mean = (integral of the piecewise-constant profile over [0, mantle_m])
+    # / mantle_m. Integrate analytically off polar_density_profile's own band edges/
+    # values so the closure stays sourced to that function (no re-typed constants).
+    edges = [0.0, K.Z_POLAR_TOP_M, K.Z_POLAR_MID_M, mantle_m]
+    integral = 0.0
+    for lo, hi in zip(edges, edges[1:]):
+        lo = min(max(lo, 0.0), mantle_m)
+        hi = min(max(hi, 0.0), mantle_m)
+        if hi <= lo:
+            continue
+        # Evaluate the profile at the band MIDPOINT to pick its constant value.
+        rho_band = float(K.polar_density_profile((lo + hi) / 2.0))
+        integral += rho_band * (hi - lo)
+    rho_bar = integral / mantle_m
+
+    def density_fn(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+        """Constant ChaSTE depth-integrated bulk density [kg/m^3], broadcast over the
+        grid. IGNORES X, Y (this is a scalar, not a spatial field — see closure doc)."""
+        return np.full(np.shape(X), rho_bar, dtype=np.float64)
+
+    # Expose the scalar for honest logging/metadata (callers may read it; closures
+    # are otherwise opaque). A plain attribute; nothing depends on it structurally.
+    density_fn.rho_bar = rho_bar  # type: ignore[attr-defined]
+    density_fn.mantle_m = mantle_m  # type: ignore[attr-defined]
+    return density_fn
+
+
+# ---------------------------------------------------------------------------
+# Self-test (W2-DENSITY) — exercises polar_mantle_density_fn end to end.
+#   python -m terrain_authority.dem_import
+# ---------------------------------------------------------------------------
+
+def _self_test() -> int:
+    results: list[tuple[str, bool, str]] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        results.append((name, bool(ok), detail))
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""))
+
+    # 1. The returned density is CONSTANT and lies in the sourced ChaSTE range
+    #    [RHO_SURFACE_POLAR, RHO_BULK_POLAR_10CM]. This is the REAL density acceptance
+    #    check (the height round-trip below cannot see density — it cancels). -----------
+    dfn = polar_mantle_density_fn()  # default mantle_m == K.Z_T
+    Xq = np.linspace(-50.0, 50.0, 7)
+    Yq = np.linspace(200.0, 260.0, 5)
+    XX, YY = np.meshgrid(Xq, Yq)
+    rho = dfn(XX, YY)
+    is_const = bool(rho.shape == XX.shape and np.ptp(rho) == 0.0)
+    rho0 = float(rho.flat[0])
+    in_range = bool(K.RHO_SURFACE_POLAR <= rho0 <= K.RHO_BULK_POLAR_10CM)
+    # Independent recomputation of the mass-weighted mean for Z_T (0.12 m): bands are
+    # [0,3cm)@750, [3,6.5cm)@1300, [6.5,12cm)@1940.
+    expect = (K.RHO_SURFACE_POLAR * K.Z_POLAR_TOP_M
+              + K.RHO_MID_POLAR * (K.Z_POLAR_MID_M - K.Z_POLAR_TOP_M)
+              + K.RHO_BULK_POLAR_10CM * (K.Z_T - K.Z_POLAR_MID_M)) / K.Z_T
+    matches = abs(rho0 - expect) <= 1e-9
+    check("density is a constant grid in [RHO_SURFACE_POLAR, RHO_BULK_POLAR_10CM] "
+          "= mass-weighted ChaSTE mean",
+          is_const and in_range and matches,
+          f"rho_bar={rho0:.2f} expect={expect:.2f} "
+          f"[{K.RHO_SURFACE_POLAR:.0f},{K.RHO_BULK_POLAR_10CM:.0f}] "
+          f"const={is_const} closure_attr={dfn.rho_bar:.2f}")
+
+    # 2. Feeding the hook through dem_to_base on a small synthetic DEM still satisfies
+    #    derive_height() == Z within 1e-3 m. NOTE: density CANCELS in derive_height
+    #    (datum=Z-mantle, mass=mantle*rho, height=datum+mass/rho=Z for ANY rho>0), so
+    #    this is a ROUND-TRIP SANITY that the hook is plumbed correctly — the real
+    #    density assertion is the range check in (1), not this. --------------------------
+    aff = Affine(x0=-52900.0, y0=105400.0, px=5.0)  # real-tile-ish global origin
+    rng = np.random.default_rng(0)
+    Z = (np.linspace(-3.0, 4.0, 6)[:, None] + np.linspace(0.0, 2.0, 8)[None, :]
+         + 0.1 * rng.standard_normal((6, 8))).astype(np.float32)
+    cs = dem_to_base(Z, aff, 5.0, mantle_m=K.Z_T, density_fn=polar_mantle_density_fn())
+    h = cs.derive_height()
+    rt_err = float(np.max(np.abs(h - Z.astype(np.float64))))
+    # The density field that actually landed in the ColumnState must be the constant.
+    landed_const = bool(np.ptp(cs.density) == 0.0
+                        and abs(float(cs.density.flat[0]) - rho0) <= 1e-9)
+    # And it must be the POLAR value, not the equatorial RHO_SURFACE stand-in.
+    differs_from_default = abs(rho0 - K.RHO_SURFACE) > 1.0
+    check("dem_to_base with the hook: derive_height()==Z within 1e-3 m (density cancels) "
+          "and the landed density is the polar constant",
+          rt_err <= 1e-3 and landed_const and differs_from_default,
+          f"rt_err={rt_err:.2e} m landed_rho={float(cs.density.flat[0]):.2f} "
+          f"(RHO_SURFACE stand-in was {K.RHO_SURFACE:.0f})")
+
+    # 3. Monotonicity / band-collapse robustness: a thinner mantle that stops inside the
+    #    top fines must give a LOWER mass-weighted mean (more weight on the loose top),
+    #    and one within only the top band returns exactly RHO_SURFACE_POLAR. ------------
+    thin = polar_mantle_density_fn(0.02).rho_bar     # all inside the 0-3 cm @750 band
+    mid = polar_mantle_density_fn(0.05).rho_bar      # spans 750 + 1300 bands
+    monotone = bool(abs(thin - K.RHO_SURFACE_POLAR) <= 1e-9
+                    and K.RHO_SURFACE_POLAR < mid < rho0 <= K.RHO_BULK_POLAR_10CM)
+    check("mass-weighting is depth-correct: thinner mantle -> lower mean "
+          "(top-only == RHO_SURFACE_POLAR)",
+          monotone, f"thin(2cm)={thin:.1f} mid(5cm)={mid:.1f} full(Z_T)={rho0:.1f}")
+
+    n_fail = sum(1 for _, ok, _ in results if not ok)
+    print(f"\n{len(results) - n_fail}/{len(results)} checks passed.")
+    return 1 if n_fail else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_self_test())
