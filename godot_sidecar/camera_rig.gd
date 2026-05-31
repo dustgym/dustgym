@@ -17,44 +17,41 @@ class_name CameraRig
 # drum cams are M3 (§4) and are deliberately NOT here so adding them stays purely
 # additive.
 
-# --- [CALIB] rig geometry -----------------------------------------------------
-# Stereo baseline: metric left<->right separation. M1 default 0.100 m, flagged
-# [CALIB] until an IPEx engineering figure is sourced (contract §2.2). The two
-# cameras sit at +/- BASELINE_M/2 along the lateral (Z) axis, so their world
-# separation == BASELINE_M exactly (the sensors.json baseline_m MUST equal
-# |extrinsic_left.pos - extrinsic_right.pos|).
-const BASELINE_M := 0.100              # [CALIB]
-# Mast height above the rover body origin (base_link). ~0.4 m raises the stereo
-# pair clear of the chassis so both see the lander 2.5 m ahead. [CALIB].
-const MAST_HEIGHT_M := 0.40            # [CALIB]
-# Forward standoff of the optical centres from base_link along +X, so the lenses
-# sit just ahead of the mast rather than inside the body. [CALIB].
-const FORWARD_OFFSET_M := 0.20         # [CALIB]
-# Horizontal field of view (degrees) used for BOTH cameras. Drives the pinhole
-# intrinsics (fx = fy = (w/2)/tan(fov_x/2)). Godot Camera3D.fov IS the horizontal
-# fov when keep_aspect = KEEP_WIDTH (set on each cam below). [CALIB].
-const FOV_X_DEG := 70.0                # [CALIB]
+# --- rig geometry: SOURCED from the EZ-RASSOR URDF (not [CALIB] guesses) -------
+# ezrassor.xacro `camera_front_joint`: base_link -> depth_camera_front at
+# xyz="0.3 0 -0.1" (Z-up), rpy 0; horizontal FOV 1.29154 rad (~74deg), 640x480
+# (docs/ezrassor_assets.md §sensor stack). The URDF carries ONE mono depth camera;
+# we mount the IPEx front-STEREO pair CENTERED on that real mount point (the stereo
+# pair is the IPEx addition). Z-up -> Y-up via (x,y,z)_zup -> (x,z,-y)_yup:
+#   (0.3, 0, -0.1)_zup -> (0.30 fwd +X, -0.10 up +Y i.e. 0.10 BELOW base_link, 0 lat).
+const CAM_FORWARD_M := 0.30            # URDF camera_front X (forward of base_link)
+const CAM_VERT_M := -0.10              # URDF camera_front Z(Z-up) -> Y-up: 0.10 m below base_link
+# Stereo baseline: ~70 mm — a realistic small-rover stereo separation (John). The pair sits at
+# +/- BASELINE_M/2 along the lateral (Z) axis centered on the URDF mount, so the world separation
+# == BASELINE_M exactly (sensors.json baseline_m MUST equal |extrinsic_left.pos - right.pos|).
+const BASELINE_M := 0.070              # realistic; was a [CALIB] 0.10 m guess
+# Horizontal FOV from the URDF depth camera (1.29154 rad). fov IS the horizontal fov when
+# keep_aspect = KEEP_WIDTH (set per cam below); drives intrinsics fx=fy=(w/2)/tan(fov_x/2).
+const FOV_X_DEG := 73.99               # URDF 1.29154 rad (was a [CALIB] 70 guess)
 const NEAR_M := 0.02
 const FAR_M := 100.0
 
-# The declarative extrinsics table. Local offsets (rover frame) + the shared
-# forward look direction. left = +Z half-baseline, right = -Z half-baseline
-# (so that, viewed looking along +X forward with +Y up, "left" is on the +Z side;
-# the actual left/right image handedness is C1's concern after the §3 conversion;
-# what matters here is the pair is laterally separated by BASELINE_M and both look
-# forward). frame_id matches the contract §2.2 schema.
+# The declarative extrinsics table. Local offsets (rover/base_link frame). left = +Z half-baseline,
+# right = -Z half-baseline (the actual L/R image handedness is C1's concern after the §3 conversion;
+# what matters here is the pair is laterally separated by BASELINE_M, centered on the URDF mount,
+# and both look forward). frame_id matches the contract §2.2 schema.
 const CAMERAS := [
 	{
 		"name": "front_left",
 		"frame_id": "front_left_optical",
 		"image": "front_left.png",
-		"offset": Vector3(FORWARD_OFFSET_M, MAST_HEIGHT_M, 0.5 * BASELINE_M),
+		"offset": Vector3(CAM_FORWARD_M, CAM_VERT_M, 0.5 * BASELINE_M),
 	},
 	{
 		"name": "front_right",
 		"frame_id": "front_right_optical",
 		"image": "front_right.png",
-		"offset": Vector3(FORWARD_OFFSET_M, MAST_HEIGHT_M, -0.5 * BASELINE_M),
+		"offset": Vector3(CAM_FORWARD_M, CAM_VERT_M, -0.5 * BASELINE_M),
 	},
 ]
 

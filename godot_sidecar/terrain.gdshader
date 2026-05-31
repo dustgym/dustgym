@@ -107,16 +107,16 @@ uniform float hapke_gain = 1.4;
 uniform float field_span_m = 5.12;
 // Base granularity (§4.2.2): grain size and bump strength. ~8 mm grains read at the
 // mesh scale; strength is the max normal tilt (radians-ish) scaled by disturbance.
-uniform float grain_size_m = 0.008;
-uniform float grain_strength = 0.72;
+uniform float grain_size_m = 0.013;   // pebble-scale bumps -> pronounced grazing-sun micro-shadows
+uniform float grain_strength = 1.00;  // stronger relief (crisper, pebblier; Apollo-surface ref)
 // Fine granular ALBEDO speckle (Apollo-surface grit; lpi.usra.edu apollo_14 ref). World-anchored
 // high-frequency BRIGHTNESS variation at the granule scale so the ground reads as gritty regolith
 // instead of a smooth/interpolated slab, AND so passive stereo has matchable intensity texture (it
 // was previously NORMAL-only -> too low-texture for SGBM to match -> blank depth). ONE fine layer
 // (+ a finer fleck) — the MACRO structure comes from the physics heightmap + macro mottle, so no
 // deep fbm. Amplitude is per-state (state_grain_factor): TREAD turned way down (compaction smooths).
-uniform float grain_albedo_amp = 0.19;    // peak +/- fractional brightness speckle
-uniform float speckle_size_m = 0.018;     // granule cell size (m) for the albedo speckle
+uniform float grain_albedo_amp = 0.22;    // peak +/- fractional brightness speckle
+uniform float speckle_size_m = 0.020;     // granule cell size (m) for the albedo speckle
 // Grouser cleat pitch + depth (§4.2.3; EZ-RASSOR wheel). 2 cm pitch sits in the
 // 1-3 cm band; transverse ridges.
 uniform float cleat_pitch_m = 0.02;
@@ -147,24 +147,38 @@ int state_label(vec2 uv) {
 	return int(round(s * 255.0));
 }
 
-// --- cheap hash / value noise (no texture asset; render_fidelity_spec.md §4.2.2) --
-float hash21(vec2 p) {
-	p = fract(p * vec2(123.34, 345.45));
-	p += dot(p, p + 34.345);
-	return fract(p.x * p.y);
+// --- simplex noise (Ashima Arts / Stefan Gustavson "webgl-noise", MIT) --------
+// The prior cheap-hash value noise was sampled on a SQUARE lattice and is not isotropic, so it
+// showed axis-aligned square/diamond artifacts — and the crisp speckle made the lattice visible.
+// Simplex noise uses a triangular simplex grid and IS isotropic, so the grit carries no grid
+// pattern. snoise() returns ~[-1,1]; vnoise() wraps it to [0,1] so every existing call site (macro
+// mottle, grain_height, speckle) is unchanged.
+vec2 _sx_mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec3 _sx_mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec3 _sx_permute(vec3 x) { return _sx_mod289(((x * 34.0) + 1.0) * x); }
+float snoise(vec2 v) {
+	const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+	vec2 i = floor(v + dot(v, C.yy));
+	vec2 x0 = v - i + dot(i, C.xx);
+	vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+	vec4 x12 = x0.xyxy + C.xxzz;
+	x12.xy -= i1;
+	i = _sx_mod289(i);
+	vec3 p = _sx_permute(_sx_permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+	vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+	m = m * m; m = m * m;
+	vec3 x = 2.0 * fract(p * C.www) - 1.0;
+	vec3 h = abs(x) - 0.5;
+	vec3 ox = floor(x + 0.5);
+	vec3 a0 = x - ox;
+	m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+	vec3 g;
+	g.x = a0.x * x0.x + h.x * x0.y;
+	g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+	return 130.0 * dot(m, g);
 }
-
-// Smooth value noise in [0,1].
-float vnoise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	float a = hash21(i + vec2(0.0, 0.0));
-	float b = hash21(i + vec2(1.0, 0.0));
-	float c = hash21(i + vec2(0.0, 1.0));
-	float d = hash21(i + vec2(1.0, 1.0));
-	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
+// [0,1] isotropic noise — drop-in for the old value noise (same name/range, no grid artifacts).
+float vnoise(vec2 p) { return snoise(p) * 0.5 + 0.5; }
 
 // 2-octave granular height in [0,1] at a point scaled into "grain space".
 float grain_height(vec2 gp) {
@@ -250,6 +264,7 @@ void fragment() {
 	{
 		vec2 sp = field_uv * (field_span_m / max(speckle_size_m, 1e-4));
 		float spk = 0.6 * vnoise(sp) + 0.4 * vnoise(sp * 2.3 + vec2(19.7, 4.1));  // [0,1]
+		spk = smoothstep(0.28, 0.72, spk);   // CRISP the flecks: distinct light/dark grains, not soft gradient
 		col *= (1.0 + grain_albedo_amp * state_grain * (spk * 2.0 - 1.0));
 	}
 

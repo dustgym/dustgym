@@ -129,6 +129,7 @@ var _lander_standoff := -1.0    # metres ahead of rover; <0 -> LANDER_STANDOFF_M
 var _lander_yaw_deg := 0.0      # yaw the tag face off-square for oblique fiducial views (--lander-yaw)
 var _rover_sink := 0.0          # drop the rover this many metres into the terrain (--rover-sink)
 var _cam_pitch_deg := 0.0       # downward pitch of the stereo pair so the ground fills frame (--cam-pitch)
+var _drums_up := false          # raise BOTH drum arms clear of the camera module (--drums-up; auto in --cameras)
 
 # Lander placement ahead of the rover along its forward (+X yawed) direction, so
 # BOTH front cameras see the rover-facing tag face (contract §1/§5). [CALIB].
@@ -435,6 +436,9 @@ func _parse_args() -> void:
 				_probe_multicam = true
 			"--cameras":
 				_cameras_mode = true
+				_drums_up = true                 # the camera module needs the drums lifted out of view
+			"--drums-up":
+				_drums_up = true
 			"--lander-standoff":
 				i += 1; _lander_standoff = float(args[i])
 			"--lander-yaw":
@@ -981,10 +985,7 @@ func _build_rover() -> void:
 
 	# One faintly-metallic grey for the whole rover (the DAEs carried flat material
 	# colors, no per-vertex); reads as hardware against the matte regolith.
-	var rmat := StandardMaterial3D.new()
-	rmat.albedo_color = Color(0.62, 0.63, 0.66)
-	rmat.metallic = 0.35
-	rmat.roughness = 0.55
+	var rmat := _rover_material()
 
 	var root := Node3D.new()
 	root.name = "RASSOR"
@@ -1005,14 +1006,24 @@ func _build_rover() -> void:
 		if w != null:
 			root.add_child(w)
 
+	# Drum-arm pitches. Default demo pose: front lowered (digging), back raised (transport). With
+	# _drums_up (camera module active, --cameras/--drums-up) BOTH arms swing high & clear so the
+	# drums don't occlude the forward stereo pair (John: "drums lift up and out of the way of the
+	# camera module"). 1.15 rad > the 0.65 "raised clear" back-arm rest, so both are well lifted.
+	var arm_front_pitch := ARM_FRONT_PITCH
+	var arm_back_pitch := ARM_BACK_PITCH
+	if _drums_up:
+		arm_front_pitch = 1.15
+		arm_back_pitch = 1.15
+
 	# 2 arms. URDF origin rpy bakes into the pivot's REST basis; the link's visual
 	# rpy bakes into the mesh-child basis (so the arm mesh points the right way).
 	#   front: origin rpy(pi,0,0) -> pivot rest Rx(pi); visual identity.
 	#   back : origin rpy(0,0,0)  -> pivot rest identity; visual rpy(pi,0,pi) -> Rz(pi)*Rx(pi).
 	var arm_front := _make_joint("arm_front", "res://assets/drum_arm.glb",
-		ARM_FRONT_ORIGIN, Basis(Vector3.RIGHT, PI), ARM_FRONT_PITCH, Basis.IDENTITY)
+		ARM_FRONT_ORIGIN, Basis(Vector3.RIGHT, PI), arm_front_pitch, Basis.IDENTITY)
 	var arm_back := _make_joint("arm_back", "res://assets/drum_arm.glb",
-		ARM_BACK_ORIGIN, Basis.IDENTITY, ARM_BACK_PITCH, Basis(Vector3(0, 0, 1), PI) * Basis(Vector3.RIGHT, PI))
+		ARM_BACK_ORIGIN, Basis.IDENTITY, arm_back_pitch, Basis(Vector3(0, 0, 1), PI) * Basis(Vector3.RIGHT, PI))
 
 	# 2 drums — children of their arm pivot, at the arm-relative joint origin.
 	#   front drum: rel basis Rx(pi); visual identity.
@@ -1143,10 +1154,7 @@ func _build_rover_chassis_only() -> void:
 	var rover := _load_rover_glb(res_path)
 	if rover == null:
 		return
-	var rmat := StandardMaterial3D.new()
-	rmat.albedo_color = Color(0.62, 0.63, 0.66)
-	rmat.metallic = 0.35
-	rmat.roughness = 0.55
+	var rmat := _rover_material()
 	_apply_material_recursive(rover, rmat)
 	var ext: Vector2 = sf.extent_m()
 	var rx: float = sf.world_min.x + ext.x * 0.5 + ext.x * 0.22
@@ -1158,6 +1166,13 @@ func _build_rover_chassis_only() -> void:
 	rover.transform = Transform3D(basis, Vector3(rx, ry, rz))
 	add_child(rover)
 	print("sidecar: placed RASSOR chassis-only (EZ-RASSOR base_unit, MIT) at (%.2f,%.2f,%.2f)" % [rx, ry, rz])
+
+# Worn rover material (rover.gdshader): procedural dust/scratch/grime over the metal so the rover
+# reads used (not pristine CG) and isn't a textureless white that feeds passive-stereo streaks.
+func _rover_material() -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = load("res://rover.gdshader")
+	return m
 
 # Override the material on every MeshInstance3D under a node (the imported glTF tree).
 func _apply_material_recursive(node: Node, mat: Material) -> void:
