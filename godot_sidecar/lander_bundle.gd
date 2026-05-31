@@ -33,7 +33,11 @@ class_name LanderBundle
 # tag36h11, size_m = 0.150 (the 8x8 black-border square side; APRILTAG_SIZE_M in
 # sensors_emit.gd:29 + sidecar.gd:153). All four faces share family + size.
 const TAG_FAMILY := "tag36h11"
-const TAG_SIZE_M := 0.150
+# 2.5 m fiducial: sized for ~100 m theoretical detection range at the 1024px/74deg ideal
+# pinhole (the 0.15 m M1 tag died ~6m = a ~17px floor; 17px*100m/679px_fx ~= 2.5m). A tag this
+# large needs a lander to host it -> BODY_SIZE scaled to LM-class ~5m below. (DEMO range study;
+# the M1 --cameras single-tag path uses sensors_emit/apriltag_gen's own 0.15 m, unchanged.)
+const TAG_SIZE_M := 2.5
 # The white quiet ring sits OUTSIDE size_m by 10/8 (apriltag_gen.gd QUIET_RATIO=1.25;
 # the printed marker spans 10 cells, the metric size is the 8x8 black-border square).
 const QUIET_RATIO := 1.25
@@ -61,11 +65,11 @@ const TAG_PX_PER_CELL := 32            # matches apriltag_gen.make_texture defau
 #   body_size = (0.55 depth-X, 0.6 height-Y, 0.9 width-Z); front face at local x=0
 #   (the tag center == lander origin); body center pulled BEHIND the tag at
 #   x = -body_size.x/2 - 0.02 (the 2cm "proud" gap so the tag never z-fights the body).
-const BODY_SIZE := Vector3(0.55, 0.6, 0.9)   # x depth, y height, z width (sensors_emit.gd:104)
-const TAG_PROUD_M := 0.02                    # tag sits 2cm proud of the body face (sensors_emit.gd:115)
-# Body center along lander -X (sensors_emit.gd:117 body.position.x):
-const BODY_CENTER_X := -BODY_SIZE.x * 0.5 - TAG_PROUD_M   # = -0.295
-const BODY_CENTER_Y := 0.15                  # body center local y, tag center at y=0 (sensors_emit.gd:108)
+const BODY_SIZE := Vector3(4.0, 5.0, 5.0)    # x depth, y height, z width -- LM-class body to host the 2.5m tag (3.125m printed) on every vertical face
+const TAG_PROUD_M := 0.1                      # tag sits 0.1m proud of the body face (no z-fight on the big body)
+# Body center along lander -X (parametric -> scales with BODY_SIZE):
+const BODY_CENTER_X := -BODY_SIZE.x * 0.5 - TAG_PROUD_M
+const BODY_CENTER_Y := 0.0                    # tag center (y=0) = body vertical center -> tag mid-face on the big body
 
 # Per-face capture: a small turntable -- ONE inspection view per face normal -- so each
 # face is seen near fronto-parallel once, the sun-facing faces stay legible and the
@@ -157,6 +161,10 @@ static func _make_tag_texture(tag_id: int, px_per_cell: int = TAG_PX_PER_CELL) -
 # size_m; the quad faces local +Z; double-sided). The MATERIAL is the JOHN DECISION
 # difference: LIT (default SHADING_MODE_PER_PIXEL), so the cells receive the grazing
 # sun and self-shadow per face -- UNLIKE the FROZEN unlit M1 quad.
+# DEMO illumination A/B (--tag-unlit): when true, tag quads render UNSHADED (high-contrast,
+# sun-independent) instead of the default LIT plate -- isolates tag illumination's effect on
+# detection / pose-vs-truth. Set by depart_spiral from sidecar._tag_unlit before the lander build.
+static var unlit_tags := false
 static func _build_lit_tag_quad(tag_id: int) -> MeshInstance3D:
 	var quad := QuadMesh.new()
 	var full := TAG_SIZE_M * QUIET_RATIO
@@ -172,6 +180,8 @@ static func _build_lit_tag_quad(tag_id: int) -> MeshInstance3D:
 	mat.metallic = TAG_ALBEDO_METALLIC
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if unlit_tags:
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED   # DEMO --tag-unlit: high-contrast, sun-independent
 	quad.material = mat
 
 	var mi := MeshInstance3D.new()
@@ -238,7 +248,7 @@ static func _build_4face_lander(parent: Node, sf, rover_pos: Vector3, fwd: Vecto
 	var ny := Vector3(0, 1, 0)
 	var nz := nx.cross(ny).normalized()
 	ny = nz.cross(nx).normalized()
-	var tag_h := surf_y + 0.45                       # [CALIB] tag center height (sensors_emit.gd:81)
+	var tag_h := surf_y + 4.0                        # [CALIB] tag center 4m up on the ~5m LM-class body (mid-face; legs ~1.5m)
 	var lander_basis := Basis(nx, ny, nz)
 	if absf(lander_yaw_deg) > 1e-3:
 		lander_basis = Basis(Vector3(0, 1, 0), deg_to_rad(lander_yaw_deg)) * lander_basis
@@ -270,8 +280,8 @@ static func _build_4face_lander(parent: Node, sf, rover_pos: Vector3, fwd: Vecto
 		for sz in [-1.0, 1.0]:
 			var leg := MeshInstance3D.new()
 			var cyl := CylinderMesh.new()
-			cyl.top_radius = 0.03
-			cyl.bottom_radius = 0.04
+			cyl.top_radius = 0.15
+			cyl.bottom_radius = 0.20
 			cyl.height = leg_height
 			cyl.material = grey
 			leg.mesh = cyl

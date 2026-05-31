@@ -104,3 +104,17 @@ godot_sidecar/out/clast_grey_check.png
 /out/cam/
 /out/sun_sweep/
 /out/_smoke/
+
+# ── Spiral-demo render egress + built scene (regenerable) ──
+# build_spiral_scene.py deterministically rebuilds out/scenes/<name> (seed=1234); the per-frame
+# spiral renders ride out/cam/ (already ignored above). demo_lit/ + demo_unlit/ are demo_spiral.py
+# report output (telemetry/summary JSON + plots), and brdf_*/crater_boulders_{hapke,lambert} are
+# lit-vs-Lambert comparison scratch -- all regenerable from the committed .gd + scripts/demo/.
+# The curated viz-battery GIFs in out/panels/ ARE the committed deliverable (cf. quadtree_flythrough.gif).
+godot_sidecar/out/scenes/
+godot_sidecar/out/demo_lit/
+godot_sidecar/out/demo_unlit/
+godot_sidecar/out/brdf_compare_*.png
+godot_sidecar/out/brdf_demo_*.png
+godot_sidecar/out/crater_boulders_hapke.png
+godot_sidecar/out/crater_boulders_lambert.png

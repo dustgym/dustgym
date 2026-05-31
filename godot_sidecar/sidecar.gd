@@ -98,6 +98,7 @@ const SensorsEmitScript := preload("res://sensors_emit.gd")
 const CaptureSeqScript := preload("res://capture_seq.gd")        # M2-egress (--cameras-seq)
 const SunSweepScript := preload("res://sun_sweep.gd")            # A2-sweep (--sun-sweep)
 const LanderBundleScript := preload("res://lander_bundle.gd")    # M3-tag (--lander-faces)
+const DepartSpiralScript := preload("res://depart_spiral.gd")    # DEMO (--depart-spiral)
 
 var _viewport_size := Vector2i(1024, 768)
 var _out_path := DEFAULT_OUT
@@ -136,6 +137,8 @@ var _cameras_mode := false
 # --cameras-seq -> M2-egress multi-frame egress (capture_seq.gd). Inherits the live
 #   --cameras side effect (_drums_up=true) so the drum arms clear the front-stereo FOV.
 var _cameras_seq_mode := false
+var _depart_spiral_mode := false        # --depart-spiral: fixed-center lander + spiral egress (DEMO)
+var _tag_unlit := false                 # --tag-unlit: render lander tags UNSHADED (illumination A/B)
 # --sun-sweep -> A2-sweep sun sweep + boulder manifest (sun_sweep.gd / boulder_manifest.gd).
 var _sun_sweep_mode := false
 # --lander-faces -> M3-tag 4-face AprilTag bundle (lander_bundle.gd).
@@ -215,6 +218,12 @@ func _ready() -> void:
 	if _lander_faces_mode:
 		# M3-tag: 4-face AprilTag bundle (contract v1.1 §3/§6). Reuses --cameras path.
 		await LanderBundleScript.build_lander_faces(self)
+		get_tree().quit(0); return
+
+	if _depart_spiral_mode:
+		# DEMO: fixed-center 4-face lander + spiral egress (demo_spiral_contract.md §2).
+		# MUST await (coroutine awaiting frame_post_draw per frame; un-awaited -> black egress).
+		await DepartSpiralScript.run_depart_spiral(self)
 		get_tree().quit(0); return
 
 	_setup_camera()
@@ -476,6 +485,11 @@ func _parse_args() -> void:
 				_sun_sweep_mode = true
 			"--lander-faces":
 				_lander_faces_mode = true
+			"--depart-spiral":
+				_depart_spiral_mode = true
+				_drums_up = true                 # mirror --cameras: drums clear the front-stereo FOV
+			"--tag-unlit":
+				_tag_unlit = true                # DEMO illumination A/B: tags UNSHADED
 			"--drums-up":
 				_drums_up = true
 			"--lander-standoff":

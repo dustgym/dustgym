@@ -60,10 +60,10 @@ class_name DepartSpiral
 # are [CALIB] demo-framing values (NOT a sourced sensor spec), tuned to the shipped 256x256
 # @ 0.02 m scenes: the spiral spans ~0.4 m (r0) out to a few metres so the rover crosses the
 # resolvable -> out-of-range boundary within the patch.
-const DEFAULT_FRAMES := 24       # frames around the spiral (overridable via --stride, see below)
-const TURNS := 2.0               # [CALIB] revolutions of the spiral
-const R0_CELLS := 20.0           # [CALIB] start radius in cells (~0.40 m at 0.02 m/cell)
-const R_GROWTH_CELLS := 70.0     # [CALIB] radius gained per full turn, in cells (~1.4 m/turn)
+const DEFAULT_FRAMES := 80       # 16 pts/lap * 5 laps (overridable via --stride)
+const TURNS := 5.0               # [CALIB] revolutions of the spiral (16 frames/lap at 80 frames)
+const R0_CELLS := 30.0           # [CALIB] start radius 15 m (0.5 m/cell); inside 15 m uses the lander's close-in recharging fiducials (out of scope here)
+const R_GROWTH_CELLS := 36.0     # [CALIB] radius gained per full turn (~18 m/turn -> ~100 m at 5 laps, 0.5 m/cell)
 
 # Archimedean spiral rover_rc waypoints about center_rc (the lander cell), in the SAME
 # (row,col) field convention sidecar.gd uses (row -> world +Z, col -> world +X). theta runs
@@ -150,6 +150,8 @@ static func run_depart_spiral(sidecar) -> void:
 	var standoff: float = sidecar._lander_standoff if sidecar._lander_standoff > 0.0 else 2.5
 	var fixed_fwd := Vector3(-1, 0, 0)                          # lander +X (id0 normal) -> world +X
 	var place_rover_pos := center_world - fixed_fwd * standoff
+	# DEMO illumination A/B: propagate --tag-unlit to the lander tag material (UNSHADED when set).
+	sidecar.LanderBundleScript.unlit_tags = sidecar._tag_unlit
 	var lander_root: Node3D = sidecar.LanderBundleScript._build_4face_lander(
 		sidecar, sf, place_rover_pos, fixed_fwd, standoff, sidecar._lander_yaw_deg)
 	# CAPTURE the constant lander Transform3D ONCE (the load-bearing T_map_lander, §0). The
@@ -201,8 +203,30 @@ static func run_depart_spiral(sidecar) -> void:
 		# rover). Rebuilt per frame because the rover root is rebuilt; rigid extrinsics ->
 		# baseline_m constant by const. --cam-pitch honored (front pair pitchable) so the
 		# stereo can tilt down toward the textured regolith (§6 depth narration).
+		# Build the rig, then AIM it at the tag: a small ground-level tag seen from the
+		# elevated rover over a 1->8 m spiral needs a per-frame look-at pitch (steep down when
+		# near, near-level when far) or it falls out of frame. We build once to read the front
+		# camera's world height, compute the pitch onto the lander tag center (lander origin ==
+		# id0 tag center), then rebuild the rig pitched to it -- preserving the parallel stereo
+		# pair (a rig pitch, NOT a per-camera toe-in, so the baseline/extrinsics stay rigid).
 		var cams: Array = sidecar.CameraRigScript.build(
 			sidecar, rover_root, world, sidecar._viewport_size, sidecar._cam_pitch_deg)
+		var cam_o: Vector3 = rover_root.global_transform.origin
+		for e in cams:
+			if String(e.get("image", "")).begins_with("front_left"):
+				cam_o = (e["cam"] as Node3D).global_transform.origin
+				break
+		var tag_c: Vector3 = lander_xf_const.origin
+		var horiz: float = Vector2(tag_c.x - cam_o.x, tag_c.z - cam_o.z).length()
+		# pitch_deg POSITIVE = downward tilt (camera_rig.gd:234). Camera sits above the tag, so
+		# the look-down angle atan2(cam_y - tag_y, horiz) is ADDED (positive = down onto the tag).
+		var look_pitch: float = clampf(
+			sidecar._cam_pitch_deg + rad_to_deg(atan2(cam_o.y - tag_c.y, maxf(horiz, 1e-3))),
+			-20.0, 75.0)
+		for e in cams:
+			(e["sv"] as SubViewport).queue_free()
+		cams = sidecar.CameraRigScript.build(
+			sidecar, rover_root, world, sidecar._viewport_size, look_pitch)
 
 		# Settle the subviewports, then capture. Geometry added this tick registers into the
 		# world scenario only on the NEXT tree frame, so we MUST await frame_post_draw (the
