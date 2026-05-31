@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "kind": "roughness_anchor",
+  "scene_name": "lunar_dem/haworth_10km_5m",
+  "produced_by": "scripts/dem_acceptance.py measure_slope_anchor (W2-VARIANCE)",
+  "estimator": {
+    "deviogram": "RMS height-difference vs lag (dem_stats.deviogram), pooled both axes",
+    "rms_slope": "RMS atan(|dh|/L) over baseline window (dem_stats.rms_slope_vs_baseline)",
+    "units": {
+      "deviogram_m": "m",
+      "rms_slope_deg": "deg"
+    }
+  },
+  "region": "Haworth",
+  "window": {
+    "center_xy_m": [
+      -47902.5,
+      100402.5
+    ],
+    "extent_m": 10000.0,
+    "world_bounds_m": {
+      "x0": -52902.5,
+      "y0": 95402.5,
+      "x1": -42902.5,
+      "y1": 105402.5
+    }
+  },
+  "cell_m": 5.0,
+  "baselines_m": [
+    5.0,
+    10.0,
+    20.0,
+    50.0,
+    100.0
+  ],
+  "heightmap_deviogram_m": {
+    "5.0": 1.081678,
+    "10.0": 2.150583,
+    "20.0": 4.272958,
+    "50.0": 10.597636,
+    "100.0": 21.074467
+  },
+  "heightmap_rms_slope_deg": {
+    "5.0": 11.997,
+    "10.0": 11.9393,
+    "20.0": 11.8728,
+    "50.0": 11.79,
+    "100.0": 11.7298
+  },
+  "slp_product_deg": {
+    "median_deg": 16.4312,
+    "mean_deg": 16.1657,
+    "rms_deg": 16.7762,
+    "finite_fraction": 1.0,
+    "baseline_m": 5.0
+  },
+  "deviogram_at_100m_m": 21.074467,
+  "acceptance_tol_frac": 0.15,
+  "provenance": {
+    "anchor_source": "PGDA LOLA_5mpp Haworth_final_adj_5mpp_slp.tif (Product 78, _slp)",
+    "anchor_path_not_committed": ".vendor/lola_raw/Haworth_final_adj_5mpp_slp.tif",
+    "anchor_size_note": "16 MB raster NOT committed; only these measured numbers are.",
+    "co_registration": "re-cropping _surf at this window is byte-identical to the committed heightmap.rf32 (verified, contract \u00a78).",
+    "frame": "south polar stereographic, R=1737400 m sphere (IAU_2015:30135)",
+    "citation": "Barker et al. 2021 (Planet. Space Sci. 203:105119)"
+  }
+}
