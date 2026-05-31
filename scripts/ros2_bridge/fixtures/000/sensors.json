@@ -1,0 +1,155 @@
+{
+  "schema_version": "sensor_bridge/1.0",
+  "scene": "fixture_front_stereo",
+  "frame_index": 0,
+  "frame_convention": "godot",
+  "rover": {
+    "frame_id": "base_link",
+    "position_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "quaternion_xyzw": [
+      0,
+      0,
+      0,
+      1
+    ]
+  },
+  "lander": {
+    "frame_id": "lander",
+    "position_m": [
+      0.0,
+      0.7,
+      -3.0
+    ],
+    "quaternion_xyzw": [
+      -0.0,
+      -0.707106781,
+      -0.0,
+      0.707106781
+    ],
+    "apriltag": {
+      "family": "tag36h11",
+      "id": 0,
+      "size_m": 0.15,
+      "pose_in_lander": {
+        "position_m": [
+          0,
+          0,
+          0
+        ],
+        "quaternion_xyzw": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    }
+  },
+  "cameras": [
+    {
+      "name": "front_left",
+      "frame_id": "front_left_optical",
+      "image": "front_left.png",
+      "width": 1280,
+      "height": 720,
+      "intrinsics": {
+        "model": "pinhole",
+        "fx": 914.014724,
+        "fy": 914.014724,
+        "cx": 640.0,
+        "cy": 360.0,
+        "distortion_model": "plumb_bob",
+        "D": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "pose_in_world": {
+        "position_m": [
+          -0.05,
+          0.7,
+          0.0
+        ],
+        "quaternion_xyzw": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "extrinsic_in_base_link": {
+        "position_m": [
+          -0.05,
+          0.7,
+          0.0
+        ],
+        "quaternion_xyzw": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "name": "front_right",
+      "frame_id": "front_right_optical",
+      "image": "front_right.png",
+      "width": 1280,
+      "height": 720,
+      "intrinsics": {
+        "model": "pinhole",
+        "fx": 914.014724,
+        "fy": 914.014724,
+        "cx": 640.0,
+        "cy": 360.0,
+        "distortion_model": "plumb_bob",
+        "D": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "pose_in_world": {
+        "position_m": [
+          0.05,
+          0.7,
+          0.0
+        ],
+        "quaternion_xyzw": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "extrinsic_in_base_link": {
+        "position_m": [
+          0.05,
+          0.7,
+          0.0
+        ],
+        "quaternion_xyzw": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    }
+  ],
+  "stereo": {
+    "left": "front_left",
+    "right": "front_right",
+    "baseline_m": 0.1
+  }
+}
