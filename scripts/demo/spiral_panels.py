@@ -83,73 +83,91 @@ def _save_gif(frames_pil, path):
     print(f"  wrote {path} ({len(frames_pil)} frames)")
 
 
-def build_position_gif(lander_xy, rows, out_path, title):
+def position_axes(lander_xy, rows):
+    """Precompute the FIXED axes + face bearings shared by every per-frame still, so the
+    standalone GIF and the composite tiles use identical framing. Returns (xlim, ylim, R, bearings)."""
     txy = np.array([r["truth_xy"] for r in rows])
     pad = 8.0
     xlim = (min(txy[:, 0].min(), lander_xy[0]) - pad, max(txy[:, 0].max(), lander_xy[0]) + pad)
     ylim = (min(txy[:, 1].min(), lander_xy[1]) - pad, max(txy[:, 1].max(), lander_xy[1]) + pad)
     R = float(np.hypot(xlim[1] - xlim[0], ylim[1] - ylim[0]))
-    bearings = _face_bearings_ros()
-    pil = []
-    for N in range(1, len(rows) + 1):
-        fig, ax = plt.subplots(figsize=(6.2, 6.0))
-        # quadrant wedges by visible face (bearing +/-45deg) + boundary diagonals
-        for fid, b in bearings.items():
-            ax.add_patch(Wedge(lander_xy, R, np.degrees(b) - 45, np.degrees(b) + 45,
-                               facecolor=FACE_COLORS[fid], alpha=0.08, edgecolor="none", zorder=0))
-            ax.plot([lander_xy[0], lander_xy[0] + R * np.cos(b + np.pi / 4)],
-                    [lander_xy[1], lander_xy[1] + R * np.sin(b + np.pi / 4)],
-                    color="0.7", lw=0.6, zorder=1)
-        sub = rows[:N]
-        tx = [r["truth_xy"][0] for r in sub]; ty = [r["truth_xy"][1] for r in sub]
-        ax.plot(tx, ty, "-", color="0.35", lw=1.3, zorder=3, label="truth path")
-        ax.plot(tx[-1], ty[-1], "o", color="black", ms=7, zorder=6)
-        for r in sub:
-            if r["est_xy"]:
-                ex, ey = r["est_xy"]; t = r["truth_xy"]
-                c = FACE_COLORS.get((r["faces"] or [0])[0], "0.5")
-                ax.plot([t[0], ex], [t[1], ey], "-", color=c, lw=0.7, alpha=0.6, zorder=4)
-                ax.plot(ex, ey, "x", color=c, ms=6, mew=1.6, zorder=5)
-        ax.plot(*lander_xy, "*", color="gold", ms=22, mec="black", mew=1.0, zorder=7, label="lander (fixed)")
-        ax.set_xlim(xlim); ax.set_ylim(ylim); ax.set_aspect("equal")
-        last = sub[-1]
-        st = (f"DET face {last['faces']}  est_err {last['err_mm']:.0f} mm" if last["est_xy"]
-              else "NO DETECTION (shadow / range / occlusion)")
-        ax.set_title(f"{title}\nframe {N-1}/{len(rows)-1}  range {last['range_m']:.0f} m  |  {st}", fontsize=9)
-        ax.set_xlabel("map x (m)"); ax.set_ylabel("map y (m)")
-        ax.legend(loc="upper right", fontsize=7)
-        pil.append(_fig_to_pil(fig))
+    return xlim, ylim, R, _face_bearings_ros()
+
+
+def position_frame(lander_xy, rows, N, xlim, ylim, R, bearings, title):
+    """One accumulating position+SLAM still (frames 0..N-1) as a PIL.Image."""
+    fig, ax = plt.subplots(figsize=(6.2, 6.0))
+    # quadrant wedges by visible face (bearing +/-45deg) + boundary diagonals
+    for fid, b in bearings.items():
+        ax.add_patch(Wedge(lander_xy, R, np.degrees(b) - 45, np.degrees(b) + 45,
+                           facecolor=FACE_COLORS[fid], alpha=0.08, edgecolor="none", zorder=0))
+        ax.plot([lander_xy[0], lander_xy[0] + R * np.cos(b + np.pi / 4)],
+                [lander_xy[1], lander_xy[1] + R * np.sin(b + np.pi / 4)],
+                color="0.7", lw=0.6, zorder=1)
+    sub = rows[:N]
+    tx = [r["truth_xy"][0] for r in sub]; ty = [r["truth_xy"][1] for r in sub]
+    ax.plot(tx, ty, "-", color="0.35", lw=1.3, zorder=3, label="truth path")
+    ax.plot(tx[-1], ty[-1], "o", color="black", ms=7, zorder=6)
+    for r in sub:
+        if r["est_xy"]:
+            ex, ey = r["est_xy"]; t = r["truth_xy"]
+            c = FACE_COLORS.get((r["faces"] or [0])[0], "0.5")
+            ax.plot([t[0], ex], [t[1], ey], "-", color=c, lw=0.7, alpha=0.6, zorder=4)
+            ax.plot(ex, ey, "x", color=c, ms=6, mew=1.6, zorder=5)
+    ax.plot(*lander_xy, "*", color="gold", ms=22, mec="black", mew=1.0, zorder=7, label="lander (fixed)")
+    ax.set_xlim(xlim); ax.set_ylim(ylim); ax.set_aspect("equal")
+    last = sub[-1]
+    rng = last["range_m"]
+    rng_s = f"{rng:.0f} m" if rng is not None else "?"
+    st = (f"DET face {last['faces']}  est_err {last['err_mm']:.0f} mm" if last["est_xy"]
+          else "NO DETECTION (shadow / range / occlusion)")
+    ax.set_title(f"{title}\nframe {N-1}/{len(rows)-1}  range {rng_s}  |  {st}", fontsize=9)
+    ax.set_xlabel("map x (m)"); ax.set_ylabel("map y (m)")
+    ax.legend(loc="upper right", fontsize=7)
+    return _fig_to_pil(fig)
+
+
+def build_position_gif(lander_xy, rows, out_path, title):
+    xlim, ylim, R, bearings = position_axes(lander_xy, rows)
+    pil = [position_frame(lander_xy, rows, N, xlim, ylim, R, bearings, title)
+           for N in range(1, len(rows) + 1)]
     _save_gif(pil, out_path)
+
+
+def resource_frame(Rj, N):
+    """One accumulating resource still (frames 0..N-1) as a PIL.Image. Rj = parsed resource.json."""
+    rec = Rj["records"]
+    mem = [r["resident_mem_mb"] for r in rec]
+    act = [r["qt_active_leaves"] for r in rec]; rng = [r["range_m"] for r in rec]
+    fig, ax1 = plt.subplots(figsize=(6.6, 4.2)); ax2 = ax1.twinx()
+    ax1.plot(rng[:N], mem[:N], "-o", color="#d62728", ms=3, label="resident 2cm corridor (MB)")
+    ax1.axhline(Rj["total_2cm_GB_if_dense"] * 1000, color="0.5", ls="--", lw=1,
+                label=f"dense 2cm whole patch = {Rj['total_2cm_GB_if_dense']} GB")
+    ax2.plot(rng[:N], act[:N], "-s", color="#1f77b4", ms=3, label="quadtree active fine leaves")
+    ax1.set_yscale("log"); ax1.set_ylim(1, Rj["total_2cm_GB_if_dense"] * 1000 * 2)
+    ax1.set_xlim(min(rng) - 2, max(rng) + 2)
+    ax1.set_xlabel("rover->lander range (m)")
+    ax1.set_ylabel("resident map memory (MB, log)", color="#d62728")
+    ax2.set_ylabel("quadtree active fine leaves", color="#1f77b4")
+    ax2.set_ylim(0, max(act) * 1.3 + 1)
+    ax1.set_title(f"Map resource usage (frame {N-1}/{len(rec)-1})  |  peak {max(mem):.0f} MB "
+                  f"vs {Rj['total_2cm_GB_if_dense']} GB dense  -- O(corridor) not O(area)", fontsize=9)
+    h1, l1 = ax1.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
+    ax1.legend(h1 + h2, l1 + l2, loc="center right", fontsize=7)
+    return _fig_to_pil(fig)
 
 
 def build_resource_gif(resource_path, out_path):
-    R = json.load(open(resource_path)); rec = R["records"]
-    fr = [r["frame"] for r in rec]; mem = [r["resident_mem_mb"] for r in rec]
-    act = [r["qt_active_leaves"] for r in rec]; rng = [r["range_m"] for r in rec]
-    pil = []
-    for N in range(1, len(rec) + 1):
-        fig, ax1 = plt.subplots(figsize=(6.6, 4.2)); ax2 = ax1.twinx()
-        ax1.plot(rng[:N], mem[:N], "-o", color="#d62728", ms=3, label="resident 2cm corridor (MB)")
-        ax1.axhline(R["total_2cm_GB_if_dense"] * 1000, color="0.5", ls="--", lw=1,
-                    label=f"dense 2cm whole patch = {R['total_2cm_GB_if_dense']} GB")
-        ax2.plot(rng[:N], act[:N], "-s", color="#1f77b4", ms=3, label="quadtree active fine leaves")
-        ax1.set_yscale("log"); ax1.set_ylim(1, R["total_2cm_GB_if_dense"] * 1000 * 2)
-        ax1.set_xlim(min(rng) - 2, max(rng) + 2)
-        ax1.set_xlabel("rover->lander range (m)")
-        ax1.set_ylabel("resident map memory (MB, log)", color="#d62728")
-        ax2.set_ylabel("quadtree active fine leaves", color="#1f77b4")
-        ax2.set_ylim(0, max(act) * 1.3 + 1)
-        ax1.set_title(f"Map resource usage (frame {N-1}/{len(rec)-1})  |  peak {max(mem):.0f} MB "
-                      f"vs {R['total_2cm_GB_if_dense']} GB dense  -- O(corridor) not O(area)", fontsize=9)
-        h1, l1 = ax1.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
-        ax1.legend(h1 + h2, l1 + l2, loc="center right", fontsize=7)
-        pil.append(_fig_to_pil(fig))
+    Rj = json.load(open(resource_path))
+    pil = [resource_frame(Rj, N) for N in range(1, len(Rj["records"]) + 1)]
     _save_gif(pil, out_path)
 
 
-def build_failure_breakdown(runs, out_path):
-    """LIT vs UNLIT detection-outcome bars (stacked) -- the illumination A/B at a glance."""
+def _failure_fig(runs):
+    """LIT vs UNLIT detection-outcome bars (stacked) -- the illumination A/B at a glance.
+    Returns the matplotlib Figure (caller decides savefig vs _fig_to_pil)."""
     fig, axes = plt.subplots(2, 1, figsize=(7.0, 5.2), sharex=True)
+    axes = np.atleast_1d(axes)
     for ax, (name, rows) in zip(axes, runs.items()):
         det = sum(1 for r in rows if r["est_xy"])
         ndet = len(rows) - det
@@ -163,8 +181,18 @@ def build_failure_breakdown(runs, out_path):
         ax.set_yticks([]); ax.set_xlim(0, len(rows)); ax.legend(loc="lower right", fontsize=8)
     axes[-1].set_xlabel("frames")
     fig.suptitle("AprilTag detection outcome: LIT vs UNLIT (illumination A/B)", fontsize=11)
+    return fig
+
+
+def build_failure_breakdown(runs, out_path):
+    fig = _failure_fig(runs)
     fig.savefig(out_path, dpi=110, bbox_inches="tight"); plt.close(fig)
     print(f"  wrote {out_path}")
+
+
+def failure_breakdown_pil(runs):
+    """The LIT-vs-UNLIT failure breakdown as a PIL.Image (static; pasted into every composite frame)."""
+    return _fig_to_pil(_failure_fig(runs))
 
 
 if __name__ == "__main__":

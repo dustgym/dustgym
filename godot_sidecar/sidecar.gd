@@ -99,6 +99,7 @@ const CaptureSeqScript := preload("res://capture_seq.gd")        # M2-egress (--
 const SunSweepScript := preload("res://sun_sweep.gd")            # A2-sweep (--sun-sweep)
 const LanderBundleScript := preload("res://lander_bundle.gd")    # M3-tag (--lander-faces)
 const DepartSpiralScript := preload("res://depart_spiral.gd")    # DEMO (--depart-spiral)
+const TopdownSpiralScript := preload("res://topdown_spiral.gd")  # DEMO (--topdown-spiral)
 
 var _viewport_size := Vector2i(1024, 768)
 var _out_path := DEFAULT_OUT
@@ -139,6 +140,10 @@ var _cameras_mode := false
 var _cameras_seq_mode := false
 var _depart_spiral_mode := false        # --depart-spiral: fixed-center lander + spiral egress (DEMO)
 var _tag_unlit := false                 # --tag-unlit: render lander tags UNSHADED (illumination A/B)
+var _topdown_spiral_mode := false       # --topdown-spiral: bird's-eye ortho render of the spiral (DEMO)
+var _scene_unlit := false               # --scene-unlit: bland Lambert + no shadows + spherical clasts (top-down diagnostic)
+var _out_scene_name := ""               # --out-scene-name: override the out/cam/<name> dir (separate lit/unlit runs)
+var _qt_leaves_path := ""               # --qt-leaves <path>: per-frame quadtree leaves for the top-down overlay
 # --sun-sweep -> A2-sweep sun sweep + boulder manifest (sun_sweep.gd / boulder_manifest.gd).
 var _sun_sweep_mode := false
 # --lander-faces -> M3-tag 4-face AprilTag bundle (lander_bundle.gd).
@@ -224,6 +229,12 @@ func _ready() -> void:
 		# DEMO: fixed-center 4-face lander + spiral egress (demo_spiral_contract.md §2).
 		# MUST await (coroutine awaiting frame_post_draw per frame; un-awaited -> black egress).
 		await DepartSpiralScript.run_depart_spiral(self)
+		get_tree().quit(0); return
+
+	if _topdown_spiral_mode:
+		# DEMO: bird's-eye orthographic render of the spiral (lit + unlit/quadtree variants).
+		# MUST await (coroutine awaiting frame_post_draw per frame; un-awaited -> black frames).
+		await TopdownSpiralScript.run_topdown_spiral(self)
 		get_tree().quit(0); return
 
 	_setup_camera()
@@ -490,6 +501,16 @@ func _parse_args() -> void:
 				_drums_up = true                 # mirror --cameras: drums clear the front-stereo FOV
 			"--tag-unlit":
 				_tag_unlit = true                # DEMO illumination A/B: tags UNSHADED
+			"--topdown-spiral":
+				_topdown_spiral_mode = true
+				_drums_up = true                 # mirror --depart-spiral: drums clear the FOV
+			"--scene-unlit":
+				_scene_unlit = true
+				_brdf_hapke = false              # bland diagnostic: Lambert (no Hapke); topdown_spiral flattens shadows/ambient
+			"--out-scene-name":
+				i += 1; _out_scene_name = String(args[i])
+			"--qt-leaves":
+				i += 1; _qt_leaves_path = String(args[i])
 			"--drums-up":
 				_drums_up = true
 			"--lander-standoff":
@@ -795,6 +816,12 @@ func _build_clasts() -> void:
 	mat.set_shader_parameter("ridge_mix", 0.95)
 	mat.set_shader_parameter("detail_amp", 1.1)
 	mat.set_shader_parameter("detail_freq", 16.0)
+	if _scene_unlit:
+		# DEMO bland top-down (--scene-unlit): render clasts as PLAIN spheres -- zero the procgen
+		# facet/void/detail relief so the diagnostic view reads geometry + quadtree, not rock texture.
+		mat.set_shader_parameter("surf_amp", 0.0)
+		mat.set_shader_parameter("detail_amp", 0.0)
+		mat.set_shader_parameter("void_amp", 0.0)
 	sphere.material = mat
 
 	var mm := MultiMesh.new()
@@ -835,6 +862,8 @@ func _build_clasts() -> void:
 		var sa := 1.0 / gmean                          # along longest axis
 		var sb := b_ratio / gmean                       # along intermediate axis
 		var sc := c_ratio / gmean                       # along shortest axis
+		if _scene_unlit:                                 # DEMO bland top-down: TRUE spheres (no triaxial shape)
+			sa = 1.0; sb = 1.0; sc = 1.0
 		# elongation proxy for the shader (1 = sphere; higher = more elongate) — informational.
 		var elong := clampf(sa / maxf(sc, 1e-3), 1.0, 4.0)
 

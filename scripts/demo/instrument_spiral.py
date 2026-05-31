@@ -83,6 +83,7 @@ def main():
     total_2cm_dense = (W * grid_cell / FINE_CELL_M) * (H * grid_cell / FINE_CELL_M)  # O(area) the corridor avoids
 
     records = []
+    qt_records = []                    # per-frame leaf geometry for the --topdown-spiral overlay
     peak_tiles = 0
     for i, rc in enumerate(rc_seq):
         row, col = float(rc[0]), float(rc[1])
@@ -105,6 +106,15 @@ def main():
             "qt_cells_by_size": {str(s): n for s, n in sorted(by_size.items())},
             "qt_finest_cells": int(len(qt.active_leaves) * qt.min_leaf * qt.min_leaf),
         })
+        # Full per-frame leaf GEOMETRY (not just the summary counts) for the in-engine
+        # top-down overlay: terrain.gd::_build_quadtree_overlay consumes exactly these
+        # {level,row0,col0,size,leaf} nodes + [r0,c0,r1,c1] active_leaves + lod.min_leaf.
+        qt_records.append({
+            "frame": i,
+            "nodes": qt.nodes,
+            "active_leaves": [[int(b[0]), int(b[1]), int(b[2]), int(b[3])] for b in qt.active_leaves],
+            "lod": {"min_leaf": int(qt.min_leaf), "field_size": int(qt.field_size)},
+        })
 
     out = {
         "scene": os.path.basename(a.scene), "frames": len(records), "fine_cell_m": FINE_CELL_M,
@@ -116,8 +126,11 @@ def main():
     }
     path = os.path.join(a.scene, "resource.json")
     json.dump(out, open(path, "w"), indent=1)
+    qt_path = os.path.join(a.scene, "qt_leaves.json")
+    json.dump(qt_records, open(qt_path, "w"))     # fed to --topdown-spiral via --qt-leaves
     peak_mb = max(r["resident_mem_mb"] for r in records)
     print(f"instrument_spiral: {len(records)} steps -> {path}")
+    print(f"  + {len(qt_records)} per-frame quadtree-leaf records -> {qt_path}")
     print(f"  peak resident: {peak_tiles} tiles, {peak_mb:.1f} MB (2cm corridor, k={k})")
     print(f"  vs dense 2cm over the whole {W*grid_cell:.0f}m patch: {out['total_2cm_GB_if_dense']} GB "
           f"({out['total_2cm_cells_if_dense']:,} cells) -- the O(area) cost the corridor avoids")
