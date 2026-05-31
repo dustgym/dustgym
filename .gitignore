@@ -78,3 +78,9 @@ godot_sidecar/out/probe_multicam_sheet.png
 # (sensor_bridge_contract §2.1, "under godot_sidecar/out/, git-ignored"). All regenerable from the
 # committed .gd source; sensors.json + PNGs are render output, NOT committed.
 godot_sidecar/out/cam/
+
+# ── detour: stereo staging for the ROS depth/fiducial outputs (scratch, regenerable) ──
+# `out/detour/<name>/` holds the staged stereo pairs + sensors.json fed to depth_map.py /
+# fiducial_overlay.py; the committed deliverables live in out/ros/. Also the working hero render.
+godot_sidecar/out/detour/
+godot_sidecar/out/crater_drop_hero.png

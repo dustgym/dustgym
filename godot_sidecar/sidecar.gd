@@ -124,6 +124,11 @@ var _probe_multicam := false
 # sensors.json per docs/sensor_bridge_contract.md §2. The Godot->ROS conversion is
 # NOT done here (sensors.json is 100% Godot-frame; §3 is C1's job).
 var _cameras_mode := false
+# --cameras tuning (detour ROS outputs): tag distance/angle + a rover sink (drop into a crater).
+var _lander_standoff := -1.0    # metres ahead of rover; <0 -> LANDER_STANDOFF_M default (--lander-standoff)
+var _lander_yaw_deg := 0.0      # yaw the tag face off-square for oblique fiducial views (--lander-yaw)
+var _rover_sink := 0.0          # drop the rover this many metres into the terrain (--rover-sink)
+var _cam_pitch_deg := 0.0       # downward pitch of the stereo pair so the ground fills frame (--cam-pitch)
 
 # Lander placement ahead of the rover along its forward (+X yawed) direction, so
 # BOTH front cameras see the rover-facing tag face (contract §1/§5). [CALIB].
@@ -430,6 +435,19 @@ func _parse_args() -> void:
 				_probe_multicam = true
 			"--cameras":
 				_cameras_mode = true
+			"--lander-standoff":
+				i += 1; _lander_standoff = float(args[i])
+			"--lander-yaw":
+				i += 1; _lander_yaw_deg = float(args[i])
+			"--rover-rc":
+				i += 1
+				var rc := String(args[i]).split(",")
+				if rc.size() == 2:
+					_rover_rc_override = Vector2i(int(rc[0]), int(rc[1]))
+			"--rover-sink":
+				i += 1; _rover_sink = float(args[i])
+			"--cam-pitch":
+				i += 1; _cam_pitch_deg = float(args[i])
 			_:
 				push_warning("sidecar: unknown arg '%s'" % a)
 		i += 1
@@ -581,7 +599,7 @@ func _cameras_capture() -> void:
 
 	# Build the front-stereo cameras (shared World3D SubViewports riding the rover).
 	var world := get_viewport().world_3d
-	var cams: Array = CameraRigScript.build(self, rover_root, world, _viewport_size)
+	var cams: Array = CameraRigScript.build(self, rover_root, world, _viewport_size, _cam_pitch_deg)
 
 	# Let the subviewports render a few times (first frame can sample a stale buffer).
 	for _w in range(3):
@@ -643,7 +661,8 @@ func _find_rover_root() -> Node3D:
 # Returns the lander root (its global_transform == the lander/tag pose we report).
 func _build_lander(rover_pos: Vector3, fwd: Vector3) -> Node3D:
 	# Ground position ahead of the rover; snap to the surface height there.
-	var ground := rover_pos + fwd * LANDER_STANDOFF_M
+	var standoff: float = _lander_standoff if _lander_standoff > 0.0 else LANDER_STANDOFF_M
+	var ground := rover_pos + fwd * standoff
 	var u: float = clampf((ground.x - sf.world_min.x) / maxf(sf.extent_m().x, 1e-6), 0.0, 1.0)
 	var v: float = clampf((ground.z - sf.world_min.y) / maxf(sf.extent_m().y, 1e-6), 0.0, 1.0)
 	var surf_y: float = sf.height_uv(u, v)
@@ -657,6 +676,10 @@ func _build_lander(rover_pos: Vector3, fwd: Vector3) -> Node3D:
 	ny = nz.cross(nx).normalized()
 	var tag_h := surf_y + 0.45                      # [CALIB] tag center height (mast-eye level)
 	var lander_basis := Basis(nx, ny, nz)
+	# Optional yaw of the whole lander/tag about world +Y so the tag face is OFF-SQUARE
+	# to the camera ray -> oblique fiducial views (--lander-yaw; for the angle sweep).
+	if absf(_lander_yaw_deg) > 1e-3:
+		lander_basis = Basis(Vector3(0, 1, 0), deg_to_rad(_lander_yaw_deg)) * lander_basis
 
 	var root := Node3D.new()
 	root.name = "Lander"
@@ -1041,6 +1064,7 @@ func _build_rover() -> void:
 	var aabb := _node_world_aabb(root)
 	var drop := surf_y - aabb.position.y      # lift so min.y == surf_y
 	root.position.y += drop
+	root.position.y -= _rover_sink            # then drop INTO the terrain (--rover-sink; crater scenarios)
 	print("sidecar: assembled articulated EZ-RASSOR (MIT) at (%.2f,%.2f,%.2f); " % [rx, root.position.y, rz],
 		"AABB size=(%.2f,%.2f,%.2f) lowest_y=%.3f snapped_to=%.3f" % [
 			aabb.size.x, aabb.size.y, aabb.size.z, aabb.position.y, surf_y])

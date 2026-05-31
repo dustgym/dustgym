@@ -102,8 +102,12 @@ static func intrinsics(fov_x_deg: float, w: int, h: int) -> Dictionary:
 # can read each camera's global_transform for sensors.json and grab the rendered
 # texture per view.
 static func build(parent: Node, mount: Node3D, world: World3D,
-		view_size: Vector2i) -> Array:
-	var look := forward_look_basis()
+		view_size: Vector2i, pitch_deg: float = 0.0) -> Array:
+	# Optional DOWNWARD pitch: rotate the look basis about the camera's local +X (right)
+	# by -pitch so the optical axis tilts toward the ground. Lets the stereo pair aim at
+	# the terrain/boulders (which fill the frame -> dense passive-stereo depth) instead of
+	# the mostly-black sky a level gaze sees. pitch_deg=0 -> the original level forward look.
+	var look := forward_look_basis() * Basis(Vector3(1, 0, 0), deg_to_rad(-pitch_deg))
 	var out: Array = []
 	for spec in CAMERAS:
 		var sv := SubViewport.new()

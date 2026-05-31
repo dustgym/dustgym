@@ -43,7 +43,7 @@ ENV PATH="${BRIDGE_VENV}/bin:${PATH}"
 
 # --- bridge sources ------------------------------------------------------------------------
 WORKDIR /bridge
-COPY frames.py bag_writer.py compare_pose.py \
+COPY frames.py bag_writer.py compare_pose.py depth_map.py fiducial_overlay.py \
      apriltag_bringup.launch.py tags_36h11.yaml test_frames.py ./
 COPY fixtures/ ./fixtures/
 
