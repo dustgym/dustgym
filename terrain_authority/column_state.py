@@ -176,6 +176,56 @@ class ColumnState:
         self.drum_inventory -= place_kg
         return place_kg
 
+    def deposit_field(self, mask: np.ndarray, mass_per_cell: np.ndarray | float,
+                      spoil_density: float = K.RHO_SPOIL) -> float:
+        """Per-cell counterpart of ``cut_to_inventory``: deposit a PER-CELL areal mass field
+        [kg/m^2] from the drum onto masked cells as SPOIL.
+
+        Unlike ``dump_from_inventory`` (which spreads a scalar kg *evenly* and so overshoots
+        cells already near target on an uneven deficit), this places exactly what each cell's
+        field entry asks for, so a build/fill never overshoots. Deposited material lands at loose
+        ``spoil_density`` (bulking, spec §7); the density mix is volume-preserving, so a cell's
+        height rises by exactly ``deposited_areal / spoil_density`` regardless of the material
+        already there. Conserves mass: the field is scaled down to fit available drum inventory
+        if it would exceed it. Returns the absolute kg placed.
+        """
+        field = np.zeros_like(self.mass_areal)
+        field[mask] = np.maximum(np.broadcast_to(mass_per_cell, self.mass_areal.shape)[mask], 0.0)
+        want_kg = float(field.sum()) * self.cell_area
+        if want_kg <= 0.0 or self.drum_inventory <= 0.0:
+            return 0.0
+        if want_kg > self.drum_inventory:                  # scale to available inventory -> conserved
+            field *= self.drum_inventory / want_kg
+            want_kg = self.drum_inventory
+        placed = field > 0.0
+        old = self.mass_areal.copy()
+        self.mass_areal = old + field
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mixed = (old + field) / (old / self.density + field / spoil_density)
+        self.density[placed] = np.where(np.isfinite(mixed[placed]), mixed[placed], spoil_density)
+        self.state_label[placed] = StateLabel.SPOIL
+        self.disturbance[placed] = np.clip(self.disturbance[placed] + 0.3, 0.0, 1.0)
+        self.drum_inventory -= want_kg
+        return want_kg
+
+    def fill_toward(self, mask: np.ndarray, target_height: np.ndarray | float,
+                    max_lift_m: float | None = None, spoil_density: float = K.RHO_SPOIL) -> float:
+        """Build/fill convenience: raise masked cells TOWARD ``target_height`` (never above it)
+        by depositing drum material via :meth:`deposit_field`.
+
+        Per-cell lift is the height deficit, optionally capped at ``max_lift_m`` (one macro step).
+        Because the deposit is volume-preserving, the areal mass needed to raise a cell by ``dh``
+        is ``dh * spoil_density``. If the drum can't supply the full field, every cell is filled
+        proportionally less (still no overshoot). Returns the absolute kg placed.
+        """
+        h = self.derive_height()
+        d = np.maximum(target_height - h, 0.0)
+        if max_lift_m is not None:
+            d = np.minimum(d, max_lift_m)
+        deficit = np.zeros_like(self.mass_areal)
+        deficit[mask] = np.broadcast_to(d, self.mass_areal.shape)[mask]
+        return self.deposit_field(mask, deficit * spoil_density, spoil_density=spoil_density)
+
     # -- field bundle for io_fields ---------------------------------------
 
     def fields_dict(self) -> dict[str, np.ndarray]:
