@@ -40,6 +40,8 @@ import dataclasses
 import json
 from dataclasses import dataclass
 
+import numpy as np
+
 from . import constants as K
 
 
@@ -79,6 +81,13 @@ class TerramechanicsParams:
         """The committed Chrono SCM run's soil set (chrono_scm_rover.py:112) — a
         JSC-1A analogue (k_phi=0.2e6, k_c=0, n=1). For oracle cross-checks."""
         return cls(k_c=0.0, k_phi=0.2e6, n_sinkage=1.0)
+
+    @classmethod
+    def lunar(cls) -> "TerramechanicsParams":
+        """from_constants() with the Lyasko 1g->1/6g reduced-gravity correction
+        applied (sourced direction, [CALIB] magnitude). Use for lunar runs; the
+        bare from_constants() stays Earth/Apollo-fit (spec §5.2 "not applied")."""
+        return lyasko_reduce(cls.from_constants())
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -202,3 +211,76 @@ def sinkage_to_density_factor(z_m: float, thickness_m: float) -> float:
         return 0.0
     z = min(z_m, 0.999 * thickness_m)
     return z / (thickness_m - z)
+
+
+# ---------------------------------------------------------------------------
+# Vectorized field form — the seam rover.four_wheel_pass(physical=True) calls.
+# ---------------------------------------------------------------------------
+
+def physical_compaction_field(density, mass_areal, load_n: float, *,
+                              params: TerramechanicsParams | None = None,
+                              contact_len_m: float | None = None,
+                              contact_width_m: float | None = None):
+    """Per-cell density-increase factor field f from load-driven Bekker sinkage.
+
+    Apply as ``density *= (1 + f)`` then cap at RHO_DEEP — MASS-CONSERVING (density
+    -only edit; height re-derives). Vectorized numpy mirror of wheel_static_sinkage
+    + sinkage_to_density_factor: per cell, stiffening s = density/rho_surface (denser
+    soil bears better -> paving), z = (p/(k_c/b + k_phi*s))**(1/n), f = z/(t-z).
+    ``density``/``mass_areal`` are the masked cells (kg/m^3, kg/m^2). Returns f (same
+    shape). load_n <= 0 -> zeros.
+    """
+    p = params or _DEFAULT_PARAMS
+    cl = p.contact_len_m if contact_len_m is None else contact_len_m
+    cw = p.contact_width_m if contact_width_m is None else contact_width_m
+    density = np.asarray(density, dtype=np.float64)
+    if load_n <= 0.0 or density.size == 0:
+        return np.zeros_like(density)
+    area = max(1e-9, cl * cw)
+    b = min(cl, cw)
+    pressure = load_n / area
+    s = np.maximum(1.0, density / p.rho_surface)          # per-cell stiffening (paving)
+    k = p.k_c / b + p.k_phi * s
+    z = (pressure / k) ** (1.0 / p.n_sinkage)             # per-cell sinkage [m]
+    thickness = np.asarray(mass_areal, dtype=np.float64) / density
+    z = np.minimum(z, 0.999 * thickness)                  # clamp below thickness
+    return z / (thickness - z)
+
+
+# ---------------------------------------------------------------------------
+# Lyasko-2010 reduced-gravity correction (1g -> 1/6 g).
+# ---------------------------------------------------------------------------
+
+def lyasko_reduce(params: TerramechanicsParams, *, g: float = K.g, g_earth: float = 9.81,
+                  kphi_frac: float = 0.30, c_frac: float = 0.30,
+                  n_frac: float = 0.0) -> TerramechanicsParams:
+    """Apply the Lyasko-2010 reduced-gravity correction -> a new TerramechanicsParams.
+
+    DIRECTION is sourced (Lyasko 2010; spec §5.2; low-g bevameter/DEM studies —
+    JANSS 38(4):237; J.Terramech. low-gravity-device & 2D-DEM studies): lowering
+    gravity DECREASES the frictional modulus k_phi and cohesion c (and, per the
+    literature, the exponent n), while k_c and phi show little change; the NET
+    result is that sinkage INCREASES under the same load. Each reduced parameter =
+    earth * (1 - frac * deficit), deficit = clip(1 - g/g_earth, 0, 1). At
+    g = g_earth this is the identity (no reduction).
+
+    MAGNITUDE is [CALIB] — to be fit against the Chrono::GPU DEM load-sweep oracle
+    on euclid (Phase 0.3). HONEST MODELLING NOTE on n: the literature reports n
+    also decreasing, but in the Bekker form p=(k_c/b + k_phi)z^n the n-exponent is
+    dimensionally tied to k_phi's units, and naively lowering n at sub-metre sinkage
+    (p/k < 1) DECREASES z — the opposite of the sourced net truth. So the net
+    sinkage increase is carried by the (dimensionally clean) k_phi reduction, and
+    ``n_frac`` defaults to 0.0; re-parameterising n consistently is deferred to the
+    oracle fit, where k_phi is re-fit in the new units. c_frac feeds Phase-2 shear.
+    """
+    deficit = max(0.0, min(1.0, 1.0 - g / g_earth))
+
+    def _scale(frac: float) -> float:
+        return 1.0 - frac * deficit
+
+    return dataclasses.replace(
+        params,
+        k_phi=params.k_phi * _scale(kphi_frac),
+        cohesion=params.cohesion * _scale(c_frac),
+        n_sinkage=params.n_sinkage * _scale(n_frac),   # n_frac default 0 -> n unchanged
+    )   # k_c and phi_rad deliberately unchanged (Lyasko: little change)

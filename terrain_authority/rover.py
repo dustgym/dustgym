@@ -35,6 +35,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import constants as K
+from . import terramechanics as tm
 from .column_state import ColumnState, StateLabel
 
 
@@ -146,7 +147,11 @@ def wheel_contact_points(center_rc: tuple[float, float], heading_rad: float, *,
 
 def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], float]], *,
                     wheel_width_m: float = 0.18,
-                    compaction: float = 0.12) -> dict[str, list[tuple[float, float]]]:
+                    compaction: float = 0.12,
+                    physical: bool = False,
+                    loads: "dict[str, float] | float | None" = None,
+                    params: "tm.TerramechanicsParams | None" = None,
+                    contact_len_m: float | None = None) -> dict[str, list[tuple[float, float]]]:
     """Stamp FOUR separate compacting ruts (LF/RF/LB/RB) along a pose sequence. MASS PRESERVED.
 
     ``poses`` is a list of (center_rc, heading_rad) — the rover-center track this drive.
@@ -162,6 +167,15 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
 
     GEOMETRY/STATE-ACCURATE, NOT FORCE-ACCURATE (module docstring; spec §9): we lay the
     observable 4-rut footprint of the IPEx layout (asce-es-2024 wheel), not slip-sinkage.
+
+    LOAD-BEARING opt-in (``physical=True``, added 2026-06-01): the per-wheel compaction
+    is computed from a real Bekker pressure-sinkage solve (terramechanics.py) instead of
+    the constant ``compaction`` — making the previously-decorative moduli load-bearing.
+    ``loads`` gives the per-wheel normal load [N] (dict keyed LF/RF/LB/RB, a scalar for
+    all four, or None -> the sourced 30 kg-class static dry load); ``params`` selects the
+    TerramechanicsParams set (None -> constants.py defaults; .lunar()/.scm_oracle() also
+    valid). Still a density-only edit -> mass conserved exactly. ``physical=False``
+    (default) is byte-identical to the prior constant-compaction behaviour.
     """
     half_w = max(0.5, 0.5 * wheel_width_m / cs.cell_m)  # half-width in cells
 
@@ -180,7 +194,16 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
             touched |= _wheel_mask(cs, (r, c), half_w)
         if not touched.any():
             continue
-        cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + compaction), K.RHO_DEEP)
+        if physical:
+            load_n = loads.get(key) if isinstance(loads, dict) else loads
+            if load_n is None:
+                load_n = tm.static_wheel_load_n()
+            f = tm.physical_compaction_field(
+                cs.density[touched], cs.mass_areal[touched], load_n,
+                params=params, contact_len_m=contact_len_m, contact_width_m=wheel_width_m)
+            cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + f), K.RHO_DEEP)
+        else:
+            cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + compaction), K.RHO_DEEP)
         was_spoil = touched & (cs.state_label == StateLabel.SPOIL)
         cs.state_label[touched & ~was_spoil] = StateLabel.TREAD
         cs.state_label[was_spoil] = StateLabel.COMPACTED_BERM
@@ -302,7 +325,9 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
                  cell_m: float, world_x0: float = 0.0, world_y0: float = 0.0,
                  clasts: list[dict] | None = None, climb_limit_m: float = WHEEL_RADIUS_M,
                  min_grad_cells: float = 2.5,
-                 gauge_m: float = WHEEL_GAUGE_M, wheelbase_m: float = WHEEL_BASE_M) -> dict:
+                 gauge_m: float = WHEEL_GAUGE_M, wheelbase_m: float = WHEEL_BASE_M,
+                 payload_kg: float = 0.0,
+                 rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG) -> dict:
     """Kinematic rest pose of the 4-wheel rover on the terrain at one spiral pose.
 
     TWO terms, least-squares fit to a plane y = a*x + b*z + c in GODOT WORLD axes
@@ -372,12 +397,22 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
     nrm /= np.linalg.norm(nrm)
     slope_fwd = a * ch + b * sh           # forward world (x,z)=(cos h, sin h)
     slope_lat = a * (-sh) + b * ch        # left world=(-sin h, cos h)
+    # Per-wheel NORMAL load (added 2026-06-01 for load-bearing sinkage): the weight
+    # component along the surface normal, split equally over the 4 contacts. nrm[1] is
+    # cos(tilt) (flat -> full weight; steeper -> less normal load -> the slip driver,
+    # Phase 2). Equal split; CG-based fore/aft transfer is a refinement (CG height not
+    # in the public TRL-5 overview). Feeds four_wheel_pass(physical=True, loads=...).
+    total_weight_n = (rover_mass_dry_kg + max(0.0, payload_kg)) * K.g
+    normal_total_n = total_weight_n * float(nrm[1])
+    per_wheel_n = normal_total_n / 4.0
     return {
         "up": [float(nrm[0]), float(nrm[1]), float(nrm[2])],
         "z_m": z_center,
         "pitch_rad": float(np.arctan(slope_fwd)),
         "roll_rad": float(np.arctan(slope_lat)),
         "contacts": {k: [float(pts[k][0]), float(pts[k][1])] for k in rows},
+        "normal_loads": {k: per_wheel_n for k in rows},
+        "normal_load_total_n": normal_total_n,
     }
 
 

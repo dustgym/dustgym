@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from . import constants as K
+from . import rover
 from . import terramechanics as tm
+from .column_state import ColumnState
 
 
 # -- weight-on-wheels (sourced IPEx 30 kg-class mass) -------------------------
@@ -172,6 +176,107 @@ def test_scm_oracle_params_match_kwarg_path():
     z_kw = tm.wheel_static_sinkage(load, contact_len_m=0.10, contact_width_m=0.18,
                                    k_c=0.0, k_phi=0.2e6, n=1.0)
     assert math.isclose(z_obj, z_kw, rel_tol=1e-12), (z_obj, z_kw)
+
+
+# -- Phase 1.3: wiring into rover.four_wheel_pass (opt-in physical path) ------
+
+def test_four_wheel_pass_default_path_unchanged():
+    """physical=False (default) is byte-identical to the prior constant path."""
+    poses = [((24.0, 14.0), 0.3), ((22.0, 30.0), 0.5)]
+    a = ColumnState(width=48, height=48, cell_m=0.02)
+    b = ColumnState(width=48, height=48, cell_m=0.02)
+    rover.four_wheel_pass(a, poses)                                   # default
+    rover.four_wheel_pass(b, poses, physical=False, compaction=0.12)  # explicit
+    assert np.array_equal(a.density, b.density)
+    assert np.array_equal(a.state_label, b.state_label)
+    assert np.array_equal(a.disturbance, b.disturbance)
+
+
+def test_four_wheel_pass_physical_mass_conserved():
+    """The load-driven path conserves total mass (density-only edit) and compacts."""
+    cs = ColumnState(width=64, height=64, cell_m=0.02)
+    m0 = cs.total_mass()
+    poses = [((32.0, 18.0), 0.0), ((32.0, 44.0), 0.0)]
+    rover.four_wheel_pass(cs, poses, physical=True)
+    assert math.isclose(cs.total_mass(), m0, rel_tol=1e-9), (cs.total_mass(), m0)
+    assert cs.density.max() > K.RHO_SURFACE          # compaction happened
+    assert cs.density.max() <= K.RHO_DEEP            # capped at the ceiling
+
+
+def test_four_wheel_pass_physical_load_dependent():
+    """Heavier per-wheel load -> deeper compaction (load-bearing, not a constant)."""
+    poses = [((32.0, 32.0), 0.0)]
+    light = ColumnState(width=64, height=64, cell_m=0.02)
+    heavy = ColumnState(width=64, height=64, cell_m=0.02)
+    rover.four_wheel_pass(light, poses, physical=True, loads=tm.static_wheel_load_n(0.0))
+    rover.four_wheel_pass(heavy, poses, physical=True,
+                          loads=tm.static_wheel_load_n(K.DRUM_PAYLOAD_MAX_KG))
+    assert heavy.density.max() > light.density.max(), (light.density.max(), heavy.density.max())
+
+
+def test_conform_pose_emits_normal_loads():
+    """conform_pose returns per-wheel normal load; flat -> full weight, tilt -> less."""
+    flat = np.zeros((32, 32))
+    res = rover.conform_pose(flat, (16.0, 16.0), 0.0, cell_m=0.02)
+    loads = res["normal_loads"]
+    assert set(loads) == {"LF", "RF", "LB", "RB"}
+    total = res["normal_load_total_n"]
+    assert math.isclose(total, K.ROVER_MASS_DRY_KG * K.g, rel_tol=1e-6), total
+    assert math.isclose(sum(loads.values()), total, rel_tol=1e-9)
+    # a tilted surface reduces the normal component (cos(tilt) < 1) -> slip driver
+    ramp = np.fromfunction(lambda r, c: 0.30 * c * 0.02, (32, 32))  # 30% grade in +col
+    res_t = rover.conform_pose(ramp, (16.0, 16.0), 0.0, cell_m=0.02)
+    assert res_t["normal_load_total_n"] < total
+
+
+def test_conform_pose_payload_scales_load():
+    """A drum payload increases weight-on-wheels."""
+    flat = np.zeros((32, 32))
+    dry = rover.conform_pose(flat, (16.0, 16.0), 0.0, cell_m=0.02)["normal_load_total_n"]
+    laden = rover.conform_pose(flat, (16.0, 16.0), 0.0, cell_m=0.02,
+                               payload_kg=K.DRUM_PAYLOAD_MAX_KG)["normal_load_total_n"]
+    assert laden > dry
+    assert math.isclose(laden, (K.ROVER_MASS_DRY_KG + K.DRUM_PAYLOAD_MAX_KG) * K.g, rel_tol=1e-6)
+
+
+# -- Phase 1.4: Lyasko 1g->1/6g reduced-gravity correction -------------------
+
+def test_lyasko_increases_sinkage():
+    """The sourced NET truth: reduced gravity -> MORE sinkage under the same load."""
+    earth = tm.TerramechanicsParams.from_constants()
+    lunar = tm.TerramechanicsParams.lunar()
+    load = tm.static_wheel_load_n(0.0)
+    z_earth = tm.wheel_static_sinkage(load, params=earth)
+    z_lunar = tm.wheel_static_sinkage(load, params=lunar)
+    assert z_lunar > z_earth, (z_earth, z_lunar)
+
+
+def test_lyasko_directions():
+    """k_phi and cohesion decrease; k_c and phi unchanged (Lyasko: little change).
+    n is left unchanged by default (the dimensional-units caveat in lyasko_reduce).
+    """
+    earth = tm.TerramechanicsParams.from_constants()
+    lunar = tm.TerramechanicsParams.lunar()
+    assert lunar.k_phi < earth.k_phi
+    assert lunar.cohesion < earth.cohesion
+    assert lunar.k_c == earth.k_c
+    assert lunar.phi_rad == earth.phi_rad
+    assert lunar.n_sinkage == earth.n_sinkage  # n_frac default 0 (deferred to oracle fit)
+
+
+def test_lyasko_identity_at_earth_gravity():
+    """At g = g_earth the correction is the identity (deficit 0)."""
+    earth = tm.TerramechanicsParams.from_constants()
+    same = tm.lyasko_reduce(earth, g=9.81, g_earth=9.81)
+    assert same == earth
+
+
+def test_lunar_params_json_roundtrip():
+    """Lunar params are still a valid JSON-serializable config."""
+    import json
+    lunar = tm.TerramechanicsParams.lunar()
+    back = tm.TerramechanicsParams.from_dict(json.loads(lunar.to_json()))
+    assert back == lunar
 
 
 def _run_all():
