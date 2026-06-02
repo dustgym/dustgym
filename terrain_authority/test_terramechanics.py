@@ -279,6 +279,26 @@ def test_lunar_params_json_roundtrip():
     assert back == lunar
 
 
+# -- Phase 2 hooks: slip-sinkage multiplier + four_wheel_pass slip -----------
+
+def test_slip_sinkage_multiplier_monotone():
+    assert tm.slip_sinkage_multiplier(0.0) == 1.0
+    assert tm.slip_sinkage_multiplier(0.5) > 1.0
+    assert tm.slip_sinkage_multiplier(0.8) > tm.slip_sinkage_multiplier(0.5)
+
+
+def test_four_wheel_pass_slip_deepens_rut_mass_conserved():
+    """A slipping wheel digs a deeper rut (more compaction) but conserves mass."""
+    poses = [((32.0, 32.0), 0.0)]
+    no_slip = ColumnState(width=64, height=64, cell_m=0.02)
+    with_slip = ColumnState(width=64, height=64, cell_m=0.02)
+    m0 = no_slip.total_mass()
+    rover.four_wheel_pass(no_slip, poses, physical=True, slip=0.0)
+    rover.four_wheel_pass(with_slip, poses, physical=True, slip=0.6)
+    assert math.isclose(with_slip.total_mass(), m0, rel_tol=1e-9)
+    assert with_slip.density.max() > no_slip.density.max()
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

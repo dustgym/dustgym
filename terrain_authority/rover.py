@@ -151,7 +151,8 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
                     physical: bool = False,
                     loads: "dict[str, float] | float | None" = None,
                     params: "tm.TerramechanicsParams | None" = None,
-                    contact_len_m: float | None = None) -> dict[str, list[tuple[float, float]]]:
+                    contact_len_m: float | None = None,
+                    slip: "dict[str, float] | float | None" = None) -> dict[str, list[tuple[float, float]]]:
     """Stamp FOUR separate compacting ruts (LF/RF/LB/RB) along a pose sequence. MASS PRESERVED.
 
     ``poses`` is a list of (center_rc, heading_rad) — the rover-center track this drive.
@@ -198,9 +199,11 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
             load_n = loads.get(key) if isinstance(loads, dict) else loads
             if load_n is None:
                 load_n = tm.static_wheel_load_n()
+            s_wheel = slip.get(key) if isinstance(slip, dict) else slip
             f = tm.physical_compaction_field(
                 cs.density[touched], cs.mass_areal[touched], load_n,
-                params=params, contact_len_m=contact_len_m, contact_width_m=wheel_width_m)
+                params=params, contact_len_m=contact_len_m, contact_width_m=wheel_width_m,
+                slip=(s_wheel or 0.0))
             cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + f), K.RHO_DEEP)
         else:
             cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + compaction), K.RHO_DEEP)

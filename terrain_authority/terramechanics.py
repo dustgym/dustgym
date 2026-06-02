@@ -214,19 +214,37 @@ def sinkage_to_density_factor(z_m: float, thickness_m: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Slip-sinkage multiplier (Phase 2) — theta_m=(c1+c2*s)*theta_f rearward stress
+# migration deepens the rut with wheel slip. [UNKNOWN] magnitude (SLIP_C1/SLIP_C2).
+# ---------------------------------------------------------------------------
+
+def slip_sinkage_multiplier(slip: float, *, c1: float = K.SLIP_C1, c2: float = K.SLIP_C2,
+                            s_cap: float = 0.95) -> float:
+    """Sinkage multiplier (>=1) from wheel slip ratio s. 1 at s=0; grows with slip and
+    diverges near s=1 (clamped at s_cap). Models the theta_m=(c1+c2*s)*theta_f rearward
+    stress migration that drives slip-sinkage (spec §6). c1/c2 are [UNKNOWN] (constants).
+    """
+    s = min(max(float(slip), 0.0), s_cap)
+    return 1.0 + (c1 + c2 * s) * (s / (1.0 - s))
+
+
+# ---------------------------------------------------------------------------
 # Vectorized field form — the seam rover.four_wheel_pass(physical=True) calls.
 # ---------------------------------------------------------------------------
 
 def physical_compaction_field(density, mass_areal, load_n: float, *,
                               params: TerramechanicsParams | None = None,
                               contact_len_m: float | None = None,
-                              contact_width_m: float | None = None):
+                              contact_width_m: float | None = None,
+                              slip: float = 0.0):
     """Per-cell density-increase factor field f from load-driven Bekker sinkage.
 
     Apply as ``density *= (1 + f)`` then cap at RHO_DEEP — MASS-CONSERVING (density
     -only edit; height re-derives). Vectorized numpy mirror of wheel_static_sinkage
     + sinkage_to_density_factor: per cell, stiffening s = density/rho_surface (denser
     soil bears better -> paving), z = (p/(k_c/b + k_phi*s))**(1/n), f = z/(t-z).
+    ``slip`` (Phase 2, optional) deepens the per-cell sinkage via slip_sinkage_multiplier
+    before the density mapping — still mass-conserving (a deeper rut = more compaction).
     ``density``/``mass_areal`` are the masked cells (kg/m^3, kg/m^2). Returns f (same
     shape). load_n <= 0 -> zeros.
     """
@@ -239,9 +257,11 @@ def physical_compaction_field(density, mass_areal, load_n: float, *,
     area = max(1e-9, cl * cw)
     b = min(cl, cw)
     pressure = load_n / area
-    s = np.maximum(1.0, density / p.rho_surface)          # per-cell stiffening (paving)
-    k = p.k_c / b + p.k_phi * s
-    z = (pressure / k) ** (1.0 / p.n_sinkage)             # per-cell sinkage [m]
+    s_stiff = np.maximum(1.0, density / p.rho_surface)    # per-cell stiffening (paving)
+    k = p.k_c / b + p.k_phi * s_stiff
+    z = (pressure / k) ** (1.0 / p.n_sinkage)             # per-cell static sinkage [m]
+    if slip and slip > 0.0:
+        z = z * slip_sinkage_multiplier(slip, c1=p.slip_c1, c2=p.slip_c2)   # Phase 2
     thickness = np.asarray(mass_areal, dtype=np.float64) / density
     z = np.minimum(z, 0.999 * thickness)                  # clamp below thickness
     return z / (thickness - z)
