@@ -98,8 +98,11 @@ class RoverSimEnv(_BASE):
 
         if _HAS_GYM:
             self.action_space = _spaces.Box(-1.0, 1.0, shape=(self.action_dim,), dtype=np.float32)
-            self.observation_space = _spaces.Box(-np.inf, np.inf, shape=(self.obs_dim,),
-                                                 dtype=np.float32)
+            # Finite (generous) obs bounds: relative heights are ~metres, the proprioceptive
+            # scalars are O(1) (sin/cos, pitch/roll, slip[0,1], sinkage, dist[0,1]). 1e3 cannot
+            # clip any real observation and keeps env_checker / SB3 happy (no +/-inf bounds).
+            hi = np.full(self.obs_dim, 1.0e3, dtype=np.float32)
+            self.observation_space = _spaces.Box(-hi, hi, dtype=np.float32)
 
     # -- scene + geometry ----------------------------------------------------
 
