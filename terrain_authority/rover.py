@@ -513,3 +513,44 @@ def build_drum_marks_meta(swath_rc: list[tuple[float, float]], heading_rad: floa
         "teeth_pitch_m": float(teeth_pitch_m),  # SI metres
         "phase": float(phase),
     }
+
+
+# ---------------------------------------------------------------------------
+# Differential-drive kinematic step (Phase 3 — close the loop, 2026-06-01).
+#
+# The missing (state, command) -> next_pose primitive: today the rover replays a
+# precomputed path (spiral_path/drive_spiral); this lets a controller (ROS cmd_vel
+# or an RL policy) DRIVE it one twist at a time. Same FIELD heading convention as
+# wheel_contact_points / conform_pose (heading 0 = +col/+X, +pi/2 = +row/+Z;
+# forward unit in (row,col) = (sin yaw, cos yaw)) so the integrated pose feeds
+# straight into conform_pose + four_wheel_pass with zero convention juggling.
+# ---------------------------------------------------------------------------
+
+def step_pose(center_rc: tuple[float, float], yaw_rad: float,
+              v_mps: float, omega_radps: float, dt_s: float, *,
+              cell_m: float) -> tuple[tuple[float, float], float]:
+    """Advance a unicycle/differential-drive pose by one twist over ``dt_s``.
+
+    ``v_mps`` forward speed, ``omega_radps`` yaw rate. Exact constant-twist arc
+    integration (deterministic): straight line when |omega| ~ 0, else a circular
+    arc of radius v/omega. Returns ((row, col), yaw_rad), yaw wrapped to (-pi, pi].
+
+    Forward unit in (row,col) is (sin yaw, cos yaw) (the wheel_contact_points
+    convention), so yaw=0 advances +col and yaw=pi/2 advances +row.
+    """
+    r0, c0 = float(center_rc[0]), float(center_rc[1])
+    yaw0 = float(yaw_rad)
+    new_yaw = yaw0 + omega_radps * dt_s
+    dist_cells = (v_mps * dt_s) / cell_m
+    if abs(omega_radps) < 1e-9:
+        dr = dist_cells * np.sin(yaw0)
+        dc = dist_cells * np.cos(yaw0)
+    else:
+        # ∫ v·(sin yaw, cos yaw) dt over the constant-omega arc:
+        #   drow = (v/ω)(cos yaw0 - cos yaw1);  dcol = (v/ω)(sin yaw1 - sin yaw0)
+        v_cells = dist_cells / dt_s
+        k = v_cells / omega_radps
+        dr = k * (np.cos(yaw0) - np.cos(new_yaw))
+        dc = k * (np.sin(new_yaw) - np.sin(yaw0))
+    new_yaw = (new_yaw + np.pi) % (2.0 * np.pi) - np.pi
+    return (r0 + float(dr), c0 + float(dc)), float(new_yaw)
