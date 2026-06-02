@@ -35,6 +35,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import constants as K
+from . import terramechanics as tm
 from .column_state import ColumnState, StateLabel
 
 
@@ -146,7 +147,12 @@ def wheel_contact_points(center_rc: tuple[float, float], heading_rad: float, *,
 
 def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], float]], *,
                     wheel_width_m: float = 0.18,
-                    compaction: float = 0.12) -> dict[str, list[tuple[float, float]]]:
+                    compaction: float = 0.12,
+                    physical: bool = False,
+                    loads: "dict[str, float] | float | None" = None,
+                    params: "tm.TerramechanicsParams | None" = None,
+                    contact_len_m: float | None = None,
+                    slip: "dict[str, float] | float | None" = None) -> dict[str, list[tuple[float, float]]]:
     """Stamp FOUR separate compacting ruts (LF/RF/LB/RB) along a pose sequence. MASS PRESERVED.
 
     ``poses`` is a list of (center_rc, heading_rad) — the rover-center track this drive.
@@ -162,6 +168,15 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
 
     GEOMETRY/STATE-ACCURATE, NOT FORCE-ACCURATE (module docstring; spec §9): we lay the
     observable 4-rut footprint of the IPEx layout (asce-es-2024 wheel), not slip-sinkage.
+
+    LOAD-BEARING opt-in (``physical=True``, added 2026-06-01): the per-wheel compaction
+    is computed from a real Bekker pressure-sinkage solve (terramechanics.py) instead of
+    the constant ``compaction`` — making the previously-decorative moduli load-bearing.
+    ``loads`` gives the per-wheel normal load [N] (dict keyed LF/RF/LB/RB, a scalar for
+    all four, or None -> the sourced 30 kg-class static dry load); ``params`` selects the
+    TerramechanicsParams set (None -> constants.py defaults; .lunar()/.scm_oracle() also
+    valid). Still a density-only edit -> mass conserved exactly. ``physical=False``
+    (default) is byte-identical to the prior constant-compaction behaviour.
     """
     half_w = max(0.5, 0.5 * wheel_width_m / cs.cell_m)  # half-width in cells
 
@@ -180,7 +195,18 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
             touched |= _wheel_mask(cs, (r, c), half_w)
         if not touched.any():
             continue
-        cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + compaction), K.RHO_DEEP)
+        if physical:
+            load_n = loads.get(key) if isinstance(loads, dict) else loads
+            if load_n is None:
+                load_n = tm.static_wheel_load_n()
+            s_wheel = slip.get(key) if isinstance(slip, dict) else slip
+            f = tm.physical_compaction_field(
+                cs.density[touched], cs.mass_areal[touched], load_n,
+                params=params, contact_len_m=contact_len_m, contact_width_m=wheel_width_m,
+                slip=(s_wheel or 0.0))
+            cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + f), K.RHO_DEEP)
+        else:
+            cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + compaction), K.RHO_DEEP)
         was_spoil = touched & (cs.state_label == StateLabel.SPOIL)
         cs.state_label[touched & ~was_spoil] = StateLabel.TREAD
         cs.state_label[was_spoil] = StateLabel.COMPACTED_BERM
@@ -302,7 +328,9 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
                  cell_m: float, world_x0: float = 0.0, world_y0: float = 0.0,
                  clasts: list[dict] | None = None, climb_limit_m: float = WHEEL_RADIUS_M,
                  min_grad_cells: float = 2.5,
-                 gauge_m: float = WHEEL_GAUGE_M, wheelbase_m: float = WHEEL_BASE_M) -> dict:
+                 gauge_m: float = WHEEL_GAUGE_M, wheelbase_m: float = WHEEL_BASE_M,
+                 payload_kg: float = 0.0,
+                 rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG) -> dict:
     """Kinematic rest pose of the 4-wheel rover on the terrain at one spiral pose.
 
     TWO terms, least-squares fit to a plane y = a*x + b*z + c in GODOT WORLD axes
@@ -372,12 +400,22 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
     nrm /= np.linalg.norm(nrm)
     slope_fwd = a * ch + b * sh           # forward world (x,z)=(cos h, sin h)
     slope_lat = a * (-sh) + b * ch        # left world=(-sin h, cos h)
+    # Per-wheel NORMAL load (added 2026-06-01 for load-bearing sinkage): the weight
+    # component along the surface normal, split equally over the 4 contacts. nrm[1] is
+    # cos(tilt) (flat -> full weight; steeper -> less normal load -> the slip driver,
+    # Phase 2). Equal split; CG-based fore/aft transfer is a refinement (CG height not
+    # in the public TRL-5 overview). Feeds four_wheel_pass(physical=True, loads=...).
+    total_weight_n = (rover_mass_dry_kg + max(0.0, payload_kg)) * K.g
+    normal_total_n = total_weight_n * float(nrm[1])
+    per_wheel_n = normal_total_n / 4.0
     return {
         "up": [float(nrm[0]), float(nrm[1]), float(nrm[2])],
         "z_m": z_center,
         "pitch_rad": float(np.arctan(slope_fwd)),
         "roll_rad": float(np.arctan(slope_lat)),
         "contacts": {k: [float(pts[k][0]), float(pts[k][1])] for k in rows},
+        "normal_loads": {k: per_wheel_n for k in rows},
+        "normal_load_total_n": normal_total_n,
     }
 
 
@@ -475,3 +513,44 @@ def build_drum_marks_meta(swath_rc: list[tuple[float, float]], heading_rad: floa
         "teeth_pitch_m": float(teeth_pitch_m),  # SI metres
         "phase": float(phase),
     }
+
+
+# ---------------------------------------------------------------------------
+# Differential-drive kinematic step (Phase 3 — close the loop, 2026-06-01).
+#
+# The missing (state, command) -> next_pose primitive: today the rover replays a
+# precomputed path (spiral_path/drive_spiral); this lets a controller (ROS cmd_vel
+# or an RL policy) DRIVE it one twist at a time. Same FIELD heading convention as
+# wheel_contact_points / conform_pose (heading 0 = +col/+X, +pi/2 = +row/+Z;
+# forward unit in (row,col) = (sin yaw, cos yaw)) so the integrated pose feeds
+# straight into conform_pose + four_wheel_pass with zero convention juggling.
+# ---------------------------------------------------------------------------
+
+def step_pose(center_rc: tuple[float, float], yaw_rad: float,
+              v_mps: float, omega_radps: float, dt_s: float, *,
+              cell_m: float) -> tuple[tuple[float, float], float]:
+    """Advance a unicycle/differential-drive pose by one twist over ``dt_s``.
+
+    ``v_mps`` forward speed, ``omega_radps`` yaw rate. Exact constant-twist arc
+    integration (deterministic): straight line when |omega| ~ 0, else a circular
+    arc of radius v/omega. Returns ((row, col), yaw_rad), yaw wrapped to (-pi, pi].
+
+    Forward unit in (row,col) is (sin yaw, cos yaw) (the wheel_contact_points
+    convention), so yaw=0 advances +col and yaw=pi/2 advances +row.
+    """
+    r0, c0 = float(center_rc[0]), float(center_rc[1])
+    yaw0 = float(yaw_rad)
+    new_yaw = yaw0 + omega_radps * dt_s
+    dist_cells = (v_mps * dt_s) / cell_m
+    if abs(omega_radps) < 1e-9:
+        dr = dist_cells * np.sin(yaw0)
+        dc = dist_cells * np.cos(yaw0)
+    else:
+        # ∫ v·(sin yaw, cos yaw) dt over the constant-omega arc:
+        #   drow = (v/ω)(cos yaw0 - cos yaw1);  dcol = (v/ω)(sin yaw1 - sin yaw0)
+        v_cells = dist_cells / dt_s
+        k = v_cells / omega_radps
+        dr = k * (np.cos(yaw0) - np.cos(new_yaw))
+        dc = k * (np.sin(new_yaw) - np.sin(yaw0))
+    new_yaw = (new_yaw + np.pi) % (2.0 * np.pi) - np.pi
+    return (r0 + float(dr), c0 + float(dc)), float(new_yaw)

@@ -115,6 +115,27 @@ SLIP_C1 = 0.4
 SLIP_C2 = 0.3
 
 # ---------------------------------------------------------------------------
+# Rover mass / weight-on-wheels (added 2026-06-01 for load-bearing sinkage).
+#   Sourced from the IPEx TRL-5 design overview (papers/ascend24-ipex-trl-5-
+#   design-overview.pdf; NTRS 20240008162, p.2): "The IPEx project is developing
+#   a 30 kg-class excavator." Low mass is the DESIGN THESIS — counter-rotating
+#   bucket drums cancel horizontal dig reaction, so IPEx does NOT rely on high
+#   mass for tractive force (p.2). Consequence: very low weight-on-wheels, which
+#   is precisely why slip-sinkage (not static bearing) is the dominant failure.
+# ---------------------------------------------------------------------------
+
+#: Rover dry mass [kg]. [CALIB] (ascend24 TRL-5, "30 kg-class").
+ROVER_MASS_DRY_KG = 30.0
+
+#: Max drum payload per excavation cycle [kg]. [CALIB] (ascend24: up to 30 kg/cycle,
+#: 15 kg minimum success threshold). Laden weight-on-wheels rises with payload — a
+#: path-dependent dynamic (excavating loads the drums -> more sinkage -> more slip).
+DRUM_PAYLOAD_MAX_KG = 30.0
+
+#: Number of ground wheels (IPEx 4-wheel layout; rover.py wheel_contact_points).
+N_WHEELS = 4
+
+# ---------------------------------------------------------------------------
 # §5.2 / §7 Granular flow: repose angle and bulking.
 # ---------------------------------------------------------------------------
 
