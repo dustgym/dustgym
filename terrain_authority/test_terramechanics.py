@@ -299,6 +299,24 @@ def test_four_wheel_pass_slip_deepens_rut_mass_conserved():
     assert with_slip.density.max() > no_slip.density.max()
 
 
+# -- Phase 4 hook: domain randomization within sourced envelopes -------------
+
+def test_domain_randomize_within_envelopes():
+    p = tm.domain_randomize(np.random.default_rng(0))
+    assert 0.8 <= p.n_sinkage <= 1.0
+    assert 0.2e6 <= p.k_phi <= 0.82e6
+    assert 100.0 <= p.cohesion <= 1000.0
+    assert 0.3 <= p.slip_c1 <= 0.5
+    assert 0.2 <= p.slip_c2 <= 0.4
+    assert p.k_c == tm.TerramechanicsParams.from_constants().k_c  # k_c held fixed
+
+
+def test_domain_randomize_deterministic_seed():
+    a = tm.domain_randomize(np.random.default_rng(42))
+    b = tm.domain_randomize(np.random.default_rng(42))
+    assert a == b
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

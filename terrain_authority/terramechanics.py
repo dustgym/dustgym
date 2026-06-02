@@ -304,3 +304,30 @@ def lyasko_reduce(params: TerramechanicsParams, *, g: float = K.g, g_earth: floa
         cohesion=params.cohesion * _scale(c_frac),
         n_sinkage=params.n_sinkage * _scale(n_frac),   # n_frac default 0 -> n unchanged
     )   # k_c and phi_rad deliberately unchanged (Lyasko: little change)
+
+
+# ---------------------------------------------------------------------------
+# Domain randomization (Phase 4) — sample params within the SOURCED envelopes.
+#   The honesty tags ARE the randomization spec (spec §7.5): each range is the
+#   documented [CALIB]/[UNKNOWN] envelope, NOT an invented spread.
+# ---------------------------------------------------------------------------
+
+def domain_randomize(rng, base: TerramechanicsParams | None = None) -> TerramechanicsParams:
+    """Sample a TerramechanicsParams within the sourced §5.2 envelopes, given a numpy
+    Generator ``rng`` (seeded -> reproducible). Ranges:
+      n_sinkage  U(0.8, 1.0)        spec §5.2 (n 0.8-1.0)
+      k_phi      U(0.2e6, 0.82e6)   FIX-1 span: committed SCM 200k .. spec 820k
+      cohesion   U(100, 1000) Pa    spec §5.2 (c 0.1-1.0 kPa)
+      slip_c1    U(0.3, 0.5)        [UNKNOWN], around the 0.4 nominal
+      slip_c2    U(0.2, 0.4)        [UNKNOWN], around the 0.3 nominal
+    k_c and phi are kept fixed (Lyasko: little gravity change; narrow envelope).
+    """
+    b = base or _DEFAULT_PARAMS
+    return dataclasses.replace(
+        b,
+        n_sinkage=float(rng.uniform(0.8, 1.0)),
+        k_phi=float(rng.uniform(0.2e6, 0.82e6)),
+        cohesion=float(rng.uniform(100.0, 1000.0)),
+        slip_c1=float(rng.uniform(0.3, 0.5)),
+        slip_c2=float(rng.uniform(0.2, 0.4)),
+    )
