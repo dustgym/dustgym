@@ -48,19 +48,20 @@ def drive_step(cs: ColumnState, rc: tuple[float, float], yaw: float,
                v_cmd: float, omega_cmd: float, *, dt: float = 0.1,
                params: "tm.TerramechanicsParams | None" = None,
                payload_kg: float = 0.0, wheel_width_m: float = 0.18,
-               contact_len_m: float = 0.10) -> tuple[tuple[float, float], float, dict]:
+               contact_len_m: float = 0.10,
+               clasts: "list[dict] | None" = None) -> tuple[tuple[float, float], float, dict]:
     """One closed-loop step: command twist in, (new_rc, new_yaw, telemetry) out.
 
-    read local forward slope (conform_pose pitch) -> slip-sinkage equilibrium
-    (slip.py) -> achieved v = (1-slip)*commanded v -> integrate pose (step_pose) ->
-    carve slip-deepened ruts at the achieved pose (four_wheel_pass(physical=True)).
-    MASS-CONSERVING. Telemetry dict: rc, yaw, v_cmd, omega_cmd, v_achieved, slip,
-    entrapped, slope_rad, sinkage_m.
+    read local forward slope (conform_pose pitch, incl. clast ride-over if ``clasts``
+    given) -> slip-sinkage equilibrium (slip.py) -> achieved v = (1-slip)*commanded v
+    -> integrate pose (step_pose) -> carve slip-deepened ruts at the achieved pose
+    (four_wheel_pass(physical=True)). MASS-CONSERVING. Telemetry dict: rc, yaw, v_cmd,
+    omega_cmd, v_achieved, slip, entrapped, slope_rad, sinkage_m.
     """
     p = params or tm.TerramechanicsParams.from_constants()
     weight_n = (K.ROVER_MASS_DRY_KG + max(0.0, payload_kg)) * K.g
     h = cs.derive_height()
-    cf = rover.conform_pose(h, rc, yaw, cell_m=cs.cell_m, payload_kg=payload_kg)
+    cf = rover.conform_pose(h, rc, yaw, cell_m=cs.cell_m, payload_kg=payload_kg, clasts=clasts)
     slope_rad = cf["pitch_rad"]                           # forward grade the wheels fight
     eq = slipmod.slip_sinkage_equilibrium(weight_n, slope_rad, params=p,
                                           contact_len_m=contact_len_m,
@@ -84,9 +85,11 @@ def closed_loop_drive(cs: ColumnState, start_rc: tuple[float, float], start_yaw:
                       twists, *, dt: float = 0.1,
                       params: "tm.TerramechanicsParams | None" = None,
                       payload_kg: float = 0.0, wheel_width_m: float = 0.18,
-                      contact_len_m: float = 0.10) -> dict:
+                      contact_len_m: float = 0.10,
+                      clasts: "list[dict] | None" = None) -> dict:
     """Drive ``cs`` through a sequence of ``twists`` ((v_mps, omega_radps) pairs),
-    one drive_step each. Deterministic. Returns {steps, commanded_dist_m,
+    one drive_step each. Deterministic. ``clasts`` (optional) enables boulder
+    ride-over in the per-step conform. Returns {steps, commanded_dist_m,
     achieved_dist_m, final_rc, final_yaw, any_entrapped}.
     """
     p = params or tm.TerramechanicsParams.from_constants()
@@ -98,7 +101,7 @@ def closed_loop_drive(cs: ColumnState, start_rc: tuple[float, float], start_yaw:
     for i, (v_cmd, omega_cmd) in enumerate(twists):
         rc, yaw, telem = drive_step(cs, rc, yaw, v_cmd, omega_cmd, dt=dt, params=p,
                                     payload_kg=payload_kg, wheel_width_m=wheel_width_m,
-                                    contact_len_m=contact_len_m)
+                                    contact_len_m=contact_len_m, clasts=clasts)
         telem["frame"] = i
         commanded_dist += abs(v_cmd) * dt
         achieved_dist += abs(telem["v_achieved"]) * dt

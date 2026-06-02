@@ -287,6 +287,17 @@ def test_slip_sinkage_multiplier_monotone():
     assert tm.slip_sinkage_multiplier(0.8) > tm.slip_sinkage_multiplier(0.5)
 
 
+def test_physical_field_no_nan_on_bare_cells():
+    """Bare / near-zero-thickness cells (EXCAVATED to firm layer on real scenes) give
+    f=0, not NaN/inf. Regression for the divide-by-(thickness-z) found live."""
+    density = np.array([K.RHO_SURFACE, K.RHO_DEEP, K.RHO_SURFACE], dtype=np.float64)
+    mass_areal = np.array([0.0, 1e-6, K.RHO_SURFACE * 0.12], dtype=np.float64)  # bare, near-zero, normal
+    f = tm.physical_compaction_field(density, mass_areal, tm.static_wheel_load_n(0.0))
+    assert np.all(np.isfinite(f))
+    assert f[0] == 0.0 and f[1] == 0.0      # cannot compact a (near-)zero-thickness column
+    assert f[2] > 0.0                        # normal cell still compacts
+
+
 def test_four_wheel_pass_slip_deepens_rut_mass_conserved():
     """A slipping wheel digs a deeper rut (more compaction) but conserves mass."""
     poses = [((32.0, 32.0), 0.0)]

@@ -263,8 +263,13 @@ def physical_compaction_field(density, mass_areal, load_n: float, *,
     if slip and slip > 0.0:
         z = z * slip_sinkage_multiplier(slip, c1=p.slip_c1, c2=p.slip_c2)   # Phase 2
     thickness = np.asarray(mass_areal, dtype=np.float64) / density
+    # Bare / near-zero-thickness cells (EXCAVATED to the firm layer on real scenes)
+    # cannot be compacted further: clamp sinkage below thickness and guard the divide
+    # so they yield f=0 instead of NaN. (Found live driving on crater_boulders.)
     z = np.minimum(z, 0.999 * thickness)                  # clamp below thickness
-    return z / (thickness - z)
+    denom = thickness - z
+    return np.divide(z, denom, out=np.zeros_like(z, dtype=np.float64),
+                     where=(denom > 1e-12))
 
 
 # ---------------------------------------------------------------------------

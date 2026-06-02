@@ -118,6 +118,22 @@ def test_poll_cmd_vel_reads_and_defaults():
         os.remove(path)
 
 
+def test_drive_step_threads_clasts():
+    """clasts reach conform_pose (boulder ride-over) -> a front boulder tilts the
+    rover's forward pitch, so the slope/slip the step sees changes. (Found live:
+    drive_step previously ignored clasts.)"""
+    # at yaw=0 the forward axis is +x (+col); a boulder ahead lifts the front wheels.
+    front_boulder = [{"center_m": [24 * 0.02 + 0.20, 0.0, 24 * 0.02], "radius_m": 0.35}]
+
+    def slope(use):
+        cs = ColumnState(width=48, height=48, cell_m=0.02)
+        _, _, t = drive.drive_step(cs, (24.0, 24.0), 0.0, 0.0, 0.0, dt=0.1,
+                                   clasts=(front_boulder if use else None))
+        return t["slope_rad"]
+
+    assert abs(slope(True)) > abs(slope(False)) + 1e-3
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
