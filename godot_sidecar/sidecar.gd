@@ -127,6 +127,13 @@ var _brdf_hapke := true
 # multi-SubViewport capture works headless under xvfb+Vulkan and yields INDEPENDENT frames.
 var _probe_multicam := false
 
+# --bench-multicam: light render benchmark. Reuses the --probe-multicam
+# shared-World3D SubViewport mechanism with _bench_cams cameras at --size, fps uncapped,
+# timing _bench_frames frames in three phases (render-only / +readback / +PNG encode).
+var _bench_multicam := false
+var _bench_frames := 30
+var _bench_cams := 8
+
 # M1 front-stereo camera egress (--cameras). When true, build the scene + an
 # AprilTag-bearing procedural lander ~2.5 m ahead of the rover, capture the
 # front_left/front_right stereo pair via shared-World3D SubViewports (mirrors
@@ -207,6 +214,10 @@ func _ready() -> void:
 
 	_setup_environment()
 	_build_layers()
+
+	if _bench_multicam:
+		await _bench_multicam_capture()
+		get_tree().quit(0); return
 
 	if _probe_multicam:
 		await _probe_multicam_capture()
@@ -493,6 +504,12 @@ func _parse_args() -> void:
 				i += 1; _brdf_hapke = (String(args[i]).strip_edges().to_lower() != "lambert")
 			"--probe-multicam":
 				_probe_multicam = true
+			"--bench-multicam":
+				_bench_multicam = true
+			"--bench-frames":
+				i += 1; _bench_frames = int(args[i])
+			"--bench-cams":
+				i += 1; _bench_cams = int(args[i])
 			"--cameras":
 				_cameras_mode = true
 				_drums_up = true                 # the camera module needs the drums lifted out of view
@@ -658,6 +675,61 @@ func _probe_multicam_capture() -> void:
 			e["name"], ProjectSettings.globalize_path(path),
 			img.get_width(), img.get_height(), err])
 	print("sidecar: --probe-multicam wrote %d independent SubViewport frames" % subs.size())
+
+# --bench-multicam — light render benchmark (additive). Builds _bench_cams
+# cameras over the SAME world via the proven shared-World3D SubViewport mechanism, uncaps
+# fps, and times _bench_frames frames in three phases so GPU draw is separated from the
+# CPU readback + PNG-encode cost: A render-only cadence, B +get_image() readback, C +save_png.
+func _bench_multicam_capture() -> void:
+	Engine.max_fps = 0
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	var world := get_viewport().world_3d
+	var ext: Vector2 = sf.extent_m()
+	var cx: float = sf.world_min.x + ext.x * 0.5
+	var cz: float = sf.world_min.y + ext.y * 0.5
+	var look := Vector3(cx, sf.height_range.x, cz)
+	var span: float = maxf(ext.x, ext.y)
+	var subs: Array = []
+	for k in range(_bench_cams):
+		var ang: float = TAU * float(k) / float(_bench_cams)
+		var sv := SubViewport.new()
+		sv.size = _viewport_size
+		sv.world_3d = world                                       # SHARE the built scene
+		sv.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		sv.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+		add_child(sv)
+		var cam := Camera3D.new()
+		cam.fov = 55.0; cam.near = 0.02; cam.far = 200.0
+		var pos := Vector3(cx + cos(ang) * ext.x * 0.7, span * 0.5, cz + sin(ang) * ext.y * 0.7)
+		sv.add_child(cam)
+		cam.look_at_from_position(pos, look, Vector3.UP)
+		cam.current = true
+		subs.append(sv)
+	for _w in range(5):                                            # warm: shader compile + stale buffers
+		await RenderingServer.frame_post_draw
+	var n: int = _bench_frames
+	var a0 := Time.get_ticks_usec()                                # A: render-only cadence
+	for _f in range(n):
+		await RenderingServer.frame_post_draw
+	var tA: float = float(Time.get_ticks_usec() - a0) / 1000.0
+	var b0 := Time.get_ticks_usec()                                # B: + GPU->CPU readback
+	for _f in range(n):
+		await RenderingServer.frame_post_draw
+		for sv2 in subs:
+			var _imgb: Image = sv2.get_texture().get_image()
+	var tB: float = float(Time.get_ticks_usec() - b0) / 1000.0
+	var c0 := Time.get_ticks_usec()                                # C: + PNG encode to disk
+	for _f in range(n):
+		await RenderingServer.frame_post_draw
+		for ci in range(subs.size()):
+			var imgc: Image = subs[ci].get_texture().get_image()
+			imgc.save_png("res://out/bench_cam_%d.png" % ci)
+	var tC: float = float(Time.get_ticks_usec() - c0) / 1000.0
+	var mA := tA / n; var mB := tB / n; var mC := tC / n
+	print("BENCH cams=%d size=%dx%d frames=%d (+main viewport)" % [_bench_cams, _viewport_size.x, _viewport_size.y, n])
+	print("BENCH A render_only  %.2f ms/frame  %.1f fps" % [mA, 1000.0 / maxf(mA, 0.001)])
+	print("BENCH B +readback    %.2f ms/frame  %.1f fps" % [mB, 1000.0 / maxf(mB, 0.001)])
+	print("BENCH C +png_encode  %.2f ms/frame  %.1f fps  (%.2f ms/cam)" % [mC, 1000.0 / maxf(mC, 0.001), mC / _bench_cams])
 
 # ---------------------------------------------------------------------------
 # M1 — front-stereo camera egress (--cameras). docs/sensor_bridge_contract.md §2.
