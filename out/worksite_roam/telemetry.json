@@ -1,0 +1,127 @@
+{
+  "stages": [
+    {
+      "stage": "open",
+      "total_mass": 140400.00000000003,
+      "inventory_kg": 0.0,
+      "residual_kg": 0.0,
+      "rel": 0.0,
+      "recenters": 1
+    },
+    {
+      "stage": "flatten_pad",
+      "total_mass": 327600.00000000006,
+      "inventory_kg": 74026.07467980236,
+      "residual_kg": 5.820766091346741e-11,
+      "rel": 4.14584479440651e-16,
+      "recenters": 5
+    },
+    {
+      "stage": "haul",
+      "total_mass": 421200.0000000001,
+      "inventory_kg": 74026.07467980236,
+      "residual_kg": 1.1641532182693481e-10,
+      "rel": 8.29168958881302e-16,
+      "recenters": 7
+    },
+    {
+      "stage": "berm_seg1",
+      "total_mass": 514800.0000000001,
+      "inventory_kg": 59220.85974384189,
+      "residual_kg": 1.1641532182693481e-10,
+      "rel": 8.29168958881302e-16,
+      "recenters": 8
+    },
+    {
+      "stage": "berm_seg2",
+      "total_mass": 514800.00000000006,
+      "inventory_kg": 44415.644807881414,
+      "residual_kg": 5.820766091346741e-11,
+      "rel": 4.14584479440651e-16,
+      "recenters": 8
+    },
+    {
+      "stage": "berm_seg3",
+      "total_mass": 561600.0,
+      "inventory_kg": 29610.42987192094,
+      "residual_kg": 0.0,
+      "rel": 0.0,
+      "recenters": 9
+    },
+    {
+      "stage": "berm_seg4",
+      "total_mass": 608400.0,
+      "inventory_kg": 14805.21493596047,
+      "residual_kg": 0.0,
+      "rel": 0.0,
+      "recenters": 10
+    },
+    {
+      "stage": "berm_seg5",
+      "total_mass": 655200.0,
+      "inventory_kg": 0.0,
+      "residual_kg": 0.0,
+      "rel": 0.0,
+      "recenters": 11
+    }
+  ],
+  "worst_rel_residual": 8.29168958881302e-16,
+  "conservation_pass": true,
+  "recenters": 11,
+  "peak_inventory_kg": 74026.07467980236,
+  "drum_cycles": 2468,
+  "over_payload": true,
+  "pad_moved_kg": 74026.07467980236,
+  "pad_achieved_drop_m": 0.11413565139854495,
+  "berm_local_repose_deg": [
+    46.872832781571816,
+    41.95778083638774,
+    41.93030028588837,
+    40.800789664559176,
+    40.617404797520464
+  ],
+  "haul": [
+    {
+      "x": 40.0,
+      "commanded_m": 10.799999999999997,
+      "achieved_m": 10.396725223344184,
+      "entrapped": false
+    },
+    {
+      "x": 50.39672522334149,
+      "commanded_m": 10.799999999999997,
+      "achieved_m": 9.638942669289353,
+      "entrapped": false
+    },
+    {
+      "x": 60.03566789263277,
+      "commanded_m": 10.799999999999997,
+      "achieved_m": 9.630229573256813,
+      "entrapped": false
+    }
+  ],
+  "params": {
+    "out": "out/worksite_roam",
+    "base_rc": [
+      1101,
+      1101
+    ],
+    "fine_cell_m": 0.05,
+    "tile_base_cells": 2,
+    "pad_len_m": 40.0,
+    "pad_halfwidth_m": 8.0,
+    "haul_len_m": 30.0,
+    "berm_len_m": 40.0,
+    "berm_halfwidth_m": 1.25,
+    "dig_depth_m": 0.3,
+    "berm_segments": 5,
+    "relax_steps": 160,
+    "raw_terraces": false
+  },
+  "worked_world_bbox": [
+    -47412.5,
+    100892.5,
+    -47272.5,
+    100922.5
+  ]
+}
