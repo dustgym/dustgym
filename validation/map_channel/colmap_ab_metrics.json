@@ -1,0 +1,22 @@
+{
+  "hapke": {
+    "registered": 18,
+    "n_images": 18,
+    "n_points3D": 2306,
+    "mean_reproj_px": 0.482729257872465,
+    "align_rmse_m": 0.005634737074358802,
+    "coverage": 0.0292816162109375,
+    "map_rmse_m": 0.038253970118713065,
+    "cell_pass_frac": 0.9713392391870767
+  },
+  "lambert": {
+    "registered": 18,
+    "n_images": 18,
+    "n_points3D": 3477,
+    "mean_reproj_px": 0.3908849925603878,
+    "align_rmse_m": 0.0018115213349403458,
+    "coverage": 0.0416107177734375,
+    "map_rmse_m": 0.036777027895529474,
+    "cell_pass_frac": 0.9823982398239824
+  }
+}
