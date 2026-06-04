@@ -85,20 +85,28 @@ CC0. Independent Godot + Project Chrono + ROS2 stack; references the Lunar Auton
 
 ---
 
-## Two perception tiers, and what "photoreal" means here
+## Two perception tiers, both scored vs conserved truth
 
-- **Onboard** rover stereo: cheap, real-time-plausible, noisy (this update). Stays within rover compute.
-- **Ground COLMAP** (`scripts/colmap/`): offline, high accuracy, self-verified at 12/12 registered, 0.296 px reproj, ATE 5.7 mm. Mirrors how GMRO already builds maps from the image corpus.
-- Both scored against the same conserved ground truth, which only the simulator has.
-- Photorealism that matters for SfM is the **BRDF**, already sourced (Hapke). It is exactly what breaks MVS photoconsistency on real lunar imagery; `--brdf lambert` is the built-in A/B.
+- **Onboard** rover stereo (cheap, real-time): RMSE **0.32 m**, 16 percent coverage over an 8-station drive.
+- **Ground COLMAP** (offline, accurate): 18/18 images registered, RMSE **0.04 m**, 97 percent cell-pass, camera centers aligned to truth within **6 mm**. Sparse SfM here (~3 percent coverage); dense MVS would fill it.
+- Only the simulator has the ground truth to score both. Mirrors how GMRO builds maps from the image corpus, now with a measurable error.
+
+---
+
+## Photorealism for SfM is the BRDF (Hapke vs Lambert)
+
+![h:235](images/07_colmap_hapke_vs_lambert.png)
+
+- Physically-correct **Hapke** gives COLMAP **~33 percent fewer 3-D points and ~30 percent less coverage** than the idealized **Lambert** baseline, at higher reprojection error.
+- The non-Lambertian regolith reflectance costs multi-view correspondences, exactly as on real lunar imagery. `--brdf lambert` is the built-in A/B, and only the sim can grade it against truth.
 
 ---
 
 ## Real now vs honestly deferred
 
-- **Real:** conserved Tier-2 physics, closed loop, RL envs + planner, the Godot render track on GPU, the AprilTag pose channel, the onboard map-channel producer + scorer, the COLMAP ground recon (in isolation).
+- **Real:** conserved Tier-2 physics, closed loop, RL envs + planner, the Godot render track on GPU, the AprilTag pose channel, the onboard map-channel producer + scorer, and the **COLMAP ground tier scored against truth** (0.04 m, with the Hapke-vs-Lambert A/B).
 - **Deferred (named, not hidden):**
-  - COLMAP scored on the mission moving-sequence vs truth (the high-accuracy tier).
+  - Dense MVS for full coverage (sparse SfM today), and COLMAP on the rover's grazing ground-level moving-sequence (the harder, realistic capture).
   - Secondary illumination in shadows / PSR fill (shadows are near-black today).
   - Sensor model: read noise, motion blur, fitted lens distortion.
   - Live Chrono producer; slip-sinkage oracle calibration.
