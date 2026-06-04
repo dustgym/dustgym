@@ -101,10 +101,17 @@ physics file; the skill library and its composition; both perception tiers score
 `material.py` derives per-cell friction and cohesion (plus cut-difficulty and slip-susceptibility maps)
 from the conserved density field across the sourced spec ranges.
 
+The plan -> render loop CORE is built (`scripts/plan_render_pipeline.py`): it plans a flatten on a real
+scene (cut above target -> drum -> fill below, conserved), writes the worked AFTER bundle, renders BEFORE
+and AFTER in Godot, and quantifies the earthwork (cut and fill volumes). On `crater_boulders` it shows the
+crater partially filled and that flattening it needs more fill than the local cut yields (an honest
+import-material result). Figures: `validation/plan_render/`.
+
 Next, in order: (1) thread per-cell Material INTO the sinkage/slip solver, so it changes the dynamics and
-not just the prediction (the solver still reads the global Bekker `k_phi`); (2) close the
-selection-to-render loop, so picking a map area in the browser crops a DEM window, renders it in Godot,
-and feeds the observed map back to the planner (the pieces exist but are not yet one pipeline); (3) dense
-MVS to fill the ground-tier coverage (CUDA-gated today); (4) the learned perception model (JEPA or RSSM
-over the cheap headless rollouts) for active perception, the one genuinely learned component this
-architecture calls for.
+not just the prediction (the solver still reads the global Bekker `k_phi`); (2) finish the
+selection-to-render loop with a browser `/render` endpoint (pick a map area -> crop a DEM window via
+`build_from_dem` -> render it) and feed the observed map back to the planner for the closed feedback loop
+(the pipeline core exists; the browser wire and the perception feedback are what remain); (3) dense MVS to
+fill the ground-tier coverage (CUDA-gated today); (4) the learned perception model (JEPA or RSSM over the
+cheap headless rollouts) for active perception, the one genuinely learned component this architecture
+calls for.
