@@ -134,3 +134,6 @@ godot_sidecar/out/crater_boulders_lambert.png
 /out/worksite_slice/tiles_page/
 /out/worksite_slice/fine_scene/
 planet_browser/reports/
+
+# systematic-review publication folder (downloaded copyrighted PDFs + drafts) -- not for the CC0 repo
+publication/
