@@ -932,7 +932,42 @@ def reachable_radius_on_dem(dem, dem_origin, usable_j, g, *, stride=10, slip_alp
     }
 
 
-def endurance(mission, *, dem=None, dem_origin=(0.0, 0.0)):
+# ---- power model (P10/K8): per-site power source + thermal derating ------------------------------
+POWER_KINDS = ("psr_tower", "sunlit_solar")
+
+
+def thermal_derate(temp_c):
+    """Usable Li-ion pack fraction vs temperature. [CALIB, general Li-ion cold behavior] ~1.0 at >=0 C,
+    falling ~1%/C below 0 (a standard rough rule), floored at 0.5. `None` (no temp given) -> 1.0. The IPEx
+    qual envelope is -35/+40 C (FIX-5); off-the-shelf cells can't meet -35 C without derating/heaters."""
+    if temp_c is None or temp_c >= 0.0:
+        return 1.0
+    return max(0.5, 1.0 + 0.01 * float(temp_c))
+
+
+def power_regime(mission, *, kind="psr_tower", charge_power_w=None, temp_c=None):
+    """Per-site power model. A PSR (e.g. Haworth, the loaded DEM) has NO sun -> a lander/tower charging
+    budget at the charger, available ANYTIME (this is what the planner's recharge actually models -- calling
+    it solar was the error). A SUNLIT site recharges from solar, available only during the body's daylight
+    fraction, so the EFFECTIVE recharge throughput is duty-limited (duty = daylight_h / solar_day_h).
+    Optional cold thermal derating of the usable pack. Day/night from the grounded `body_timescale`."""
+    if kind not in POWER_KINDS:
+        raise ValueError(f"unknown power kind {kind!r}; known: {POWER_KINDS}")
+    ts = body_timescale(mission.body)
+    cw = CHARGE_W if charge_power_w is None else float(charge_power_w)
+    if kind == "sunlit_solar":
+        duty = ts["daylight_h"] / ts["solar_day_h"]
+        avail = f"daylight only (~{ts['daylight_h']:.0f} h / {ts['solar_day_h']:.0f} h {ts['day_label']})"
+    else:
+        duty = 1.0
+        avail = "anytime (lander/tower budget; a PSR has no sun)"
+    derate = thermal_derate(temp_c)
+    return {"kind": kind, "charge_power_w": cw, "duty_frac": duty, "effective_charge_w": cw * duty,
+            "availability": avail, "thermal_derate": derate, "usable_pack_J": BATTERY_J * derate,
+            "day_label": ts["day_label"], "daylight_h": ts["daylight_h"], "solar_day_h": ts["solar_day_h"]}
+
+
+def endurance(mission, *, dem=None, dem_origin=(0.0, 0.0), power_site="psr_tower", temp_c=None):
     """Single-charge driving capability ("true distance before recharge"), grounded in the IPEx specs.
     Returns the flat range (full pack + to reserve), the slope+slip-adjusted range at the work-area's
     representative slope (if a DEM is given), and the DEM-grounded reachable radius from the charger."""
@@ -944,6 +979,7 @@ def endurance(mission, *, dem=None, dem_origin=(0.0, 0.0)):
         "range_flat_reserve_km": single_charge_range_m(g) / 1000.0,
         "duration_flat_h": single_charge_range_m(g) / DRIVE_SPEED_MS / 3600.0,
     }
+    out["power"] = power_regime(mission, kind=power_site, temp_c=temp_c)   # #2 per-site power source
     # ConOps reconciliation [SCHULER24]: the per-charge range is a per-SORTIE bound, not a mission limit.
     # Over the 11-day mission the rover traverses ~70 km AND excavates 5-10 t -> the drums dominate the
     # energy budget, and the sunlit operating window (~9-11 Earth-days) dwarfs any single charge.
@@ -1220,6 +1256,12 @@ def report(mission, trips, flows, per_trip, tl, totals, out_pdf, out_md, endu=No
                 f"**entire {r['radius_m']/1000:.1f} km work area** within reach "
                 f"(~{r['worst_cell_pack_frac']*100:.0f}% of the pack to the farthest point)"
                 if r["tile_fully_reachable"] else f"radius **{r['radius_m']/1000:.1f} km** from the charger"))
+        pw = endu.get("power")
+        if pw:                                          # #2 per-site power source (PSR tower vs sunlit solar)
+            md.append(f"- Power: **{pw['kind'].replace('_', ' ')}** — {pw['availability']}; charge "
+                      f"{pw['charge_power_w']:.0f} W (effective {pw['effective_charge_w']:.0f} W @ duty "
+                      f"{pw['duty_frac']:.2f})" + (f"; cold-derated pack ×{pw['thermal_derate']:.2f}"
+                                                   if pw['thermal_derate'] < 1.0 else ""))
         ts = endu.get("timescale")
         if ts:                                          # body-correct operating timescale (Moon ≠ Mars ≠ ...)
             d = ts["solar_day_h"]

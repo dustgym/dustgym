@@ -563,6 +563,33 @@ def test_endurance_slope_slip_and_dem_reach():
     assert 0.0 < r["worst_cell_pack_frac"] < 1.0                           # crossing the tile costs < a full pack
 
 
+def test_power_regime_psr_tower_vs_sunlit_solar():
+    # #2 power model: a PSR (e.g. Haworth) has NO sun -> lander/tower power, available anytime, duty 1.0.
+    # A sunlit site recharges from solar, duty-limited to the body's daylight fraction (< 1).
+    m = _tiny_mission()
+    psr = MP.power_regime(m, kind="psr_tower")
+    assert psr["duty_frac"] == 1.0 and psr["effective_charge_w"] == psr["charge_power_w"]
+    assert "tower" in psr["availability"].lower() or "lander" in psr["availability"].lower()
+    sun = MP.power_regime(m, kind="sunlit_solar")
+    assert 0.0 < sun["duty_frac"] < 1.0                      # only the daylight fraction of the body-day
+    assert sun["effective_charge_w"] < sun["charge_power_w"]
+    with pytest.raises(ValueError):
+        MP.power_regime(m, kind="bogus")
+
+
+def test_thermal_derating_cold_cuts_usable_pack():
+    assert MP.thermal_derate(None) == 1.0 and MP.thermal_derate(25.0) == 1.0   # warm -> full pack
+    assert MP.thermal_derate(-35.0) < 1.0 and MP.thermal_derate(-200.0) >= 0.5  # cold derates, floored
+    m = _tiny_mission()
+    cold = MP.power_regime(m, kind="psr_tower", temp_c=-35.0)
+    assert cold["usable_pack_J"] < MP.BATTERY_J                # cold reduces usable capacity
+
+
+def test_endurance_carries_power_regime():
+    e = MP.endurance(_tiny_mission())                          # default = PSR tower (the Haworth demo site)
+    assert e["power"]["kind"] == "psr_tower" and e["power"]["duty_frac"] == 1.0
+
+
 def test_endurance_conops_reconciliation_drums_dominate():
     c = MP.endurance(_tiny_mission())["conops"]
     assert c["traverse_km"] == 70.0 and c["mission_days"] == 11.0          # SCHULER24 ConOps
