@@ -19,7 +19,7 @@ the terrain-matching reward cannot be gamed.
 | Layer | Specification | Implementation | Status |
 |---|---|---|---|
 | **Geometry** | height / slope / roughness / traversability; current vs target surface; earthwork volume | `column_state` heightmap, `slope_deg_map`, real LOLA Haworth DEM ingest; `mission_planner` and `structures.py` compute target minus current as cut and fill volumes | real |
-| **Material** | per-cell density, cohesion, friction, bearing, compaction | per-cell `density.rf32` and `state_label` (compaction state) are real fields; cohesion / friction / Bekker `k_phi` are still global constants in `constants.py`, not per-cell fields | partial (the main gap) |
+| **Material** | per-cell density, cohesion, friction, bearing, compaction | per-cell `density.rf32` and `state_label` are real fields; `material.py` now derives per-cell friction and cohesion from the density field (sourced spec ranges) plus the trafficability maps (cut difficulty, slip susceptibility). The Bekker `k_phi` inside the solver is still global | real (added 2026-06-04) |
 | **Physics** | slip, sinkage, traction, excavation force, power; the transition `S(t+1) = f(S, Action)` | the Tier-2 authority: load-bearing Bekker sinkage, the slip ladder, conserved cut / haul / dump, IPEx energy at lunar gravity. The transition is conserved and exact | real, exact |
 | **Task** | target height map; cut, fill, transport | `mission_planner`, `structures.py` (8 composite structures, volume-balanced), `terrain_target_env` reward `R = -||H_cur - H_target||` | real |
 | **Uncertainty** | terrain / material / localization confidence; per-cell `height_uncertainty[x,y]` | `autonomy.py` Belief and Kalman estimator (pose, energy, drum-fill sigma); per-cell terrain height sigma from the map channel (`obs_map_producer.grid_to_heightfield_uncertainty` + `dig_ready_mask`) | real (added 2026-06-04) |
@@ -96,10 +96,15 @@ Figures: `validation/map_channel/`.
 
 ## Status and next builds
 
-Built: Geometry, Physics, Task, and the perception and Uncertainty layers; the conserved transition; the
+Built: all five layers (Geometry, Material, Physics, Task, Uncertainty); the conserved transition; the
 physics file; the skill library and its composition; both perception tiers scored against truth.
+`material.py` derives per-cell friction and cohesion (plus cut-difficulty and slip-susceptibility maps)
+from the conserved density field across the sourced spec ranges.
 
-Next, in order: (1) spatially varying Material fields (promote the global Bekker constants to per-cell
-fields seeded from the DEM and density; the schema exists); (2) dense MVS to fill the ground-tier coverage
-(CUDA-gated today); (3) the learned perception model (JEPA or RSSM over the cheap headless rollouts) for
-active perception, the one genuinely learned component this architecture calls for.
+Next, in order: (1) thread per-cell Material INTO the sinkage/slip solver, so it changes the dynamics and
+not just the prediction (the solver still reads the global Bekker `k_phi`); (2) close the
+selection-to-render loop, so picking a map area in the browser crops a DEM window, renders it in Godot,
+and feeds the observed map back to the planner (the pieces exist but are not yet one pipeline); (3) dense
+MVS to fill the ground-tier coverage (CUDA-gated today); (4) the learned perception model (JEPA or RSSM
+over the cheap headless rollouts) for active perception, the one genuinely learned component this
+architecture calls for.

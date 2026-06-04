@@ -151,8 +151,24 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 | K9 | P2 | **Operational windows** — sun / thermal / comms windows coupled to the mission clock (drive/dig/charge gated by availability) | ⬜ clock exists; no window coupling |
 
 ### L. World model (cross-cutting, sample efficiency / planning)
-| L1 | P3 | Learned encoder (CNN/JEPA) on DEM/sensor | ⬜ lewm lineage |
-| L2 | P3 | Latent dynamics for imagination-planning (terrain/slip/energy) | ⬜ |
+
+**Full mapping in [`docs/world_model.md`](world_model.md)** (2026-06-04): the 5-layer world model for terrain
+*transformation* (the robot reshapes terrain, it does not just drive through it) mapped onto the repo, with
+the core design call. **Conserved physics for DYNAMICS** (exact, sub-ms, unhackable; model-based search
+already beats model-free RL and a learned model for planning, the M4 finding) **+ a thin LEARNED model only
+for PERCEPTION** (predict observations under the expensive render, for active "look before you dig"). NOT a
+monolithic learned latent world model. The five layers and their status:
+
+| Layer | Status |
+|---|---|
+| **Geometry** | ✅ `column_state` heightmap + slope + real LOLA DEM; planner cut/fill = target − current |
+| **Material** | ✅ `material.py` (2026-06-04): per-cell friction + cohesion from the conserved density field across sourced spec ranges, + cut-difficulty + slip-susceptibility maps; `test_material.py` (4); `validation/map_channel/material_layer.png`. ⬜ threading per-cell material INTO the solver (still global `k_phi`) |
+| **Physics** | ✅ the Tier-2 authority: Bekker sinkage + slip ladder + IPEx energy at lunar g; `S(t+1)=f(S,Action)` is conserved + exact (removed-volume/energy/slip computed, not predicted) |
+| **Task** | ✅ `mission_planner` + `structures.py` + `terrain_target_env` reward R=−‖H_cur−H_target‖ |
+| **Uncertainty** | ✅ `autonomy.py` Belief/Kalman (pose/energy/drum σ) + per-cell terrain σ + `dig_ready_mask` (2026-06-04) |
+
+| L1 | P3 | Learned encoder (CNN/JEPA) on DEM/sensor for the PERCEPTION branch (not dynamics) | ⬜ lewm lineage |
+| L2 | P3 | Latent dynamics for imagination-planning | ⬜ DEPRIORITIZED — the conserved model is exact + unhackable; learn perception, not dynamics |
 
 ### M. **3D application / visual program** (L8) — the full software with visuals
 | ID | P | Requirement | Status |
