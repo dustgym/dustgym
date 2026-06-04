@@ -474,6 +474,43 @@ def test_compare_with_weighted_objective_marks_pareto():
 
 
 # ---- I10 energy: exact gravity lift for uphill hauls -------------------------------------------
+def test_haul_energy_is_slip_adjusted_when_the_haul_climbs():
+    # #1 slip-loss: a cut->fill haul over sloped ground costs more than the flat 135 J/m (the wheel travels
+    # 1/(1-slip) per metre). Place the cut at a low cell and the fill at a high cell so the haul has slope.
+    import numpy as np
+    dem = MP.load_haworth_dem()
+    Z, cell = dem
+    win = Z[0:40, 0:40]
+    lo = np.unravel_index(int(np.argmin(win)), win.shape)
+    hi = np.unravel_index(int(np.argmax(win)), win.shape)
+    m = MP.mission_from_dict({"name": "h", "body": "moon", "charger": [0, 0], "orders": [
+        {"action": "cut", "kind": "cut", "x": lo[1] * cell, "y": lo[0] * cell, "footprint_m2": 40, "depth_m": 0.05},
+        {"action": "fill", "kind": "fill", "x": hi[1] * cell, "y": hi[0] * cell, "footprint_m2": 16, "depth_m": 0.05}]})
+    trips, _, _, _ = MP._build_trips(m, dem, (0.0, 0.0), 25.0)
+    cf = next(t for t in trips if t["kind"] == "cutfill")
+    assert cf["haul_e"] > cf["haul_m"] * MP.DRIVE_J_PER_M     # slip raises the haul energy above flat
+
+
+def test_no_dem_haul_energy_is_flat_135():
+    m = MP.mission_from_dict({"name": "f", "body": "moon", "charger": [0, 0], "orders": [
+        {"action": "cut", "kind": "cut", "x": 40, "y": 30, "footprint_m2": 36, "depth_m": 0.04},
+        {"action": "fill", "kind": "fill", "x": 44, "y": 44, "footprint_m2": 14, "depth_m": 0.10}]})
+    trips, _, _, _ = MP._build_trips(m, None, (0.0, 0.0), 25.0)          # no DEM -> no slope -> flat
+    cf = next(t for t in trips if t["kind"] == "cutfill")
+    assert math.isclose(cf["haul_e"], cf["haul_m"] * MP.DRIVE_J_PER_M)
+
+
+def test_dem_plan_energy_at_least_the_flat_plan():
+    # integration: the slip+lift+routing-aware DEM plan never costs less than the flat plan
+    m = MP.mission_from_dict({"name": "i", "body": "moon", "charger": [0, 0], "orders": [
+        {"action": "Borrow pit", "kind": "cut", "x": -120, "y": -90, "footprint_m2": 60, "depth_m": 0.08},
+        {"action": "Landing pad", "kind": "fill", "x": 140, "y": 110, "footprint_m2": 40, "depth_m": 0.10}]})
+    dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
+    _, _, _, _, t_flat = MP.plan_and_simulate(m)
+    _, _, _, _, t_dem = MP.plan_and_simulate(m, dem=dem, dem_origin=o)
+    assert t_dem["energy_J"] >= t_flat["energy_J"] - 1e-6
+
+
 def test_uphill_haul_adds_exact_gravity_lift_energy():
     import numpy as np
     dem = MP.load_haworth_dem()

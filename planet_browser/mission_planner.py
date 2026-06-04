@@ -241,7 +241,8 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
         if co is None:
             trips.append(dict(kind="import", site=(fo.x, fo.y), label=f"Import fill: {fo.action}",
                               mass=mass, dig_e=mass*DIG_J_PER_KG, dig_t=mass/DIG_RATE_KG_S,
-                              haul_m=0.0, lift_e=0.0, dest=(fo.x, fo.y), actions=frozenset({fo.action})))
+                              haul_m=0.0, haul_e=0.0, lift_e=0.0, dest=(fo.x, fo.y),
+                              actions=frozenset({fo.action})))
         else:
             loads = max(1, math.ceil(mass / DRUM_KG))
             leg = base = dist                           # one-way cut<->fill distance (straight line)
@@ -253,9 +254,13 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
             straight_haul_m += base; routed_haul_m += leg
             haul_m = 2 * leg * loads                    # shuttle: cut<->fill, one round trip per drum load
             dh = haul_elevation_gain_m(dem, dem_origin, (co.x, co.y), (fo.x, fo.y))
+            # #1 slip-loss: the wheel travels 1/(1-slip) per metre of ground on a slope, so the haul costs
+            # more than flat 135 J/m. slip from the cut<->fill slope; no DEM/flat -> slip 0 -> haul_e = flat.
+            slope_haul = math.degrees(math.atan2(abs(dh), leg)) if leg > 1e-9 else 0.0
+            haul_e = haul_m * DRIVE_J_PER_M / (1.0 - slip_alpha_to_slip(slope_haul))
             trips.append(dict(kind="cutfill", site=(co.x, co.y), label=f"{co.action} → {fo.action}",
                               mass=mass, dig_e=mass*DIG_J_PER_KG, dig_t=mass/DIG_RATE_KG_S,
-                              haul_m=haul_m, lift_e=mass * g * max(0.0, dh), dest=(fo.x, fo.y),
+                              haul_m=haul_m, haul_e=haul_e, lift_e=mass * g * max(0.0, dh), dest=(fo.x, fo.y),
                               actions=frozenset({co.action, fo.action})))
     for o in sinters:
         m = o.mass_kg(rho)
@@ -305,11 +310,13 @@ def _simulate(mission, trips):
                        x0=pos[0], y0=pos[1], x1=pos[0], y1=pos[1]))  # parked at charger
         batt = BATTERY_J; t += dur; charges += 1
 
-    def spend(kind, total_e, total_dur, work_pos, mass=0.0, speed=0.0, haul_m=0.0, lift_e=0.0):
-        # draw total_e at work_pos, splitting across recharges; haul_m adds drive energy/time; lift_e is
-        # the gravity work hauling regolith uphill (extra energy, no extra duration -- same drive).
+    def spend(kind, total_e, total_dur, work_pos, mass=0.0, speed=0.0, haul_m=0.0, haul_e=None, lift_e=0.0):
+        # draw total_e at work_pos, splitting across recharges; haul_e is the haul drive ENERGY (#1
+        # slip-adjusted; default flat 135 J/m), haul_m the haul distance (TIME); lift_e the uphill gravity work.
         nonlocal batt, t, cum_mass, cum_energy
-        e = total_e + haul_m * DRIVE_J_PER_M + lift_e
+        if haul_e is None:
+            haul_e = haul_m * DRIVE_J_PER_M
+        e = total_e + haul_e + lift_e
         dur = total_dur + (haul_m / DRIVE_SPEED_MS)
         spent = 0.0
         while spent < e - 1e-6:
@@ -330,7 +337,7 @@ def _simulate(mission, trips):
             spend("sinter", tr["sinter_e"], tr["sinter_t"], tr["site"], mass=0.0)
         else:
             spend("dig", tr["dig_e"], tr["dig_t"], tr["site"], mass=tr["mass"],
-                  haul_m=tr.get("haul_m", 0.0), lift_e=tr.get("lift_e", 0.0))
+                  haul_m=tr.get("haul_m", 0.0), haul_e=tr.get("haul_e"), lift_e=tr.get("lift_e", 0.0))
         per_trip.append(dict(trip=tr, t_start=t0, t_end=t))
     drive(mission.charger)
     distance_m = sum((p["t1"]-p["t0"])*p["speed"] for p in tl)
@@ -1095,9 +1102,9 @@ def report(mission, trips, flows, per_trip, tl, totals, out_pdf, out_md, endu=No
                        colWidths=[0.04, 0.36, 0.10, 0.14, 0.10, 0.12, 0.12])
         tab.auto_set_font_size(False); tab.set_fontsize(8); tab.scale(1, 1.5)
         for c in range(len(rows[0])): tab[0, c].set_facecolor("#1c3a6e"); tab[0, c].set_text_props(color="w")
-        bal = (f"MATERIAL BALANCE   cut {totals['cut_kg']/1000:.1f} t  →  fill {totals['fill_kg']/1000:.1f} t"
-               f"   surplus(spoil) {totals['surplus_kg']/1000:.1f} t   deficit(import) {totals['deficit_kg']/1000:.1f} t"
-               f"   sinter {totals['sinter_kg']/1000:.2f} t")
+        bal = (f"MATERIAL BALANCE\n  cut {totals['cut_kg']/1000:.1f} t → fill {totals['fill_kg']/1000:.1f} t"
+               f"  ·  surplus(spoil) {totals['surplus_kg']/1000:.1f} t  ·  deficit(import) {totals['deficit_kg']/1000:.1f} t"
+               f"  ·  sinter {totals['sinter_kg']/1000:.2f} t")
         tot = (f"TOTALS   project {_dur(totals['time_s'])} ({th:.0f} h)   moved {totals['mass_kg']/1000:.1f} t"
                f" ({totals['mass_kg']/DRUM_KG:.0f} drum loads)\n"
                f"         energy {totals['energy_J']/1e6:.1f} MJ ({totals['energy_J']/BATTERY_J:.1f} charges,"
@@ -1112,22 +1119,22 @@ def report(mission, trips, flows, per_trip, tl, totals, out_pdf, out_md, endu=No
             ts = endu.get("timescale")
             if ts:
                 d = ts["solar_day_h"]; scale = f"{d/24:.0f} Earth-days" if d >= 48 else f"{d:.0f} h"
-                tot += f"   |  1 {ts['day_label']} ~ {scale} ({ts['daylight_h']:.0f} h light)"
+                tot += f"\n         1 {ts['day_label']} ~ {scale} ({ts['daylight_h']:.0f} h light)"
             c = endu.get("conops")
             if c:
                 tot += (f"\n         ConOps: {c['traverse_km']:.0f} km + {c['regolith_t'][0]:.0f}-{c['regolith_t'][1]:.0f} t / "
                         f"{c['mission_days']:.0f} d -> drive ~{c['drive_packs']:.1f} packs vs dig "
                         f"~{c['dig_packs'][0]:.0f}-{c['dig_packs'][1]:.0f} packs: drums dominate")
-        fig.text(0.04, 0.38, bal, fontsize=9.5, family="monospace",
+        fig.text(0.04, 0.40, bal, fontsize=8, family="monospace", wrap=True,
                  bbox=dict(boxstyle="round", fc="#fff4e6", ec="#cc8a33"))
-        fig.text(0.04, 0.28, tot, fontsize=10, family="monospace",
+        fig.text(0.04, 0.26, tot, fontsize=8, family="monospace", wrap=True,
                  bbox=dict(boxstyle="round", fc="#eef3ff", ec="#1c3a6e"))
         fig.text(0.04, 0.07,
                  "Cut-fill balanced (excavated material routed to nearest fill; surplus→spoil, deficit→import). "
                  "Grounded: per-body density/gravity (bodies.json); IPEx — 0.30 m/s, 42 kg/hr dig, 4151 J/kg, "
-                 "135 J/m, 4.79 MJ battery,\n30 kg/drum; SINTER 0.92 MJ/kg (~220x dig — the energy bottleneck). "
-                 "Recharge 700 W + sinter-head 1000 W are [CALIB]. Sequence: nearest-neighbour TSP, battery-aware "
-                 "mid-task recharge.", fontsize=7.5, color="#445")
+                 "135 J/m (slip-adjusted on a DEM), 4.79 MJ battery, 30 kg/drum; SINTER 0.92 MJ/kg [CALIB] "
+                 "(~220× dig). Recharge 700 W + sinter-head 1000 W are [CALIB]. Pluggable sequencer × objective; "
+                 "battery-aware mid-task recharge.", fontsize=7, color="#445", wrap=True)
         pdf.savefig(fig); plt.close(fig)
 
         # PAGE 2 — battery + speed

@@ -1,9 +1,23 @@
 # planet_browser — lunar build planner front-end + mission-control report
 
-The product face of `foss_ipex`: load a body (Moon or Mars), queue build orders, and the planner
-optimizes the sequence under real physics + battery + time and returns a 2-3 page mission-control
-report. This is the SimCity-style planning loop, not a thesis. Standalone (not in the `roversim`
-git repo); imports the conserved Tier-2 core from `../roversim/terrain_authority`.
+The product face of `foss_ipex`: load a body (Moon / Mars / …), queue build orders, and the planner
+sequences + optimizes them under real terramechanics + battery + time, validates the plan on the
+conserved authority, and returns a 2-3 page mission-control report. This is the SimCity-style planning
+loop, not a thesis. Standalone; imports the conserved Tier-2 core from `../roversim/terrain_authority`.
+
+**What the planner does** (all grounded, no synthetic data):
+- **Terrain-aware + authority-validated** — sites are slope-gated on the real LOLA DEM; the plan is
+  executed on the conserved `column_state` for mass-exact feasibility (drift 0).
+- **Pluggable algorithm × objective** — `nearest / greedy / two_opt / or_opt / lk / brute / held_karp`
+  + an **`auto`** dispatcher (brute ≤7 trips, Held-Karp-seed + LK-polish 8–16, LK above), optimizing
+  any of `time / energy / power / distance / charges / mass` or a weighted multi-objective; `/compare`
+  ranks them with a Pareto frontier.
+- **Precedence (I9)** — order-level "before → after" constraints honored by every algorithm (SOP-aware).
+- **Hazard routing + slip energy** — hauls route around craters on a slope costmap (Dijkstra), drive/haul
+  cost is slip-adjusted (`135/(1-slip)`) with exact `m·g·Δh` gravity-lift; **endurance/range** readout
+  (per-sortie km, DEM reachability, body-correct day/night timescale).
+- **Closed-loop autonomy (P12)** — `autonomy.py`: an AutoNav-style belief estimator (Kalman, uncertainty)
+  + a plan→execute→estimate→**replan** controller that manages the battery from the estimate.
 
 ## Run
 
@@ -33,7 +47,9 @@ python mission_planner.py            # writes reports/<date>_mission_plan.pdf + 
 |---|---|
 | `index.html` | CesiumJS browser (NASA Solar System Treks tiles) + build-order queue + live regolith estimate. |
 | `server.py` | Stdlib `http.server` (no framework). Serves the front-end + `bodies.json` + `/reports/`; `POST /plan` runs the planner and returns the report URL. |
-| `mission_planner.py` | Cut-fill balancing → nearest-neighbour route order → battery-aware mid-task recharge → 3-page PDF + markdown report. Grounded in `ipex_specs` + `bodies.json`. |
+| `mission_planner.py` | Cut-fill balancing → **pluggable sequencer × objective** (`optimize_sequence`: nearest/greedy/2-opt/Or-opt/LK/brute/Held-Karp/auto; `compare_algorithms` + Pareto) → terrain-aware + authority-validated (`validate_plan`) → slip-adjusted hazard routing → endurance/range → battery-aware mid-task recharge → 3-page PDF + markdown report. Grounded in `ipex_specs` + `bodies.json`. |
+| `autonomy.py` | Closed-loop autonomy (P12, the AutoNav model): `Belief` + Kalman `estimator` (`predict`/`update_*`), `execute_leg` (slip-adjusted true telemetry), `run_closed_loop` (plan→execute→estimate→replan + reserve-aware recharge). Runs in the conserved-model sim. |
+| `dem_import.py` | Reproject a non-polar (cylindrical lat/lon) DEM product to the local metric grid via `pyproj` (P4); real LOLA `ldem_4` fixture in `fixtures/`. |
 | `gen_bodies_json.py` | Generates `bodies.json` (per-body terramechanics + an `_ipex` energy block) from the `.py` source of truth (`terrain_authority/bodies.py` + `ipex_specs.py` + `constants.py`). Re-run after editing those. |
 | `bodies.json` | Generated, read-only mirror (the browser can't import `.py`). |
 | `test_mission_planner.py` | The P1 round-trip tests: the queue→Mission adapter, a queued mission writing a real PDF, the live `/plan` endpoint, and the sinter gate. |
@@ -50,10 +66,15 @@ python mission_planner.py            # writes reports/<date>_mission_plan.pdf + 
   ] }
 ```
 
-Returns `{ "ok": true, "pdf": "/reports/...pdf", "md": "...", "totals": {...} }`, or `400` with
-`{ "ok": false, "error": "..." }` for an unknown body, a malformed order, or a sinter order (sinter
-is a real conserved primitive but is **gated off** until its `[CALIB]` energy/density are grounded;
-see `terrain_authority.constants.SINTER_ENABLED`).
+Optional fields: `"algorithm"` (`auto` default · `nearest/greedy/two_opt/or_opt/lk/brute/held_karp`),
+`"objective"` (`time` default · `energy/power/distance/charges/mass` · or a weighted `"time:0.5,energy:0.5"`),
+and `"precedence": [["Grade road","Build berm"], …]` (before→after by order action).
+
+Returns `{ "ok": true, "pdf": "/reports/...pdf", "md": "...", "totals": {...}, "validation": {...},
+"timeline": {...}, "endurance": {...} }`, or `400` for an unknown body / malformed order / sinter order
+(sinter is a real conserved primitive but **gated off** until its `[CALIB]` energy/density are grounded —
+`terrain_authority.constants.SINTER_ENABLED`). `POST /compare` runs every algorithm and returns them
+ranked by the objective with a Pareto flag.
 
 Coordinates are a **local site frame in meters** (charger at `0,0`); the globe pick selects the site,
 the queue places orders around it. There is no fabricated lat/lon to meter projection.
