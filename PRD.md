@@ -268,11 +268,10 @@ channel) / P7 (Chrono) on the science side; P3 (sinter un-gate) when its numbers
 - **Adds:** precedence graph + acceptance scorer + confidence bands.
 - **Tests:** a precedence violation is reordered/flagged; a built structure passes/fails its acceptance metric; the report carries ± bands.
 
-**P10 — Realistic polar power + operational windows [P1].**
-- **Deliverable:** PSR-correct power (no sun at Haworth → lander/tower budget; IPEx thermal derating FIX-5; day/night) and sun/thermal/comms windows gating drive/dig/charge (K8/K9).
-- **Files:** `ipex_specs.py` (thermal derating), `mission_planner.py` (power source + windows), `bodies.py` (per-site illumination).
-- **Adds:** a real power/illumination model + window gating.
-- **Tests:** a PSR site uses the tower budget (not solar); a charge blocked outside a window; derated capacity at the qual temps.
+**P10 — Realistic polar power + operational windows [P1]. 🟡 POWER-SOURCE MODEL DONE (TDD) 2026-06-04.**
+- **Deliverable:** PSR-correct power ✅ (no sun at Haworth → lander/tower budget; sunlit → duty-limited solar; thermal derating). Full mission-clock window-gating of drive/dig/charge (K9) ⬜.
+- **Files:** ✅ `mission_planner.py` — `power_regime(mission, kind=, charge_power_w=, temp_c=)` (PSR `psr_tower` = anytime/duty 1.0 vs `sunlit_solar` = duty `daylight_h/solar_day_h`, effective_charge_w), `thermal_derate(temp_c)` (cold Li-ion fraction, FIX-5 qual context); wired into `endurance().power` + the report "Power:" line. Fixes the flagged-wrong "flat 700 W solar at a PSR" (the recharge model IS the tower — correct for a PSR; calling it solar was the error). **Remaining:** simulate the duty-limited solar recharge against the mission clock (night-parking), per-site illumination (K9).
+- **Tests:** ✅ 3 — PSR tower duty 1.0/anytime vs sunlit-solar duty<1/daylight-only; thermal derate cold<1 floored 0.5; endurance carries the power regime. ⬜ window-gated charge-blocked-outside-window.
 
 **P11 — Production hardening [P2].**
 - **Deliverable:** mission persistence (M10), a geodetic site frame from the globe pick (M11), a production ASGI server + auth (N7), and API CI/observability (N8).
