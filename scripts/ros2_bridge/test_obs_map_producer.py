@@ -100,6 +100,40 @@ def test_producer_recovers_ground_and_coverage_grows_on_real_render():
     assert np.isfinite(sc["map_rmse_m"]) and 0.0 <= sc["map_cell_pass_frac"] <= 1.0
 
 
+# ----------------------------------------------------------- Uncertainty layer (per-cell height sigma)
+def test_uncertainty_grid_pure():
+    grid = {"width": 4, "height": 4, "cell_m": 1.0, "x0": 0.0, "y0": 0.0}
+    # cell (1,2): three identical heights -> zero scatter -> sigma 0; cell (0,0): one point -> prior.
+    pts = np.array([[2.5, 1.0, 1.5], [2.5, 1.0, 1.5], [2.5, 1.0, 1.5], [0.5, 5.0, 0.5]])
+    obs, sigma, count, mask = omp.grid_to_heightfield_uncertainty(pts, grid)
+    assert count[1, 2] == 3 and count[0, 0] == 1
+    assert sigma[1, 2] == 0.0                          # zero scatter -> zero standard error
+    assert sigma[0, 0] == omp.PRIOR_SIGMA_M            # single view -> prior floor
+    assert np.isinf(sigma[3, 3])                       # unobserved cell
+    assert int(mask.sum()) == 2
+
+
+def test_dig_ready_subset_of_observed():
+    grid = {"width": 3, "height": 3, "cell_m": 1.0, "x0": 0.0, "y0": 0.0}
+    pts = np.array([[0.5, 0.0, 0.5]] * 4 + [[2.5, 0.0, 2.5]])  # 4-view cell + 1-view cell
+    _, sigma, _, mask = omp.grid_to_heightfield_uncertainty(pts, grid)
+    ready = omp.dig_ready_mask(sigma, mask, tol_m=0.10)
+    assert int(ready.sum()) <= int(mask.sum())
+    assert ready[0, 0] and not ready[2, 2]             # confident cell ready; single-view (prior 0.30) not
+
+
+def test_uncertainty_falls_with_more_views_on_real_render():
+    _skip_if_no_drive()
+    grid = omp.grid_from_metadata(os.path.join(_SCENE, "metadata.json"))
+    st = _stations()
+    _, _, c1, _ = omp.produce_uncertainty_map(st[:1], grid)
+    _, sN, cN, mN = omp.produce_uncertainty_map(st, grid)
+    assert int(cN.sum()) > int(c1.sum())                           # more driving -> more observations
+    multi = cN >= 2
+    assert multi.any() and bool(np.isfinite(sN[multi]).all())      # multi-view cells have finite sigma
+    assert float(np.median(sN[multi])) < omp.PRIOR_SIGMA_M         # and lower uncertainty than the prior
+
+
 if __name__ == "__main__":                                         # pure-python runner, no pytest needed
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
