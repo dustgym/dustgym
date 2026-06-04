@@ -15,10 +15,21 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import mission_planner as MP
 import structures as ST
+
+# plan_render_pipeline lives in roversim/scripts (it drives the Godot sidecar there); MP already put
+# roversim/ on the path. Importing it is optional -- /render degrades to a 503 if the binary is absent.
+sys.path.insert(0, os.path.join(MP._ROVERSIM, "scripts"))
+try:
+    import plan_render_pipeline as PRP
+except Exception:   # noqa: BLE001 -- /render just becomes unavailable
+    PRP = None
+_HAWORTH = os.path.join(MP._ROVERSIM, "samples", "lunar_dem", "haworth_10km_5m")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPORTS = os.path.join(HERE, "reports")
@@ -49,7 +60,7 @@ def _moon_dem():
 
 _CTYPE = {".html": "text/html; charset=utf-8", ".json": "application/json",
           ".pdf": "application/pdf", ".md": "text/markdown; charset=utf-8",
-          ".js": "text/javascript", ".css": "text/css"}
+          ".js": "text/javascript", ".css": "text/css", ".png": "image/png"}
 
 
 def _plan_stem(payload):
@@ -99,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         route = self.path.split("?", 1)[0]
-        if route not in ("/plan", "/sense", "/structure", "/compare"):
+        if route not in ("/plan", "/sense", "/structure", "/compare", "/render"):
             return self._send_json(404, {"ok": False, "error": f"no route {route}"})
         try:
             n = int(self.headers.get("Content-Length", 0))
@@ -112,6 +123,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._structure(payload)
         if route == "/compare":
             return self._compare(payload)
+        if route == "/render":
+            return self._render(payload)
         algorithm = payload.get("algorithm", "nearest")   # pluggable sequencer + objective (user-selected)
         objective = payload.get("objective", "time")
         try:
@@ -135,6 +148,30 @@ class Handler(BaseHTTPRequestHandler):
             "validation": validation,
             "timeline": timeline,
             "endurance": endurance,
+        })
+
+    def _render(self, payload):
+        """Crop a Haworth window at the picked (u,v), plan a flatten, render BEFORE/AFTER in Godot, and
+        return the figure URL + earthwork volumes. Slow (two Godot renders); 503 if the binary is absent."""
+        if PRP is None:
+            return self._send_json(503, {"ok": False, "error": "render pipeline unavailable (Godot binary absent)"})
+        try:
+            u = float(payload.get("u", 0.5))
+            v = float(payload.get("v", 0.5))
+            pad_frac = float(payload.get("pad_frac", 0.5))
+        except (TypeError, ValueError) as e:
+            return self._send_json(400, {"ok": False, "error": f"bad params: {e}"})
+        stem = "render_" + hashlib.sha1(f"{u:.4f}_{v:.4f}_{pad_frac:.2f}".encode()).hexdigest()[:10]
+        try:
+            r = PRP.render_map_area(_HAWORTH, u, v, os.path.join(REPORTS, stem), pad_frac=pad_frac)
+        except Exception as e:                             # noqa: BLE001 -- render failure -> honest 500
+            return self._send_json(500, {"ok": False, "error": f"render failed: {e}"})
+        fig_name = stem + ".png"
+        shutil.copyfile(r["figure"], os.path.join(REPORTS, fig_name))
+        return self._send_json(200, {
+            "ok": True, "figure": "/reports/" + fig_name,
+            "cut_vol_m3": round(r["cut_vol_m3"], 2), "fill_vol_m3": round(r["fill_vol_m3"], 2),
+            "cut_kg": round(r["cut_kg"]), "extent_m": round(r["extent_m"], 1), "cell_m": round(r["cell_m"], 2),
         })
 
     def _compare(self, payload):
