@@ -19,10 +19,12 @@ Slip magnitudes are [UNKNOWN]/[CALIB] (DEFERRED_FIXES.md); the loop's STRUCTURE
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 
 from . import constants as K
+from . import material as materialmod
 from . import rover
 from . import slip as slipmod
 from . import terramechanics as tm
@@ -49,6 +51,7 @@ def drive_step(cs: ColumnState, rc: tuple[float, float], yaw: float,
                params: "tm.TerramechanicsParams | None" = None,
                payload_kg: float = 0.0, wheel_width_m: float = 0.18,
                contact_len_m: float = 0.10, g: float = K.g,
+               material: bool = False,
                clasts: "list[dict] | None" = None) -> tuple[tuple[float, float], float, dict]:
     """One closed-loop step: command twist in, (new_rc, new_yaw, telemetry) out.
 
@@ -60,6 +63,11 @@ def drive_step(cs: ColumnState, rc: tuple[float, float], yaw: float,
     omega_cmd, v_achieved, slip, entrapped, slope_rad, sinkage_m.
     """
     p = params or tm.TerramechanicsParams.from_constants()
+    if material:                                          # Material layer: per-cell strength from local density
+        row = min(max(int(round(rc[0])), 0), cs.density.shape[0] - 1)
+        col = min(max(int(round(rc[1])), 0), cs.density.shape[1] - 1)
+        phi_r, coh = materialmod.cell_strength(float(cs.density[row, col]))
+        p = dataclasses.replace(p, cohesion=coh, phi_rad=phi_r)   # loose cell -> less traction -> more slip
     weight_n = (K.ROVER_MASS_DRY_KG + max(0.0, payload_kg)) * float(g)
     h = cs.derive_height()
     cf = rover.conform_pose(h, rc, yaw, cell_m=cs.cell_m, payload_kg=payload_kg, clasts=clasts, g=g)
