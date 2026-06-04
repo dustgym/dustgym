@@ -33,6 +33,23 @@ The two perception tiers are complementary: onboard rover stereo is cheap and re
 but noisy; ground COLMAP is offline and high-accuracy. The simulator feeds and scores both against
 the same conserved truth.
 
+## Ground tier: COLMAP scored vs truth (2026-06-04)
+
+`scripts/colmap/` runs the ground tier with pycolmap (no Docker): `render_corpus.py` renders a
+known-pose multi-view corpus of the static scene, `colmap_map_channel.py` runs incremental SfM and
+Umeyama-aligns the recovered camera centers to the known render poses (alignment RMSE 6 mm) to put
+the sparse point cloud in the world frame, then `score_map` compares it to the conserved truth:
+**18/18 images registered, 0.48 px reprojection, map RMSE 0.04 m, 97 percent cell-pass** (sparse SfM,
+about 3 percent coverage; dense MVS would fill it). Compared to the onboard tier's 0.32 m, the ground
+tier is roughly an order of magnitude more accurate, as expected.
+
+- **colmap_hapke_vs_lambert.png** - the BRDF A/B (`make_colmap_ab.py`). The physically-correct Hapke
+  BRDF gives COLMAP about 33 percent fewer 3-D points and 30 percent less coverage than the idealized
+  Lambert baseline, at higher reprojection error. The non-Lambertian regolith reflectance costs
+  multi-view correspondences, exactly as on real lunar imagery; only the simulator has the ground
+  truth to quantify it. Regenerate with `make_colmap_ab.py --hapke <corpus> --lambert <corpus>`.
+- **colmap_ab_metrics.json** - the per-BRDF metrics behind the figure.
+
 ## Regenerate
 
 ```
