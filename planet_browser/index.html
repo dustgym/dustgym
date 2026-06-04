@@ -491,7 +491,9 @@ qel("qplan").onclick = async () => {
       ? ` · autonomy ${au.completed ? "✓" : "⚠"} ${au.recharges}rch/${au.replans}rpl, SoC ${(au.final_soc * 100).toFixed(0)}%, slip ${au.max_slip}` : "";
     const pc = j.perception || {};
     const ptag = pc.pose_sigma_m != null
-      ? ` · est ±${pc.pose_sigma_m} m pose, drum ±${pc.drum_fill_uncertainty_pct}%` : "";
+      ? ` · est ±${pc.pose_sigma_m} m pose (${pc.map_fixes} map fixes`
+        + (pc.observe_more_before_dig ? `, ${pc.observe_more_before_dig} observe-more` : "")
+        + `), drum ±${pc.drum_fill_uncertainty_pct}%` : "";
     setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
          + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${vtag}${autag}${ptag}`);
     LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
