@@ -18,7 +18,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from terrain_authority.active_perception_env import ActivePerceptionEnv, greedy_action  # noqa: E402
+from terrain_authority.active_perception_env import (  # noqa: E402
+    ActivePerceptionEnv, beam_action, greedy_action)
 
 
 def rollout(policy, *, seed=3, grid=24, charges=0.05, steps=160):
@@ -27,7 +28,12 @@ def rollout(policy, *, seed=3, grid=24, charges=0.05, steps=160):
     rng = np.random.default_rng(seed)
     spent, sig = [0.0], [float(env.sigma.mean())]
     for _ in range(steps):
-        a = greedy_action(env) if policy == "greedy" else int(rng.integers(4))
+        if policy == "greedy":
+            a = greedy_action(env)
+        elif policy == "beam":
+            a = beam_action(env, lookahead=5, beam_width=8)
+        else:
+            a = int(rng.integers(4))
         r = env.step(a)
         spent.append(env.energy_budget - env.energy)
         sig.append(r[-1]["sigma_mean"])
@@ -42,14 +48,16 @@ def main():
     args = ap.parse_args()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     g_e, g_s, g_env = rollout("greedy")
+    b_e, b_s, _ = rollout("beam")
     r_e, r_s, _ = rollout("random")
 
     fig, ax = plt.subplots(1, 2, figsize=(11, 4.2))
-    ax[0].plot(g_e / 1e3, g_s, "o-", ms=3, color="C2", label="greedy next-best-view")
+    ax[0].plot(g_e / 1e3, g_s, "o-", ms=3, color="C2", label="greedy (1-step)")
+    ax[0].plot(b_e / 1e3, b_s, "^--", ms=3, color="C0", label="beam (5-step lookahead)")
     ax[0].plot(r_e / 1e3, r_s, "s-", ms=3, color="C3", label="random")
     ax[0].set_xlabel("energy spent driving [kJ]")
     ax[0].set_ylabel("mean per-cell uncertainty σ [m]")
-    ax[0].set_title("Map uncertainty falls faster per joule\nunder active perception")
+    ax[0].set_title("Active perception is submodular:\ngreedy ≈ beam, both crush random")
     ax[0].legend()
     ax[0].grid(alpha=0.3)
     im = ax[1].imshow(g_env.sigma, cmap="magma_r", vmin=0.0)
