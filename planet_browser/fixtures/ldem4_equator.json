@@ -1,0 +1,13 @@
+{
+ "source": "LOLA LDEM ldem_4 (PDS lrolol_1xxx, simple-cylindrical 4 px/deg, R=1737400 m sphere)",
+ "provenance": "real LOLA DN subsampled to a tiny equatorial fixture; height_m = DN*0.5",
+ "rows": 80,
+ "cols": 80,
+ "scaling_m_per_dn": 0.5,
+ "map_res_ppd": 4.0,
+ "lat_top_deg": 19.875,
+ "lat_bottom_deg": 0.125,
+ "lon_left_deg": 0.125,
+ "lon_right_deg": 19.875,
+ "radius_m": 1737400.0
+}

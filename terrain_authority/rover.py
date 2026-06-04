@@ -189,6 +189,14 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
 
     # Stamp each wheel's rut independently (its own disc sweep), exactly as wheel_pass
     # does for a single track. Density-only -> mass conserved.
+    # Snapshot the SPOIL mask ONCE before any wheel stamps, and accumulate the union of all
+    # four wheels' footprints. The state relabel is applied AFTER the loop against this pre-pass
+    # snapshot — otherwise an earlier wheel's SPOIL->COMPACTED_BERM is seen as "not SPOIL" by a
+    # later OVERLAPPING wheel and clobbered back to TREAD (front/rear wheels share a row line on
+    # a straight crest sweep), yielding zero standing berm. Density is still edited per wheel
+    # (monotone, capped — order-independent), so a cell under two wheels compacts twice.
+    spoil0 = cs.state_label == StateLabel.SPOIL
+    any_touched = np.zeros((cs.height, cs.width), dtype=bool)
     for key in polylines:
         touched = np.zeros((cs.height, cs.width), dtype=bool)
         for (r, c) in polylines[key]:
@@ -207,10 +215,13 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
             cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + f), K.RHO_DEEP)
         else:
             cs.density[touched] = np.minimum(cs.density[touched] * (1.0 + compaction), K.RHO_DEEP)
-        was_spoil = touched & (cs.state_label == StateLabel.SPOIL)
-        cs.state_label[touched & ~was_spoil] = StateLabel.TREAD
-        cs.state_label[was_spoil] = StateLabel.COMPACTED_BERM
-        cs.disturbance[touched] = np.clip(cs.disturbance[touched] + 0.35, 0.0, 1.0)
+        any_touched |= touched
+
+    if any_touched.any():
+        was_spoil = any_touched & spoil0
+        cs.state_label[any_touched & ~was_spoil] = StateLabel.TREAD   # fresh rut over non-spoil
+        cs.state_label[was_spoil] = StateLabel.COMPACTED_BERM         # driving over spoil firms it
+        cs.disturbance[any_touched] = np.clip(cs.disturbance[any_touched] + 0.35, 0.0, 1.0)
 
     return polylines
 
@@ -330,7 +341,8 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
                  min_grad_cells: float = 2.5,
                  gauge_m: float = WHEEL_GAUGE_M, wheelbase_m: float = WHEEL_BASE_M,
                  payload_kg: float = 0.0,
-                 rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG) -> dict:
+                 rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG,
+                 g: float = K.g) -> dict:
     """Kinematic rest pose of the 4-wheel rover on the terrain at one spiral pose.
 
     TWO terms, least-squares fit to a plane y = a*x + b*z + c in GODOT WORLD axes
@@ -405,7 +417,7 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
     # cos(tilt) (flat -> full weight; steeper -> less normal load -> the slip driver,
     # Phase 2). Equal split; CG-based fore/aft transfer is a refinement (CG height not
     # in the public TRL-5 overview). Feeds four_wheel_pass(physical=True, loads=...).
-    total_weight_n = (rover_mass_dry_kg + max(0.0, payload_kg)) * K.g
+    total_weight_n = (rover_mass_dry_kg + max(0.0, payload_kg)) * float(g)
     normal_total_n = total_weight_n * float(nrm[1])
     per_wheel_n = normal_total_n / 4.0
     return {

@@ -1,0 +1,65 @@
+{
+  "stages": [
+    {
+      "stage": "open_window",
+      "total_mass": 62400.000000000015,
+      "inventory_kg": 0.0,
+      "residual_kg": 0.0,
+      "rel": 0.0
+    },
+    {
+      "stage": "dig_pad",
+      "total_mass": 62400.00000000002,
+      "inventory_kg": 2918.392364411087,
+      "residual_kg": 7.275957614183426e-12,
+      "rel": 1.1660188484268308e-16
+    },
+    {
+      "stage": "haul",
+      "total_mass": 62400.00000000002,
+      "inventory_kg": 2918.392364411087,
+      "residual_kg": 7.275957614183426e-12,
+      "rel": 1.1660188484268308e-16
+    },
+    {
+      "stage": "dump_berm",
+      "total_mass": 62400.000000000015,
+      "inventory_kg": 0.0,
+      "residual_kg": 0.0,
+      "rel": 0.0
+    },
+    {
+      "stage": "relax_berm",
+      "total_mass": 62400.000000000015,
+      "inventory_kg": 0.0,
+      "residual_kg": 0.0,
+      "rel": 0.0
+    },
+    {
+      "stage": "compact_berm",
+      "total_mass": 62400.000000000015,
+      "inventory_kg": 0.0,
+      "residual_kg": 0.0,
+      "rel": 0.0
+    }
+  ],
+  "worst_rel_residual": 1.1660188484268308e-16,
+  "conservation_pass": true,
+  "peak_inventory_kg": 2918.392364411087,
+  "over_payload": true,
+  "window": {
+    "base_rc": [
+      1101,
+      1101
+    ],
+    "shape": [
+      400,
+      400
+    ],
+    "cell_m": 0.05,
+    "world_origin_m": [
+      -47402.5,
+      100902.5
+    ]
+  }
+}

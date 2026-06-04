@@ -10,9 +10,12 @@
 godot_sidecar/.godot/
 *.import
 
-# ── Python bytecode ──
+# ── Python bytecode + packaging build artifacts ──
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 
 # ── Third-party copyrighted research PDFs — NOT redistributed ──
 # Journal / IEEE / NASA / conference papers: John's private research library,
@@ -118,3 +121,15 @@ godot_sidecar/out/brdf_compare_*.png
 godot_sidecar/out/brdf_demo_*.png
 godot_sidecar/out/crater_boulders_hapke.png
 godot_sidecar/out/crater_boulders_lambert.png
+
+# ── WorkSite streaming roam (scripts/demo/worksite_*.py). The curated 3x2 composite + GIFs +
+#    telemetry ARE committed deliverables; the per-step frames, paged tiles, render bundles, and
+#    npz are regenerable scratch (worksite_roam.py + worksite_progress.py rebuild them). ──
+/out/worksite_roam/frames/
+/out/worksite_roam/tiles_page/
+/out/worksite_roam/berm_scene/
+/out/worksite_roam/berm_scene_local/
+/out/worksite_roam/corridor.npz
+/out/worksite_roam/godot_cmd.txt
+/out/worksite_slice/tiles_page/
+/out/worksite_slice/fine_scene/

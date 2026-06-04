@@ -65,7 +65,7 @@ class RoverSimEnv(_BASE):
                  start_col: float = 16.0, goal_col: float = 80.0, goal_radius_cells: float = 2.0,
                  v_max: float = 0.3, omega_max: float = 1.0, dt: float = 0.1,
                  max_steps: int = 200, payload_kg: float = 0.0,
-                 params: "tm.TerramechanicsParams | None" = None,
+                 params: "tm.TerramechanicsParams | None" = None, body=None,
                  randomize: bool = False, slope_max_deg: float = 40.0, patch: int = 5):
         super().__init__()
         self.grid = int(grid)
@@ -79,7 +79,25 @@ class RoverSimEnv(_BASE):
         self.dt = float(dt)
         self.max_steps = int(max_steps)
         self.payload_kg = float(payload_kg)
-        self.params_base = params or tm.TerramechanicsParams.from_constants()
+        # per-body physics: body sets gravity (weight = m*g) + Lyasko-corrected regolith (bodies.py).
+        if body is not None:
+            from . import bodies as _bodies
+            _b = _bodies.get_body(body)
+            self.body = _b.name
+            self.g = _b.g
+            self.params_base = params if params is not None else _bodies.params_for_body(_b)
+            if _b.bekker_regime == "microgravity":         # honest: Bekker model is out of regime
+                import warnings
+                warnings.warn(
+                    f"RoverSimEnv body={_b.name!r}: gravity is {_b.g:.1e} m/s^2 -- the gravity-loaded "
+                    "Bekker pressure-sinkage model is OUT OF REGIME (microgravity, cohesion/granular "
+                    "dynamics dominate). Results are a placeholder, not validated physics; use a "
+                    "DEM/granular model. See terrain_authority.bodies / docs/bodies_sysrev.md.",
+                    stacklevel=2)
+        else:
+            self.body = None
+            self.g = K.g
+            self.params_base = params or tm.TerramechanicsParams.from_constants()
         self.randomize = bool(randomize)
         self.slope_max_deg = float(slope_max_deg)
         self.patch = int(patch) | 1            # force odd
@@ -98,8 +116,11 @@ class RoverSimEnv(_BASE):
 
         if _HAS_GYM:
             self.action_space = _spaces.Box(-1.0, 1.0, shape=(self.action_dim,), dtype=np.float32)
-            self.observation_space = _spaces.Box(-np.inf, np.inf, shape=(self.obs_dim,),
-                                                 dtype=np.float32)
+            # Finite (generous) obs bounds: relative heights are ~metres, the proprioceptive
+            # scalars are O(1) (sin/cos, pitch/roll, slip[0,1], sinkage, dist[0,1]). 1e3 cannot
+            # clip any real observation and keeps env_checker / SB3 happy (no +/-inf bounds).
+            hi = np.full(self.obs_dim, 1.0e3, dtype=np.float32)
+            self.observation_space = _spaces.Box(-hi, hi, dtype=np.float32)
 
     # -- scene + geometry ----------------------------------------------------
 
@@ -160,7 +181,7 @@ class RoverSimEnv(_BASE):
         dist_prev = self._goal_dist_cells()
         self.rc, self.yaw, telem = drive.drive_step(
             self.cs, self.rc, self.yaw, v, omega, dt=self.dt, params=self.params,
-            payload_kg=self.payload_kg)
+            payload_kg=self.payload_kg, g=self.g)
         self._last_slip = telem["slip"]
         self._last_sinkage = telem["sinkage_m"]
         self._steps += 1
