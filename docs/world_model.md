@@ -125,12 +125,19 @@ installed package in both trees.
 The active-perception REWARD is now an env: **`Dust/ActivePerception-v0`** (`active_perception_env.py`) is
 next-best-view mapping where the agent drives to reduce per-cell uncertainty per joule -- the map channel /
 Uncertainty layer as the RL reward, grounded in the measured stereo sigma (range-dependent, Z^2 falloff)
-and the ipex drive energy, over real authority fbm terrain. A greedy next-best-view policy maps to
-sigma 0.37 vs random 1.23 for less energy (`validation/active_perception/`). This is the env the learned
-perception world model trains in.
+and the ipex drive energy, over real authority fbm terrain. Greedy and a 5-step beam both map to
+sigma 0.37 vs random 1.23 for less energy (`validation/active_perception/`).
 
-Next, in order: (1) the learned perception model (JEPA or RSSM) trained in `Dust/ActivePerception-v0` --
-the one genuinely learned component this architecture calls for -- to beat the greedy next-best-view
-baseline by predicting where observing pays off; (2) dense MVS to fill the ground-tier coverage
-(CUDA-gated today); (3) thread the per-cell Material into the Bekker `k_phi` sinkage too (cohesion/phi are
-threaded; `k_phi` sinkage still uses the density-stiffening factor, not the full per-cell material).
+**Honest finding (the model-tool match again):** multi-step beam search does NOT beat the greedy 1-step
+next-best-view -- because info-gain is **submodular**, so greedy carries the classic 1-1/e near-optimality
+guarantee and there is no multi-step routing headroom (unlike the scheduler, where beam beat greedy on
+precedence/batching). So for active perception the right onboard tool is cheap greedy, and the genuinely
+learned component is NOT a multi-step planner over this computable env -- it is a model that predicts
+info-gain when the observation is EXPENSIVE and uncharacterized (the real Godot render), which this env
+approximates with the measured stereo model. That is where a learned perception WM earns its keep.
+
+Next, in order: (1) the learned perception model that predicts info-gain over the EXPENSIVE render branch
+(so the policy can plan without rendering every candidate viewpoint) -- the one genuinely learned
+component; on the cheap characterized env greedy already wins; (2) dense MVS to fill the ground-tier
+coverage (CUDA-gated today); (3) thread the per-cell Material into the Bekker `k_phi` sinkage too
+(cohesion/phi are threaded; `k_phi` sinkage still uses the density-stiffening factor).
