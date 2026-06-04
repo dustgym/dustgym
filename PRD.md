@@ -162,7 +162,7 @@ monolithic learned latent world model. The five layers and their status:
 | Layer | Status |
 |---|---|
 | **Geometry** | ✅ `column_state` heightmap + slope + real LOLA DEM; planner cut/fill = target − current |
-| **Material** | ✅ `material.py` (2026-06-04): per-cell friction + cohesion from the conserved density field across sourced spec ranges, + cut-difficulty + slip-susceptibility maps; `test_material.py` (4); `validation/map_channel/material_layer.png`. ⬜ threading per-cell material INTO the solver (still global `k_phi`) |
+| **Material** | ✅ `material.py` (2026-06-04): per-cell friction + cohesion from the conserved density field across sourced spec ranges, + cut-difficulty + slip-susceptibility maps; `validation/map_channel/material_layer.png`. ✅ **THREADED into the solver** — `drive.drive_step(material=True)` overrides cohesion/phi from the rover's local cell (`material.cell_strength`); loose 0.199 vs compacted 0.058 slip on a 21.8° grade; default byte-identical; `test_material.py` (5). ⬜ per-cell `k_phi` sinkage too (cohesion/phi done; sinkage still uses the density-stiffening factor) |
 | **Physics** | ✅ the Tier-2 authority: Bekker sinkage + slip ladder + IPEx energy at lunar g; `S(t+1)=f(S,Action)` is conserved + exact (removed-volume/energy/slip computed, not predicted) |
 | **Task** | ✅ `mission_planner` + `structures.py` + `terrain_target_env` reward R=−‖H_cur−H_target‖ |
 | **Uncertainty** | ✅ `autonomy.py` Belief/Kalman (pose/energy/drum σ) + per-cell terrain σ + `dig_ready_mask` (2026-06-04) |
