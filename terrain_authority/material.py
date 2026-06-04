@@ -44,6 +44,16 @@ def relative_density(density) -> np.ndarray:
     return np.clip((rho - K.RHO_SURFACE) / (K.RHO_DEEP - K.RHO_SURFACE), 0.0, 1.0)
 
 
+def cell_strength(density_value: float) -> tuple[float, float]:
+    """Per-cell (phi_rad, cohesion_pa) for a single bulk density [kg/m^3] -- the scalar form of
+    material_fields, for threading the LOCAL material into the slip solver per drive step (so loose
+    cells slip more, compacted cells less). Same monotonic interpolation as material_fields."""
+    dr = float(np.clip((float(density_value) - K.RHO_SURFACE) / (K.RHO_DEEP - K.RHO_SURFACE), 0.0, 1.0))
+    phi_deg = PHI_LOOSE_DEG + dr * (PHI_DENSE_DEG - PHI_LOOSE_DEG)
+    cohesion_pa = COHESION_LOOSE_PA + dr * (COHESION_DENSE_PA - COHESION_LOOSE_PA)
+    return float(np.deg2rad(phi_deg)), float(cohesion_pa)
+
+
 def material_fields(density, *, normal_load_n: float = 200.0, contact_area_m2: float = 0.05) -> dict:
     """Per-cell material from the density field. Returns a dict of HxW arrays.
 
