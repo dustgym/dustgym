@@ -199,6 +199,7 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
             left -= chunk
         belief = dataclasses.replace(belief, tasks_done=belief.tasks_done + 1)
         legs.append({"leg": leg["label"], "nominal_J": nominal_J, "true_J": telem["true_energy_J"],
+                     "dig_e": float(leg.get("dig_e", 0.0)),     # dig doesn't slip; only the drive portion inflates
                      "soc": belief.soc_frac(), "slope_deg": telem["slope_deg"], "slip": telem["slip"],
                      "energy_sigma_J": e_sig})
     return {"belief": belief, "completed": belief.tasks_done == len(trips), "n_trips": len(trips),

@@ -19,6 +19,7 @@ import shutil
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import adaptive_planner as ADP
 import autonomy as AUT
 import mission_planner as MP
 import structures as ST
@@ -76,6 +77,7 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
     b, legs = cl["belief"], cl["legs"]
     nominal = sum(leg["nominal_J"] for leg in legs)
     true = sum(leg["true_J"] for leg in legs)
+    energy = ADP.price_mission(legs, ADP.learned_model())   # self-learned slip energy applied to this plan
     autonomy = {
         "completed": cl["completed"], "n_trips": cl["n_trips"], "n_legs": len(legs),
         "recharges": cl["recharges"], "replans": cl["replans"],
@@ -83,6 +85,10 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
         "final_soc": round(b.soc_frac(), 3),
         "max_slip": round(max((leg["slip"] for leg in legs), default=0.0), 3),
         "true_vs_nominal_energy": round(true / nominal, 3) if nominal else None,
+        # self-optimizing: the LEARNED slip-energy model re-prices the plan toward the executed truth
+        "energy_naive_kj": round(energy["naive_J"] / 1e3, 1),
+        "energy_learned_kj": round(energy["learned_J"] / 1e3, 1),
+        "energy_actual_kj": round(energy["actual_J"] / 1e3, 1),
     }
     leg_e_sig = max((leg["energy_sigma_J"] for leg in legs), default=0.0)
     perception = {
