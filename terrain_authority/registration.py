@@ -30,7 +30,8 @@ ROVER_BODIES = ["moon", "mars", "ceres", "earth"]
 ENV_IDS = (
     ["Dust/RoverDrive-v0"]
     + [f"Dust/RoverDrive-{b.capitalize()}-v0" for b in ROVER_BODIES]
-    + ["Dust/Construct-v0", "Dust/SkillMacro-v0", "Dust/Scheduler-v0", "Dust/WorkSite-v0"]
+    + ["Dust/Construct-v0", "Dust/SkillMacro-v0", "Dust/Scheduler-v0", "Dust/WorkSite-v0",
+       "Dust/ActivePerception-v0"]
 )
 
 _REGISTERED = False
@@ -87,6 +88,8 @@ def register_envs():
          _scheduler_kwargs(), None),
         # RL controller over John's WorkSite execution seam (flatten/dump + drum ledger)
         ("Dust/WorkSite-v0", "terrain_authority.worksite_env:WorkSiteConstructEnv", {}, None),
+        # PERCEPTION: active next-best-view mapping (the map channel / Uncertainty layer as the reward)
+        ("Dust/ActivePerception-v0", "terrain_authority.active_perception_env:ActivePerceptionEnv", {}, 400),
     ]
     for env_id, entry_point, kwargs, max_steps in specs:
         if env_id in registry:
