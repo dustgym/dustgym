@@ -49,6 +49,20 @@ tier is roughly an order of magnitude more accurate, as expected.
   multi-view correspondences, exactly as on real lunar imagery; only the simulator has the ground
   truth to quantify it. Regenerate with `make_colmap_ab.py --hapke <corpus> --lambert <corpus>`.
 - **colmap_ab_metrics.json** - the per-BRDF metrics behind the figure.
+- **colmap_height_sweep.png** + **.json** - the camera-height sweep (`make_height_sweep.py`). The ground
+  tier collapses toward the rover's grazing eye-level: 18 of 18 images register at elevated and mid
+  heights, 12 of 18 at 1.0 m, and only 2 of 18 at 0.5 m. Near-horizontal views of a near-flat surface
+  share too few features; accuracy stays near 4 cm where it reconstructs, but registration and coverage
+  fall off. This is the honest answer to "does ground COLMAP hold up on the rover's real grazing capture."
+
+## Uncertainty layer (world model)
+
+- **uncertainty_layer.png** - the per-cell height uncertainty and the dig-ready gate
+  (`obs_map_producer.grid_to_heightfield_uncertainty` + `dig_ready_mask`). Each observed cell carries a
+  height sigma (the standard error of the mean, which falls as more views accumulate; single-view cells
+  get a 0.30 m prior), and the planner gates digging on it: green cells are confident enough to act on,
+  red cells are observed but uncertain (observe more first), grey are unobserved. This is the world
+  model's Uncertainty layer; see `docs/world_model.md` for the full five-layer mapping.
 
 ## Regenerate
 
