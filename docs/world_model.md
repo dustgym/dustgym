@@ -157,3 +157,17 @@ flat one); (2) the learned perception model that predicts info-gain over the EXP
 component; on the cheap characterized env greedy already wins; (3) dense MVS to fill the ground-tier
 coverage (CUDA-gated today); (4) thread the per-cell Material into the Bekker `k_phi` sinkage too
 (cohesion/phi are threaded; `k_phi` sinkage still uses the density-stiffening factor).
+
+## Where this lands in the field (2026-06-04)
+
+A five-field systematic review (NASA planetary rover autonomy, lunar mining / ISRU, world models,
+learned autonomous driving, SLAM / 3D perception) places this design in a sparsely-populated quadrant:
+**conserved dynamics + a learned model only for perception, for terrain transformation, scored against
+conserved truth.** The closest analogues each hold one piece but not the coupling -- the DreamerV3
+lunar-excavation line LEARNS the dynamics we conserve; the exact-physics excavation RL line has no
+learned perception; the Lunar Autonomy Challenge winner is perception/mapping on a CARLA/Unreal twin,
+not a conserved-physics construction world model; flight rover autonomy is predictive about geometry
+but measures slip post-hoc. The hybrid call above (conserve the dynamics, learn only perception) is
+therefore a principled inversion of a field converging on learned-everything, fleet-scale,
+photometrically-supervised systems. Full positioning + the gap matrix: `related_work.md`; the full
+review (gitignored, with downloaded sources): `../publication/systematic_review.md`.
