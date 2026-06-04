@@ -133,7 +133,7 @@ def execute_leg(belief, leg, *, dem=None, dem_origin=(0.0, 0.0), g=None, body="m
 
 
 def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto", objective="time",
-                    max_traverse_slope_deg=25.0):
+                    max_traverse_slope_deg=25.0, perception_sigma_m=None, dig_sigma_gate_m=0.20):
     """Run the AutoNav-style loop over the conserved-model: plan -> execute leg (true telemetry) -> estimate
     (predict + measure) -> replan/recharge against the ESTIMATE. Drains the battery by the slip-adjusted TRUE
     energy with reserve-aware recharges, so on real terrain it recharges/replans more than the flat plan
@@ -150,21 +150,36 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
     belief = initial_belief(mission, len(trips))
     remaining = list(order)
     recharges = replans = 0
+    perception_fixes = observe_more = 0
     legs = []
 
     def _recharge(b):
         d_back = MP._d((b.x, b.y), mission.charger)
         b = predict(b, moved_to=mission.charger, drive_m=d_back, energy_spent_J=0.0)
-        return dataclasses.replace(b, energy_J=BATTERY_J, energy_sigma_J=0.0)
+        b = dataclasses.replace(b, energy_J=BATTERY_J, energy_sigma_J=0.0)
+        if perception_sigma_m is not None:             # docking at the charger is a known-landmark pose fix
+            b = update_pose(b, mission.charger, perception_sigma_m)
+        return b
 
     while remaining:
         i = remaining.pop(0)
         leg = trips[i]
+        # PERCEPTION-IN-THE-LOOP (Uncertainty-layer dig-ready gate): before committing to a dig, if the
+        # pose estimate is too uncertain, dwell and take more observations until it is confident enough.
+        if perception_sigma_m is not None and leg.get("dig_e", 0.0) > 0.0:
+            while belief.pos_sigma_m > dig_sigma_gate_m:
+                belief = update_pose(belief, (belief.x, belief.y), perception_sigma_m)
+                observe_more += 1
         nominal_J = nominal_leg_energy_J((belief.x, belief.y), leg)
         telem = execute_leg(belief, leg, dem=dem, dem_origin=dem_origin, g=g, body=mission.body)
         # ESTIMATE: move (pose uncertainty grows with distance), and grow the energy uncertainty by the
         # leg's model error (a priori the plan can't see the slip truth -> carry it as 1-sigma).
         belief = predict(belief, moved_to=telem["new_pose"], drive_m=telem["drive_m"], energy_spent_J=0.0)
+        # PERCEPTION MEASUREMENT: fuse a map/landmark pose fix (the map channel / AprilTag SLAM egress),
+        # bounding the dead-reckoning drift. Without it pose sigma only grows; with it the loop is corrected.
+        if perception_sigma_m is not None:
+            belief = update_pose(belief, (telem["new_pose"][0], telem["new_pose"][1]), perception_sigma_m)
+            perception_fixes += 1
         e_sig = math.sqrt(belief.energy_sigma_J ** 2 + (0.12 * nominal_J) ** 2)
         belief = dataclasses.replace(belief, energy_sigma_J=e_sig)
         # drain the TRUE energy with reserve-aware recharges (closed-loop battery management on the estimate)
@@ -187,4 +202,5 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
                      "soc": belief.soc_frac(), "slope_deg": telem["slope_deg"], "slip": telem["slip"],
                      "energy_sigma_J": e_sig})
     return {"belief": belief, "completed": belief.tasks_done == len(trips), "n_trips": len(trips),
-            "recharges": recharges, "replans": replans, "legs": legs}
+            "recharges": recharges, "replans": replans, "legs": legs,
+            "perception_fixes": perception_fixes, "observe_more": observe_more}

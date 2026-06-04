@@ -34,9 +34,14 @@ from matplotlib.backends.backend_pdf import PdfPages
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ---- grounded constants: imported from the .py source of truth (terrain_authority), not duplicated.
-# planet_browser/ is standalone, so add roversim/ to the path to import the package.
+# planet_browser/ ships two ways: standalone (terrain_authority/samples/scripts live in a sibling
+# roversim/) and inside the dustgym monorepo (they live at the monorepo root, planet_browser's parent).
+# Pick whichever actually holds terrain_authority/ so both work; _ROVERSIM then anchors samples/scripts.
 import sys
-_ROVERSIM = os.path.join(os.path.dirname(HERE), "roversim")
+_PARENT = os.path.dirname(HERE)
+_ROVERSIM = next((p for p in (os.path.join(_PARENT, "roversim"), _PARENT)
+                  if os.path.isdir(os.path.join(p, "terrain_authority"))),
+                 os.path.join(_PARENT, "roversim"))
 if _ROVERSIM not in sys.path:
     sys.path.insert(0, _ROVERSIM)
 import numpy as np                                      # for validate_plan (executes orders on the authority)
