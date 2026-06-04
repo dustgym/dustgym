@@ -107,11 +107,23 @@ and AFTER in Godot, and quantifies the earthwork (cut and fill volumes). On `cra
 crater partially filled and that flattening it needs more fill than the local cut yields (an honest
 import-material result). Figures: `validation/plan_render/`.
 
-Next, in order: (1) thread per-cell Material INTO the sinkage/slip solver, so it changes the dynamics and
-not just the prediction (the solver still reads the global Bekker `k_phi`); (2) finish the
-selection-to-render loop with a browser `/render` endpoint (pick a map area -> crop a DEM window via
-`build_from_dem` -> render it) and feed the observed map back to the planner for the closed feedback loop
-(the pipeline core exists; the browser wire and the perception feedback are what remain); (3) dense MVS to
-fill the ground-tier coverage (CUDA-gated today); (4) the learned perception model (JEPA or RSSM over the
-cheap headless rollouts) for active perception, the one genuinely learned component this architecture
-calls for.
+Done since: **Material threaded INTO the solver** -- `drive.drive_step(material=True)` overrides the
+TerramechanicsParams cohesion/phi from the rover's local cell (`material.cell_strength`), so the slip it
+experiences depends on the local soil (loose 0.199 vs compacted 0.058 on a 21.8 deg grade); default path
+byte-identical. **The select-area -> render loop** is wired (browser `/render` -> `render_map_area` crops
+a Haworth window, plans a flatten, renders BEFORE/AFTER in Godot, returns the earthwork). **Perception
+folded into the closed loop** (`autonomy.run_closed_loop(perception_sigma_m=...)`): a map/landmark pose fix
+per leg (and on charger docking) bounds the dead-reckoning drift, and a dig-ready gate observes more before
+digging when the pose estimate is uncertain; `/plan` now returns the bounded pose sigma + map fixes.
+
+Package surface: the conserved physics-side layers ship in the installed **dustgym** package; one import,
+`from terrain_authority import world_model`, ties them together (`describe()` -> the five-layer map;
+`geometry`/`material_layer`/`earthwork` accessors). `mission_planner` now resolves `terrain_authority` +
+`samples` from either the standalone `roversim/` sibling or the monorepo root, so the app runs from the
+installed package in both trees.
+
+Next, in order: (1) dense MVS to fill the ground-tier coverage (CUDA-gated today); (2) the learned
+perception model (JEPA or RSSM over the cheap headless rollouts) for active perception -- the one genuinely
+learned component this architecture calls for -- using the observed-map RMSE / coverage as the reward; (3)
+thread the per-cell Material into the Bekker `k_phi` sinkage too (cohesion/phi are threaded; `k_phi`
+sinkage still uses the density-stiffening factor, not the full per-cell material).
