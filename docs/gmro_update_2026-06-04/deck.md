@@ -102,14 +102,32 @@ CC0. Independent Godot + Project Chrono + ROS2 stack; references the Lunar Auton
 
 ---
 
+## The ground tier collapses toward grazing
+
+![h:235](images/08_colmap_height_sweep.png)
+
+- Camera-height sweep, arc held fixed: **18/18 images register at elevated and mid height, 12/18 at 1.0 m, only 2/18 at 0.5 m** (the rover's eye-level).
+- Near-horizontal views of a near-flat surface share too few features. Accuracy stays near 4 cm where it reconstructs; registration and coverage are what fall off. So the ground tier wants a mast camera or dense forward-motion capture, not eye-level orbits.
+
+---
+
 ## Real now vs honestly deferred
 
 - **Real:** conserved Tier-2 physics, closed loop, RL envs + planner, the Godot render track on GPU, the AprilTag pose channel, the onboard map-channel producer + scorer, and the **COLMAP ground tier scored against truth** (0.04 m, with the Hapke-vs-Lambert A/B).
 - **Deferred (named, not hidden):**
-  - Dense MVS for full coverage (sparse SfM today), and COLMAP on the rover's grazing ground-level moving-sequence (the harder, realistic capture).
+  - Dense MVS for full coverage (sparse SfM today); the grazing limit is now measured (above), so the ground tier wants a mast camera or dense forward-motion capture.
   - Secondary illumination in shadows / PSR fill (shadows are near-black today).
   - Sensor model: read noise, motion blur, fitted lens distortion.
-  - Live Chrono producer; slip-sinkage oracle calibration.
+  - Spatially-varying material fields; the learned perception model.
+
+---
+
+## It all rolls up into a world model
+
+![h:180](images/09_uncertainty_layer.png)
+
+- Five layers, mostly built: **Geometry** (DEM + cut/fill), **Material** (per-cell density; soil params next), **Physics** (the conserved authority), **Task** (target height map), **Uncertainty** (per-cell height σ + the dig-ready gate above). See `docs/world_model.md`.
+- The design call: **conserved physics for dynamics** (exact, unhackable, and model-based search already beats learned RL), **a thin learned model only for perception** (predicting what the camera sees, for active "look before you dig"). Not a monolithic learned latent model.
 
 ---
 
