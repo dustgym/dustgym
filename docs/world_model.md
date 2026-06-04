@@ -136,8 +136,24 @@ learned component is NOT a multi-step planner over this computable env -- it is 
 info-gain when the observation is EXPENSIVE and uncharacterized (the real Godot render), which this env
 approximates with the measured stereo model. That is where a learned perception WM earns its keep.
 
-Next, in order: (1) the learned perception model that predicts info-gain over the EXPENSIVE render branch
+## The self-learning loop (`self_optimizing.py`)
+
+The pipeline closes on itself: **execute -> observe the model-vs-truth gap -> learn -> re-plan**. The
+planner's energy model is naively FLAT (135 J/m, slip = 0), but the conserved `drive_step` (slip ladder +
+Material) shows the TRUE per-leg energy is inflated by slope (slip robs progress, the rover climbs).
+`run_self_optimizing` drives over varied slopes, observes the (slope -> true/flat inflation), fits a
+generalizing `inflation(slope)` regression online, and the **held-out prediction error collapses from
+~20 % to 0.5 %** as it learns -- predicting the energy on slopes it never trained on to <1 %
+(`validation/self_optimizing/`). The learned model then lets the planner predict per-leg energy on any
+grade (`route_energy(slopes, model)`): a flat and a steep route of equal distance look identical to the
+naive planner but the learned one routes around the steep grade. So the loop is **self-learning** (a
+generalizing model of its own behaviour, fit from execution) and **self-optimizing** (the learned model
+re-prices the plan), grounded -- only the inflation regression is learned; the dynamics stay conserved.
+
+Next, in order: (1) wire the learned `inflation(slope)` into the planner's energy objective + the
+closed-loop provisioning (so plans are routed and recharge-scheduled against the learned cost, not the
+flat one); (2) the learned perception model that predicts info-gain over the EXPENSIVE render branch
 (so the policy can plan without rendering every candidate viewpoint) -- the one genuinely learned
-component; on the cheap characterized env greedy already wins; (2) dense MVS to fill the ground-tier
-coverage (CUDA-gated today); (3) thread the per-cell Material into the Bekker `k_phi` sinkage too
+component; on the cheap characterized env greedy already wins; (3) dense MVS to fill the ground-tier
+coverage (CUDA-gated today); (4) thread the per-cell Material into the Bekker `k_phi` sinkage too
 (cohesion/phi are threaded; `k_phi` sinkage still uses the density-stiffening factor).
