@@ -27,7 +27,7 @@ from . import terramechanics as tm
 from .column_state import ColumnState
 
 OBJECTIVE_TYPES = ("traverse", "flatten_pad", "build_berm")
-BASE_TYPES = ("flat", "ramp", "bumps", "crater")
+BASE_TYPES = ("flat", "ramp", "bumps", "crater", "mound")
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +151,10 @@ def _build_datum(base: str, grid: int, cell_m: float, slope_deg: float,
         cy = cx = grid / 2.0
         r = np.hypot(rr - cy, cc - cx)
         z = -0.15 * np.exp(-(r / (grid * 0.12)) ** 2)             # central depression
+    elif base == "mound":
+        cy = cx = grid / 2.0
+        r = np.hypot(rr - cy, cc - cx)
+        z = 0.20 * np.exp(-(r / (grid * 0.10)) ** 2)              # central mound (cut-dominant)
     else:
         raise ValueError(f"unknown map base {base!r} (expected one of {BASE_TYPES})")
     if roughness_m > 0.0:

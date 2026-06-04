@@ -10,9 +10,12 @@
 godot_sidecar/.godot/
 *.import
 
-# ── Python bytecode ──
+# ── Python bytecode + packaging build artifacts ──
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 
 # ── Third-party copyrighted research PDFs — NOT redistributed ──
 # Journal / IEEE / NASA / conference papers: John's private research library,

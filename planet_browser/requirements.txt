@@ -1,0 +1,6 @@
+# planet_browser deps (the server itself is stdlib http.server; these are for the planner/ingest).
+# Install into the runtime venv: pip install -r requirements.txt
+numpy            # heightfields, mission_planner, validate_plan
+matplotlib       # mission-control PDF report
+scipy            # flattest_anchor / flattest_anchor_streamed (uniform_filter)
+pyproj           # dem_import: reproject a non-polar (cylindrical lat/lon) DEM to the local metric grid (P4)

@@ -39,4 +39,14 @@ __all__ = [
     "Sandpile",
     "procgen",
     "rover",
+    "register_envs",
 ]
+
+# Register the Dust/* Gymnasium environments on import (no-op if gymnasium is absent, so the
+# bare-numpy core stays importable). After `pip install`, the pyproject entry-point also triggers this.
+from .registration import register_envs  # noqa: E402
+
+try:
+    register_envs()
+except Exception:                          # pragma: no cover - never let registration break import
+    pass

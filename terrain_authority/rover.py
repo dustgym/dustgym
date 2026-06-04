@@ -341,7 +341,8 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
                  min_grad_cells: float = 2.5,
                  gauge_m: float = WHEEL_GAUGE_M, wheelbase_m: float = WHEEL_BASE_M,
                  payload_kg: float = 0.0,
-                 rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG) -> dict:
+                 rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG,
+                 g: float = K.g) -> dict:
     """Kinematic rest pose of the 4-wheel rover on the terrain at one spiral pose.
 
     TWO terms, least-squares fit to a plane y = a*x + b*z + c in GODOT WORLD axes
@@ -416,7 +417,7 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
     # cos(tilt) (flat -> full weight; steeper -> less normal load -> the slip driver,
     # Phase 2). Equal split; CG-based fore/aft transfer is a refinement (CG height not
     # in the public TRL-5 overview). Feeds four_wheel_pass(physical=True, loads=...).
-    total_weight_n = (rover_mass_dry_kg + max(0.0, payload_kg)) * K.g
+    total_weight_n = (rover_mass_dry_kg + max(0.0, payload_kg)) * float(g)
     normal_total_n = total_weight_n * float(nrm[1])
     per_wheel_n = normal_total_n / 4.0
     return {

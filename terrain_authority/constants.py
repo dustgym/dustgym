@@ -105,12 +105,13 @@ K_C = 1400.0
 K_PHI = 820_000.0
 
 #: Shear deformation modulus K [m]. [CALIB] spec §5.2 (1.0-1.8 cm, ~1.8 -> 0.018 m).
-#: Janosi-Hanamoto shear; unused by the geometry-only rover pass but kept for fidelity.
+#: Janosi-Hanamoto shear; READ by slip.developed_thrust (the load-bearing slip ladder, Phases 2-3).
 K_SHEAR = 0.018  # 1.8 cm
 
 #: Slip-sinkage coefficients (theta_m = (c1 + c2*s)*theta_f). [UNKNOWN] spec §5.2
 #: (c1~0.4, c2~0.3, "genuine unknowns"). Drives the runaway-entrapment failure mode
-#: (spec §6 "Spirit-rover failure"); not exercised by the single-pass geometry rover.
+#: (spec §6 "Spirit-rover failure"); EXERCISED via slip_sinkage_multiplier on the physical=True
+#: drive path (four_wheel_pass <- drive.closed_loop_drive / worksite.compact_over). Magnitudes [UNKNOWN].
 SLIP_C1 = 0.4
 SLIP_C2 = 0.3
 
@@ -214,7 +215,37 @@ STATE_TREAD = 1
 STATE_EXCAVATED = 2
 STATE_SPOIL = 3
 STATE_COMPACTED_BERM = 4
-STATE_NAMES = ["VIRGIN", "TREAD", "EXCAVATED", "SPOIL", "COMPACTED_BERM"]
+STATE_SINTERED = 5                 # solar/microwave-fused hard surface (pads/roads/walls)
+STATE_NAMES = ["VIRGIN", "TREAD", "EXCAVATED", "SPOIL", "COMPACTED_BERM", "SINTERED"]
+
+# ---------------------------------------------------------------------------
+# Sintering (the lunar concrete/asphalt analog): fuse loose regolith into a hard solid surface
+# with solar/microwave/laser. Mass-conserving densification (porosity collapses -> denser, thinner).
+# ---------------------------------------------------------------------------
+#: Sintered/fused regolith bulk density [kg/m^3]. [SOURCED] measured sintered lunar-simulant density:
+#: microwave-sintered ~2.23-2.34 g/cm^3 (Lin et al., J. Eur. Ceram. Soc. 2024, domestic-microwave study;
+#: KLS-1 ~2.11), spark-plasma-sintered up to 2.90 g/cm^3 (Zhang et al., J. Eur. Ceram. Soc. 2020); 2300 is
+#: the mid microwave value (between RHO_DEEP 1920 and grain 3100).
+RHO_SINTERED = 2300.0
+#: Energy to sinter regolith [J/kg]. This value is the THERMODYNAMIC FLOOR (sensible heat to sinter temp):
+#: c_p ~0.8-1.0 J/g/K (lunar soil, Hemingway et al. 1973, Apollo 14/15/16; rises with T) x dT ~1075 K to a
+#: ~1100 C sinter temp (Tsubaki et al., ACS Omega 2024, microwave ~900-1000 C; furnace 1050-1125 C) ~= 0.9-1.1
+#: MJ/kg. [SOURCED-FLOOR] -- the MEASURED domestic-microwave PROCESS energy is 69-98 MJ/kg (Lin et al. 2024),
+#: ~50-100x this floor (small-scale/coupling inefficiency); an engineered system lies between and is
+#: method-dependent. The floor is the defensible lower bound; do NOT read it as a full process budget.
+SINTER_ENERGY_J_PER_KG = 920_000.0
+#: Measured microwave PROCESS energy [J/kg] (Lin et al. 2024) -- documented for honest planning; the floor
+#: above is the ideal minimum, this is a real (inefficient, small-scale) upper reference.
+SINTER_PROCESS_ENERGY_J_PER_KG_MEASURED = 69_000_000.0
+#: Sinter feasibility gate (the SINGLE source of truth, read by WorkSite.sinter and mission_planner).
+#: Sinter is a real, conserved, tested authority primitive (column_state.sinter), and RHO_SINTERED +
+#: SINTER_ENERGY_J_PER_KG are now LITERATURE-SOURCED (above). It stays GATED OFF for the IPEx baseline for
+#: two SOURCED physical reasons, not for missing data: (1) IPEx is a RASSOR-lineage drum EXCAVATOR with no
+#: sintering tool (no microwave/solar/laser head on the modeled platform); (2) sintering is energetically
+#: incompatible with the IPEx power system -- even the thermodynamic floor (0.92 MJ/kg) is ~0.2x the 4.79 MJ
+#: pack per kg, and the MEASURED process energy (69-98 MJ/kg) is ~14-20x the whole pack PER KILOGRAM. Flip to
+#: True only for a deliberately sinter-EQUIPPED, externally-powered variant (not the IPEx baseline).
+SINTER_ENABLED = False
 
 # ===========================================================================
 # DEM-TERRAIN THRUST — sourced procgen parameters (Lane B, ADDITIVE block).
