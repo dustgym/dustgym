@@ -123,16 +123,16 @@ _DEFAULT_PARAMS = TerramechanicsParams.from_constants()
 
 def static_wheel_load_n(payload_kg: float = 0.0, *,
                         rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG,
-                        n_wheels: int = K.N_WHEELS) -> float:
-    """Static per-wheel normal load [N] at lunar g for a given drum payload.
+                        n_wheels: int = K.N_WHEELS, g: float = K.g) -> float:
+    """Static per-wheel normal load [N] at gravity ``g`` (default lunar) for a given drum payload.
 
-    (rover_mass_dry_kg + payload_kg) * g / n_wheels. ~12.15 N/wheel dry,
+    (rover_mass_dry_kg + payload_kg) * g / n_wheels. ~12.15 N/wheel dry at lunar g,
     ~24.3 N/wheel at the full 30 kg payload (ascend24 "30 kg-class"). Equal-split
     baseline; CG-based fore/aft load transfer is a refinement (CG height is not
-    in the public TRL-5 overview, so not modelled).
+    in the public TRL-5 overview, so not modelled). Pass ``g`` for other bodies (bodies.py).
     """
     payload_kg = max(0.0, float(payload_kg))
-    return (rover_mass_dry_kg + payload_kg) * K.g / n_wheels
+    return (rover_mass_dry_kg + payload_kg) * float(g) / n_wheels
 
 
 # ---------------------------------------------------------------------------

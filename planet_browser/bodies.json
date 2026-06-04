@@ -1,0 +1,112 @@
+{
+  "moon": {
+    "name": "moon",
+    "label": "Moon",
+    "g": 1.62,
+    "bekker_regime": "gravity-loaded",
+    "bulk_density": 1300.0,
+    "cohesion_pa": 170.0,
+    "friction_deg": 35.0,
+    "repose_deg": 35.0,
+    "bekker": {
+      "k_c": 1400.0,
+      "k_phi": 820000.0,
+      "n": 1.0
+    },
+    "confidence": "g/density/cohesion/friction MEASURED (Apollo + ChaSTE); Bekker MEASURED (NASA LTV).",
+    "g_note": "",
+    "role": "Artemis base camp + ISRU water ice (NASA Moon-to-Mars ADD Rev.B 2024).",
+    "provenance": "NASA LTV terramechanics white paper NTRS 20220010732 (k_c=1400 N/m^2, k_phi=820000 N/m^3, n=1.0, c=170 Pa); Carrier/Mitchell Lunar Sourcebook 1991; ChaSTE 2025 (rho)."
+  },
+  "mars": {
+    "name": "mars",
+    "label": "Mars",
+    "g": 3.71,
+    "bekker_regime": "gravity-loaded",
+    "bulk_density": 1500.0,
+    "cohesion_pa": 1000.0,
+    "friction_deg": 35.0,
+    "repose_deg": 33.0,
+    "bekker": {
+      "k_c": 23200.0,
+      "k_phi": 606700.0,
+      "n": 1.0
+    },
+    "confidence": "g MEASURED; density/cohesion/friction MEASURED in-situ (MER/InSight); Bekker ESTIMATED (GRC-3 simulant, no native-Mars bevameter exists).",
+    "g_note": "",
+    "role": "human habitats + ISRU; MOXIE produced O2 in-situ (Hecht 2022).",
+    "provenance": "Oravec et al. 2020 NASA GRC (GRC-3 simulant: k_c=23.2 kN/m^2, k_phi=606.7 kN/m^3, n=1.0); Sullivan 2011 (c 0-2 kPa, phi 30-37); Spohn 2022 InSight (duricrust 5.8 kPa)."
+  },
+  "ceres": {
+    "name": "ceres",
+    "label": "Ceres",
+    "g": 0.284,
+    "bekker_regime": "gravity-loaded",
+    "bulk_density": 1300.0,
+    "cohesion_pa": null,
+    "friction_deg": 34.5,
+    "repose_deg": 34.5,
+    "bekker": null,
+    "confidence": "g MEASURED (Dawn); repose 34.5 MEASURED; near-surface density ESTIMATED (crust 1200-1360, porosity 53-72%); cohesion + Bekker UNKNOWN (no in-situ data).",
+    "g_note": "",
+    "role": "water/brine mining (Dawn brines) + Janhunen 2021 megasatellite-habitat proposal.",
+    "provenance": "Park 2016 / Ermakov 2017 (g, density); Icarus 2024 (repose 34.5+/-2.8); cohesion UNKNOWN -> lunar Bekker analog used (flagged); friction = repose proxy."
+  },
+  "bennu": {
+    "name": "bennu",
+    "label": "Bennu (C-type asteroid)",
+    "g": 4e-05,
+    "bekker_regime": "microgravity",
+    "bulk_density": 1190.0,
+    "cohesion_pa": 2.0,
+    "friction_deg": 33.0,
+    "repose_deg": 33.0,
+    "bekker": null,
+    "confidence": "g/density/cohesion MEASURED (OSIRIS-REx); friction ESTIMATED (boulder morphology). Bekker N/A: microgravity rubble pile, near-zero cohesion, near-fluidized surface.",
+    "g_note": "varies ~3e-5 (equatorial ridge) to ~8.5e-5 m/s^2 (poles); Ryugu analog ~1.1-1.5e-4.",
+    "role": "C-type asteroid water/volatile mining (Bennu first proposed target, Jin 2021).",
+    "provenance": "Scheeres 2019 (g); Lauretta 2019 / Watanabe 2019 (rho 1190); Walsh 2022 (cohesion <=2 Pa, near-fluidized); Robin 2024 (phi ~33). Bekker INVALID -> use DEM/granular."
+  },
+  "phobos": {
+    "name": "phobos",
+    "label": "Phobos (Mars moon)",
+    "g": 0.0057,
+    "bekker_regime": "microgravity",
+    "bulk_density": 1850.0,
+    "cohesion_pa": 500.0,
+    "friction_deg": 38.0,
+    "repose_deg": 38.0,
+    "bekker": null,
+    "confidence": "g/density MEASURED; cohesion/friction ESTIMATED (tidal-fracture models, analogs). Bekker UNKNOWN (milli-g); JAXA MMX/IDEFIX will return first in-situ data ~2027.",
+    "g_note": "mean ~0.0057 m/s^2 but varies ~210% (shape) / ~450% (with Mars tides) across the body.",
+    "role": "Mars-system staging waypoint + possible ISRU (NASA NTRS 20160006319; JAXA MMX).",
+    "provenance": "Ernst 2023 (rho ~1850); Hurford 2016 (cohesion ~500 Pa surface model, phi ~40); Murdoch 2025 IDEFIX (phi 33.5+/-6.1 analog). Bekker UNKNOWN -> lunar analog (flagged)."
+  },
+  "earth": {
+    "name": "earth",
+    "label": "Earth",
+    "g": 9.81,
+    "bekker_regime": "gravity-loaded",
+    "bulk_density": 1600.0,
+    "cohesion_pa": 1040.0,
+    "friction_deg": 28.0,
+    "repose_deg": 34.0,
+    "bekker": {
+      "k_c": 990.0,
+      "k_phi": 1528430.0,
+      "n": 1.1
+    },
+    "confidence": "reference/validation body: Wong dry-sand Bekker table (well-established).",
+    "g_note": "",
+    "role": "validation/sanity body (terrestrial dry sand).",
+    "provenance": "Wong, Theory of Ground Vehicles (dry sand: k_c=0.99 kN/m^(n+1), k_phi=1528.43 kN/m^(n+2), n=1.1, c=1.04 kPa, phi=28)."
+  },
+  "_ipex": {
+    "drum_kg": 30.0,
+    "dig_j_per_kg": 4151.4,
+    "drive_j_per_m": 134.59,
+    "battery_j": 4795200.0,
+    "dig_rate_kg_hr": 42.0,
+    "sinter_enabled": false
+  }
+}

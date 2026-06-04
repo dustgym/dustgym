@@ -271,6 +271,24 @@ class WorkSite:
         ``physical=False``, would apply a fixed *1.12 -> ~1456; the demo does not use it.) Returns wheel polylines."""
         return R.four_wheel_pass(self._require_fine(), list(poses), physical=physical, params=params)
 
+    def sinter(self, mask: np.ndarray, *, sintered_density: float = K.RHO_SINTERED) -> float:
+        """Fuse the masked fine-window cells into a hard SINTERED crust (the lunar concrete/road
+        analog): density rises to ``sintered_density``, height drops, state -> SINTERED, mass exactly
+        conserved (the grid-mass invariant holds, ledger untouched). Wraps the tested
+        ``ColumnState.sinter`` authority primitive; the energy cost is the caller's
+        (``constants.SINTER_ENERGY_J_PER_KG``), not modelled here.
+
+        GATED OFF: refuses unless ``constants.SINTER_ENABLED`` is True (the single gate, shared with
+        the planner). Sinter's energy and density are [CALIB] estimates, not IPEx-grounded (IPEx has
+        no sinter tool), so it is exposed as a first-class controller action but is NOT runnable until
+        those numbers are sourced. Returns kg fused when enabled."""
+        if not K.SINTER_ENABLED:
+            raise RuntimeError(
+                "WorkSite.sinter is GATED OFF: its energy/density are [CALIB], not IPEx-grounded "
+                "(IPEx has no sinter tool). Ground the model against a real source, then set "
+                "terrain_authority.constants.SINTER_ENABLED = True to enable.")
+        return self._require_fine().sinter(mask, sintered_density=sintered_density)
+
     # -- streaming active window (multi-window roam; G2 worked-tile paging) --------
 
     def _tile_region(self, tr: int, tc: int) -> tuple[int, int, int, int]:

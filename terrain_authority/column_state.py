@@ -36,6 +36,7 @@ class StateLabel(IntEnum):
     EXCAVATED = K.STATE_EXCAVATED
     SPOIL = K.STATE_SPOIL
     COMPACTED_BERM = K.STATE_COMPACTED_BERM
+    SINTERED = K.STATE_SINTERED
 
 
 @dataclass
@@ -225,6 +226,21 @@ class ColumnState:
         deficit = np.zeros_like(self.mass_areal)
         deficit[mask] = np.broadcast_to(d, self.mass_areal.shape)[mask]
         return self.deposit_field(mask, deficit * spoil_density, spoil_density=spoil_density)
+
+    def sinter(self, mask: np.ndarray, sintered_density: float = K.RHO_SINTERED) -> float:
+        """Fuse masked cells into a hard SINTERED surface (the lunar concrete/asphalt analog).
+
+        Solar/microwave/laser sintering collapses porosity: density rises to ``sintered_density``,
+        so MASS is conserved and the column thins (height re-derives lower) -- a mass-conserving
+        densification + a phase/label change, never adding or removing mass. State -> SINTERED and
+        disturbance is cleared (a bonded crust, not loose dust). Returns the kg fused, for the sinter
+        energy cost (constants.SINTER_ENERGY_J_PER_KG); the authority does NOT model that energy.
+        """
+        sintered_kg = float(self.mass_areal[mask].sum()) * self.cell_area
+        self.density[mask] = np.maximum(self.density[mask], float(sintered_density))
+        self.state_label[mask] = np.uint8(StateLabel.SINTERED)
+        self.disturbance[mask] = 0.0
+        return sintered_kg
 
     # -- field bundle for io_fields ---------------------------------------
 

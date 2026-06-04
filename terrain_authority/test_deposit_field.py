@@ -120,6 +120,54 @@ def test_haul_fill_converges_to_raised_target():
     assert math.isclose(cs.total_mass(), m0, rel_tol=1e-12)                  # mass conserved
 
 
+def test_sinter_conserves_mass_and_densifies():
+    """Sinter fuses cells: mass conserved, density -> sintered, height drops, state -> SINTERED."""
+    cs = _cs(); m0 = cs.total_mass()
+    mask = np.zeros((cs.height, cs.width), bool); mask[5:10, 5:10] = True
+    h0 = cs.derive_height()[mask].copy()
+    kg = cs.sinter(mask)
+    assert math.isclose(cs.total_mass(), m0, rel_tol=1e-12)                # mass conserved
+    assert (cs.density[mask] == K.RHO_SINTERED).all()                      # densified to sintered
+    assert (cs.derive_height()[mask] <= h0 + 1e-12).all()                 # denser -> thinner -> lower
+    assert (cs.state_label[mask] == StateLabel.SINTERED).all()
+    assert kg > 0
+
+
+def test_worksite_sinter_seam_is_gated_off():
+    """The WorkSite controller exposes .sinter() as a first-class action, but it is GATED OFF by
+    default. The constants are now LITERATURE-SOURCED (see test_sinter_constants_are_sourced); the gate
+    stays off for the IPEx baseline for SOURCED physical reasons -- IPEx is a drum excavator with no
+    sinter tool, and the sinter energy is ~14-20x the pack per kg. The real primitive
+    (column_state.sinter, above) is wired underneath -> this is a feasibility gate, not a stub."""
+    from terrain_authority import worksite as WS
+    assert K.SINTER_ENABLED is False                        # single gate, in constants -> default off
+    mask = np.zeros((4, 4), bool); mask[1, 1] = True
+    try:
+        WS.WorkSite.sinter(object(), mask)                  # gate fires before touching self
+    except RuntimeError as e:
+        assert "GATED OFF" in str(e)
+    else:
+        raise AssertionError("WorkSite.sinter must raise while SINTER_ENABLED is False")
+
+
+def test_sinter_constants_are_sourced():
+    """P3: the sinter material constants are LITERATURE-GROUNDED (no [CALIB]). Density is in the measured
+    sintered-simulant range; the energy constant is the thermodynamic floor with the measured microwave
+    process energy documented alongside; the gate's docstring carries the sourced rationale."""
+    import os
+    # measured sintered-simulant density range (microwave 2.11-2.34 g/cm^3, SPS up to 2.90)
+    assert 2110.0 <= K.RHO_SINTERED <= 2900.0
+    # thermodynamic floor (sensible heat ~0.9-1.1 MJ/kg) + a measured-process reference that is far higher
+    assert 0.8e6 <= K.SINTER_ENERGY_J_PER_KG <= 1.3e6
+    assert K.SINTER_PROCESS_ENERGY_J_PER_KG_MEASURED >= 50e6      # real domestic-microwave process energy
+    assert K.SINTER_PROCESS_ENERGY_J_PER_KG_MEASURED > 10 * K.SINTER_ENERGY_J_PER_KG
+    # provenance is in the source, and no [CALIB] remains on the sinter block
+    src = open(os.path.join(os.path.dirname(__file__), "constants.py"), encoding="utf-8").read()
+    block = src[src.index("RHO_SINTERED"):src.index("SINTER_ENABLED")]
+    assert "[CALIB]" not in block and "[SOURCED" in block
+    assert "Hemingway" in block and "Lin et al." in block         # the cited references
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Planet Browser — select a body, pan/zoom/tilt, pick a build site</title>
+<link href="https://unpkg.com/cesium@1.119/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+<script src="https://unpkg.com/cesium@1.119/Build/Cesium/Cesium.js"></script>
+<style>
+  /* Professional palette: neutral slate + ONE blue accent; color reserved for semantic meaning. */
+  :root {
+    --bg:#0a0e16; --panel:#0d1320; --head:#121a2b; --line:#1e2738; --field:#141c2b; --field-bd:#2a3650;
+    --txt:#c7d2e3; --muted:#79839a; --dim:#5a6478; --accent:#4f9cff; --fill:#2563eb; --fill-h:#1d4ed8;
+  }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+  body { font: 13px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--txt); }
+  /* one coherent left control sidebar + globe filling the rest */
+  #app { display: flex; width: 100%; height: 100%; position: relative; }
+  #cesium { flex: 1 1 auto; height: 100%; min-width: 0; }
+  #panel { flex: 0 0 auto; width: min(360px, 94vw); height: 100%; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--line); box-sizing: border-box; }
+  #phead { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+    padding: 13px 16px; background: var(--head); border-bottom: 1px solid var(--line); }
+  #phead b { color: #e6edfb; letter-spacing: .08em; font-size: 13px; font-weight: 600; }
+  #phead #out { margin-left: auto; color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #panel section { padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  #panel h3 { margin: 0 0 10px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  #panel h3 small { color: var(--dim); font-size: 10px; letter-spacing: 0; text-transform: none; font-weight: 400; }
+  .ctl { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 7px; }
+  .ctl label { display: flex; align-items: center; gap: 3px; color: var(--muted); }
+  select, input, button {
+    background: var(--field); color: var(--txt); border: 1px solid var(--field-bd); border-radius: 6px; padding: 6px 8px; font: inherit; }
+  input:focus, select:focus { border-color: var(--accent); outline: none; }
+  input[type=number] { width: 56px; } input.lbl { width: 100%; } #lat, #lon { width: 64px; }
+  select { max-width: 170px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.site { color: var(--accent); border-color: #2f4a78; }
+  button.info { width: 28px; padding: 4px 0; border-radius: 50%; color: var(--accent); font-style: italic; font-weight: 700; }
+  button.plan { background: var(--fill); border-color: var(--fill); color: #fff; width: 100%; margin-top: 8px; font-weight: 600; }
+  button.plan:hover { background: var(--fill-h); border-color: var(--fill-h); }
+  #terra { display: none; margin-top: 8px; padding: 8px 10px; background: var(--field); border: 1px solid var(--line);
+    border-radius: 6px; color: var(--txt); font-size: 12px; line-height: 1.5; }
+  #terra.show { display: block; }
+  #hint { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  #est { color: var(--txt); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1.5; }
+  #qlist { list-style: none; margin: 8px 0; padding: 0; }
+  #qlist li { display: flex; gap: 6px; align-items: center; padding: 5px 7px; margin-bottom: 4px;
+    background: var(--field); border: 1px solid var(--field-bd); border-radius: 6px; font-size: 12px; }
+  #qlist li .g { flex: 1; font-variant-numeric: tabular-nums; }
+  #qlist li button { padding: 1px 6px; }
+  #qstatus { color: var(--muted); font-size: 12px; min-height: 16px; margin-top: 6px; }
+  #drumout { color: var(--txt); font-variant-numeric: tabular-nums; font-size: 13px; min-height: 17px; margin-top: 4px; }
+  /* real LOLA work-area DEM inset (Haworth 5 m); auto-shown on Moon (polar-stereographic, top-down) */
+  #workarea { position: absolute; z-index: 9; right: 12px; bottom: 12px; width: 240px; display: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  #workarea.show { display: block; }
+  #workarea .cap { color: var(--muted); font-size: 10px; letter-spacing: .03em; margin-bottom: 6px; }
+  #workarea img { width: 100%; display: block; border-radius: 4px; background: #05060c; }
+  /* P5 execute + watch: top-down execution view (route + rover marker + telemetry HUD) */
+  #execview { position: absolute; z-index: 11; right: 12px; bottom: 12px; width: 340px; display: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  #execview.show { display: block; }
+  #execview .cap { color: var(--muted); font-size: 10px; letter-spacing: .03em; margin-bottom: 6px;
+    display: flex; justify-content: space-between; align-items: center; }
+  #execview .cap b { color: var(--txt); letter-spacing: 0; }
+  #execcanvas { width: 100%; height: 220px; display: block; border-radius: 4px; background: #05060c; }
+  #exchud { color: var(--txt); font-variant-numeric: tabular-nums; font-size: 12px; margin-top: 8px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+  #exchud .k { color: var(--muted); }
+  #excbatt { grid-column: 1 / -1; height: 8px; border-radius: 4px; background: #1a2030; margin-top: 4px; overflow: hidden; }
+  #excbattfill { height: 100%; width: 100%; background: var(--accent); transition: width .08s linear; }
+  #execclose { cursor: pointer; color: var(--muted); border: none; background: none; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel">
+    <header id="phead"><b>LUNAR BUILD PLANNER</b><span id="out">—</span></header>
+
+    <section>
+      <h3>Body &amp; imagery</h3>
+      <div class="ctl">
+        <label>Body <select id="body"></select></label>
+        <label>Layer <select id="layer"></select></label>
+        <button class="info" id="terrainfo" title="terramechanics for the selected body">i</button>
+      </div>
+      <div class="ctl">
+        <label>lat <input id="lat" type="number" step="0.1" placeholder="-89.0" /></label>
+        <label>lon <input id="lon" type="number" step="0.1" placeholder="0.0" /></label>
+        <button class="go" id="go">Go</button>
+        <button class="site" id="site">Set site</button>
+      </div>
+      <div id="terra">terramechanics —</div>
+      <div id="hint">drag = pan · wheel = zoom · ctrl-drag = tilt · click = pick a site</div>
+    </section>
+
+    <section>
+      <h3>Build estimate</h3>
+      <div class="ctl"><label>pad <input id="padW" type="number" value="20" step="1" />×<input id="padL" type="number" value="20" step="1" /> m</label></div>
+      <div class="ctl">
+        <label>cut <input id="cut" type="number" value="0.10" step="0.01" /> m</label>
+        <label>berm <input id="bermH" type="number" value="0.30" step="0.05" /> m</label>
+      </div>
+      <div id="est">—</div>
+    </section>
+
+    <section>
+      <h3>Build queue → report</h3>
+      <div class="ctl">
+        <select id="qkind"><option value="cut">cut</option><option value="fill">fill</option></select>
+        <label>x<input id="qx" type="number" value="0" step="1" /></label>
+        <label>y<input id="qy" type="number" value="0" step="1" /></label>
+      </div>
+      <div class="ctl">
+        <label>area<input id="qfoot" type="number" value="36" step="1" />m²</label>
+        <label>depth<input id="qdepth" type="number" value="0.04" step="0.01" />m</label>
+      </div>
+      <div class="ctl"><input id="qlabel" class="lbl" placeholder="label (e.g. Level landing pad)" /></div>
+      <div class="ctl">
+        <button id="qadd" class="site">+ Add</button>
+        <button id="qfrompad" class="go">+ from pad/berm</button>
+      </div>
+      <div class="ctl">
+        <select id="struct">
+          <option value="landing_pad">Landing Pad</option>
+          <option value="solar_pad">Solar Pad</option>
+          <option value="habitat_foundation">Habitat Foundation</option>
+          <option value="haul_road">Haul Road</option>
+          <option value="blast_berm">Blast Berm</option>
+          <option value="borrow_pit">Borrow Pit</option>
+          <option value="crater_fill">Crater Fill</option>
+          <option value="trench">Trench</option>
+        </select>
+        <button id="qstruct" class="go">+ Structure @ x,y</button>
+      </div>
+      <ol id="qlist"></ol>
+      <div class="ctl">
+        <label>algorithm
+          <select id="qalgo">
+            <option value="auto">auto (best for size)</option>
+            <option value="nearest">nearest (fast)</option>
+            <option value="greedy">greedy</option>
+            <option value="two_opt">2-opt</option>
+            <option value="or_opt">Or-opt</option>
+            <option value="lk">LK-style</option>
+            <option value="brute">brute (optimal ≤7)</option>
+            <option value="held_karp">Held-Karp (exact ≤16)</option>
+          </select></label>
+        <label>optimize
+          <select id="qobj">
+            <option value="time">duration</option>
+            <option value="energy">energy</option>
+            <option value="power">avg power</option>
+            <option value="distance">distance</option>
+            <option value="charges">recharges</option>
+            <option value="mass">mass moved</option>
+            <option value="time:0.5,energy:0.5">balanced (time+energy)</option>
+          </select></label>
+      </div>
+      <div class="ctl"><input id="qprec" class="lbl" placeholder="precedence (e.g. Grade road &gt; Build berm, ...)" /></div>
+      <button id="qplan" class="plan">Plan mission → open report</button>
+      <button id="qexec" class="go" disabled>▶ Execute + watch</button>
+      <button id="qcompare" class="go">Compare algorithms ⇅</button>
+      <div id="qstatus">queue empty</div>
+      <table id="cmptable" style="display:none;width:100%;font-size:11px;border-collapse:collapse;margin-top:6px"></table>
+    </section>
+
+    <section>
+      <h3>Drum sensor <small>motor current, no load cell (ICE-RASSOR)</small></h3>
+      <div class="ctl">fill <input id="drumkg" type="number" value="20" step="1" /> kg
+        <label><input id="drumnoise" type="checkbox" /> noise</label></div>
+      <div id="drumout">— (run server.py to sense)</div>
+    </section>
+  </aside>
+  <div id="cesium"></div>
+  <div id="workarea">
+    <div class="cap">WORK AREA — Haworth, 10 km @ 5 m (LOLA polar DEM)</div>
+    <img id="workareaimg" alt="Haworth DEM hillshade"
+         onerror="this.closest('#workarea').classList.remove('show')" />
+  </div>
+  <div id="execview">
+    <div class="cap"><span>EXECUTION — top-down<b id="execspeed"> 60×</b></span>
+      <button id="execclose" title="close">✕</button></div>
+    <canvas id="execcanvas" width="320" height="220"></canvas>
+    <div id="exchud">
+      <span class="k">phase</span><span id="excphase">—</span>
+      <span class="k">elapsed</span><span id="exctime">—</span>
+      <span class="k">position</span><span id="excpos">—</span>
+      <span class="k">moved</span><span id="excmass">—</span>
+      <div id="excbatt"><div id="excbattfill"></div></div>
+      <span class="k">battery</span><span id="excbattlbl">—</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- bodies + base imagery -------------------------------------------------------------------
+// density [kg/m^3] + g [m/s^2] are a file:// fallback; the served browser reads the sysrev values from
+// bodies.json (terrain_authority/bodies.py, single source). Moon/Mars stream from NASA Solar System Treks;
+// Earth has no Trek tiles, so it uses NASA GIBS Blue Marble (EPSG4326, no token, same 2x1 geographic
+// tiling). All imagery endpoints curl-verified HTTP 200.
+const trekUrl = (body, layer) =>
+  `https://trek.nasa.gov/tiles/${body}/EQ/${layer}/1.0.0/default/default028mm/{z}/{y}/{x}.jpg`;
+// Each body: physics fallback (g/density; served browser uses bodies.json) + a list of imagery LAYERS the
+// Layer dropdown switches between. Moon/Mars = NASA Trek (equirectangular 2x1); Earth = Esri World Imagery
+// (WebMercator; GIBS EPSG4326 fails Cesium's geographic pyramid). All endpoints curl-verified HTTP 200.
+const BODIES = {
+  moon: { name: "Moon", radius: 1737400, start: [-89.0, 0], density: 1300, g: 1.62, layers: [
+    { name: "LRO WAC (visual)", geographic: true, tile: 256, maxLevel: 8,   // z8 is the native ceiling (z9 -> 404)
+      url: trekUrl("Moon", "LRO_WAC_Mosaic_Global_303ppd_v02"), credit: "NASA Trek (LRO WAC, 303 ppd)" },
+  ] },
+  mars: { name: "Mars", radius: 3396200, start: [0, 0], density: 1500, g: 3.71, layers: [
+    { name: "Viking color (visual)", geographic: true, tile: 256, maxLevel: 7,
+      url: trekUrl("Mars", "Mars_Viking_MDIM21_ClrMosaic_global_232m"), credit: "NASA Trek (Viking MDIM2.1)" },
+    { name: "MOLA color shaded-relief", geographic: true, tile: 256, maxLevel: 7,
+      url: trekUrl("Mars", "Mars_MGS_MOLA_ClrShade_merge_global_463m"), credit: "NASA Trek (MOLA elevation)" },
+  ] },
+  earth: { name: "Earth", radius: 6371000, start: [20.0, 0], density: 1600, g: 9.81, layers: [
+    { name: "Esri World Imagery", geographic: false, tile: 256, maxLevel: 18,
+      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      credit: "Esri World Imagery" },
+  ] },
+};
+// grounded IPEx / battery constants: loaded from bodies.json (_ipex, generated from ipex_specs.py ->
+// single source of truth). The embedded object is a file:// fallback only (when bodies.json can't be
+// fetched); the served browser uses the py-generated values. ipex() resolves preferred-then-fallback.
+const IPEX_FALLBACK = { drum_kg: 30, dig_j_per_kg: 4151, battery_j: 4.79e6, dig_rate_kg_hr: 42 };
+function ipex() { return (PHY && PHY._ipex) ? PHY._ipex : IPEX_FALLBACK; }
+let viewer = null, ellipsoid = null, marker = null, picked = null;
+
+function loadBody(key) {
+  const b = BODIES[key];
+  if (viewer) { viewer.destroy(); viewer = null; }
+  // v1 uses the default geographic globe: imagery + lat/lon + pan/zoom/tilt are all correct; only the
+  // sphere RADIUS is Earth-sized (cosmetic). A true per-body ellipsoid is a refinement (Cesium's custom
+  // globe path errors in 1.119). The body radius is kept in BODIES for the future ellipsoid swap.
+  ellipsoid = Cesium.Ellipsoid.WGS84;
+  viewer = new Cesium.Viewer("cesium", {
+    baseLayer: false, baseLayerPicker: false, geocoder: false, timeline: false,
+    animation: false, sceneModePicker: false, homeButton: false, navigationHelpButton: false,
+    fullscreenButton: false, infoBox: false, selectionIndicator: false,
+  });
+  viewer.scene.skyAtmosphere.show = false;       // hide Earth atmosphere (do NOT set =false: Cesium's
+                                                 // render loop calls skyAtmosphere.setDynamicLighting()
+                                                 // and `false` is "defined" -> TypeError. Keep the object.)
+  viewer.scene.globe.showGroundAtmosphere = false;
+  viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1a1a1a");
+  const lsel = document.getElementById("layer");          // populate the Layer dropdown for this body
+  lsel.innerHTML = "";
+  b.layers.forEach((L, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = L.name; lsel.appendChild(o); });
+  lsel.value = "0";
+  applyLayer(key, 0);
+  picked = null; marker = null;
+  flyTo(b.start[0], b.start[1], ellipsoid.maximumRadius * 1.65);   // frame the body larger (less empty black)
+
+  // click to pick a surface coordinate
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  handler.setInputAction((e) => {
+    const c = viewer.camera.pickEllipsoid(e.position, ellipsoid);
+    if (!c) return;
+    const carto = Cesium.Cartographic.fromCartesian(c, ellipsoid);
+    setPicked(Cesium.Math.toDegrees(carto.latitude), Cesium.Math.toDegrees(carto.longitude));
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+}
+
+function applyLayer(key, idx) {                            // swap the base imagery to the selected layer
+  const L = BODIES[key].layers[idx];
+  viewer.imageryLayers.removeAll();
+  const o = { url: L.url, maximumLevel: L.maxLevel, tileWidth: L.tile, tileHeight: L.tile, credit: L.credit };
+  if (L.geographic)   // Trek = equirectangular 2x1; Esri (Earth) uses the default WebMercator scheme
+    o.tilingScheme = new Cesium.GeographicTilingScheme({ numberOfLevelZeroTilesX: 2, numberOfLevelZeroTilesY: 1 });
+  viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider(o));
+}
+
+function flyTo(lat, lon, height) {
+  const h = height || ellipsoid.maximumRadius * 0.4;
+  viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat, h, ellipsoid), duration: 1.2 });
+}
+
+function setPicked(lat, lon) {
+  picked = { lat, lon };
+  document.getElementById("out").textContent = `picked  lat ${lat.toFixed(3)}°  lon ${lon.toFixed(3)}°`;
+  if (marker) viewer.entities.remove(marker);
+  marker = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, 0, ellipsoid),
+    point: { pixelSize: 11, color: Cesium.Color.CYAN, outlineColor: Cesium.Color.BLACK, outlineWidth: 2 },
+  });
+}
+
+// --- UI wiring -------------------------------------------------------------------------------
+const sel = document.getElementById("body");
+for (const [k, v] of Object.entries(BODIES)) {
+  const o = document.createElement("option"); o.value = k; o.textContent = v.name; sel.appendChild(o);
+}
+const $ = (id) => document.getElementById(id);
+
+// PHYSICS loaded from bodies.json (the sim's sysrev-sourced terrain_authority/bodies.py) -> single source
+// of truth. phys() prefers the loaded body terramechanics; falls back to embedded BODIES if the file
+// isn't served (e.g. file://). So choosing a body LOADS that body's correct terramechanics.
+let PHY = null;
+function phys(key) {
+  const p = PHY && PHY[key], b = BODIES[key];
+  return {
+    label: b.name,
+    g: p ? p.g : b.g,
+    density: p ? p.bulk_density : b.density,
+    cohesion_pa: p ? p.cohesion_pa : null,
+    friction_deg: p ? p.friction_deg : null,
+    bekker: p ? p.bekker : null,
+    regime: p ? p.bekker_regime : null,
+    confidence: p ? p.confidence : null,
+  };
+}
+function showTerra() {
+  const p = phys(sel.value);
+  const bk = p.bekker ? `Bekker kφ ${(p.bekker.k_phi / 1000).toFixed(0)}k·kc ${p.bekker.k_c}·n ${p.bekker.n}` : "Bekker —";
+  $("terra").textContent =
+    `terramechanics  g ${p.g} m/s² · ρ ${p.density} kg/m³`
+    + (p.cohesion_pa != null ? ` · c ${p.cohesion_pa} Pa` : "")
+    + (p.friction_deg != null ? ` · φ ${p.friction_deg}°` : "")
+    + ` · ${bk}` + (p.regime ? ` · ${p.regime}` : "") + (PHY ? "" : "  (fallback — serve bodies.json)");
+}
+
+// estimate the regolith a build order moves, using the SELECTED BODY's loaded terramechanics:
+// volume = footprint*depth; mass = volume*density; weight = mass*g; drum loads @30 kg;
+// excavation energy @4151 J/kg vs a 4.79 MJ battery charge; dig time @42 kg/hr.
+function estimate() {
+  const p = phys(sel.value);
+  const padW = +$("padW").value, padL = +$("padL").value, cut = +$("cut").value, bermH = +$("bermH").value;
+  const ix = ipex();                                       // IPEx constants (bodies.json _ipex, py source)
+  const cutVol = padW * padL * cut;                         // m^3
+  const cutMass = cutVol * p.density;                       // kg
+  const weightN = cutMass * p.g;                            // N (weight on THIS body)
+  const bermArea = bermH > 0 ? cutMass / (bermH * p.density) : 0;   // mass-balanced berm footprint [m^2]
+  const drumLoads = Math.ceil(cutMass / ix.drum_kg);
+  const energyJ = cutMass * ix.dig_j_per_kg;               // excavation energy (dominant term)
+  const charges = energyJ / ix.battery_j, hrs = cutMass / ix.dig_rate_kg_hr;
+  $("est").textContent =
+    `${cutVol.toFixed(0)} m³ = ${(cutMass / 1000).toFixed(1)} t (${(weightN / 1000).toFixed(0)} kN @ ${p.g}g) · ` +
+    `${drumLoads.toLocaleString()} drum loads · → ${bermArea.toFixed(0)} m² berm @ ${bermH} m · ` +
+    `${(energyJ / 1e6).toFixed(1)} MJ = ${charges.toFixed(1)} charges · ~${Math.round(hrs).toLocaleString()} h dig`;
+  return { body: sel.value, padW, padL, cut_m: cut, bermH_m: bermH, cutVol_m3: cutVol, cutMass_kg: cutMass,
+           weight_N: weightN, bermArea_m2: bermArea, drumLoads, energy_MJ: energyJ / 1e6,
+           batteryCharges: charges, digHours: hrs, terramechanics: p };
+}
+
+function showSiteDem() {                                   // auto-show the real Haworth 5 m work-area DEM on Moon
+  const wa = document.getElementById("workarea");
+  if (sel.value === "moon") { document.getElementById("workareaimg").src = "/dem/hillshade.png"; wa.classList.add("show"); }
+  else { wa.classList.remove("show"); }
+}
+sel.onchange = () => { loadBody(sel.value); showTerra(); estimate(); showSiteDem(); };
+$("layer").onchange = () => applyLayer(sel.value, +$("layer").value);   // swap imagery without reloading the body
+$("terrainfo").onclick = () => $("terra").classList.toggle("show");     // terramechanics on demand (updates per body)
+["padW", "padL", "cut", "bermH"].forEach((id) => $(id).addEventListener("input", estimate));
+$("go").onclick = () => {
+  const lat = parseFloat($("lat").value), lon = parseFloat($("lon").value);
+  if (!isNaN(lat) && !isNaN(lon)) { setPicked(lat, lon); flyTo(lat, lon); }
+};
+$("site").onclick = () => {
+  if (!picked) { $("out").textContent = "click the surface or enter a coord first"; return; }
+  const order = estimate();
+  // build-site spec handed to the sim's DEM loader / WorkSite realizer (next integration).
+  const spec = { body: sel.value, lat: picked.lat, lon: picked.lon, half_extent_km: 5, order };
+  $("out").textContent =
+    `BUILD SITE  ${BODIES[sel.value].name}  ${picked.lat.toFixed(3)}, ${picked.lon.toFixed(3)}  ` +
+    `→ ${(order.cutMass_kg / 1000).toFixed(1)} t, ${order.batteryCharges.toFixed(1)} charges`;
+  console.log("build_order", JSON.stringify(spec));
+  window.dispatchEvent(new CustomEvent("buildsite", { detail: spec }));
+};
+
+// ---- build queue -> POST /plan -> open the mission-control report -----------------------------
+// Orders are in the planner's LOCAL SITE FRAME (meters, charger at 0,0); the globe pick selects the
+// site, the queue places orders around it in meters (no fake lat/lon->meter projection). Planning
+// needs the server (fetch /plan): run `python3 server.py` and open the printed URL.
+const ORDERS = [];
+const qel = (id) => document.getElementById(id);
+const setQ = (m) => { qel("qstatus").textContent = m; };
+function mkbtn(t, fn) { const b = document.createElement("button"); b.textContent = t; b.onclick = fn; return b; }
+function moveOrder(i, d) {
+  const j = i + d; if (j < 0 || j >= ORDERS.length) return;
+  [ORDERS[i], ORDERS[j]] = [ORDERS[j], ORDERS[i]]; renderQueue();
+}
+function renderQueue() {
+  const ol = qel("qlist"); ol.innerHTML = "";
+  ORDERS.forEach((o, i) => {
+    const li = document.createElement("li");
+    const g = document.createElement("span"); g.className = "g";
+    g.textContent = `${o.kind} ${o.action || ""} (${o.x},${o.y}) ${o.footprint_m2}m²×${o.depth_m}m`;
+    li.append(`${i + 1}.`, g, mkbtn("▲", () => moveOrder(i, -1)), mkbtn("▼", () => moveOrder(i, 1)),
+              mkbtn("✕", () => { ORDERS.splice(i, 1); renderQueue(); }));
+    ol.appendChild(li);
+  });
+  setQ(ORDERS.length ? `${ORDERS.length} order(s) queued` : "queue empty");
+}
+function addOrder(o) { ORDERS.push(o); renderQueue(); }
+qel("qadd").onclick = () => addOrder({
+  action: qel("qlabel").value || (qel("qkind").value === "cut" ? "Cut" : "Fill"),
+  kind: qel("qkind").value, x: +qel("qx").value, y: +qel("qy").value,
+  footprint_m2: +qel("qfoot").value, depth_m: +qel("qdepth").value,
+});
+qel("qfrompad").onclick = () => {                          // convenience: pad estimator -> a cut + a balanced fill
+  const padW = +$("padW").value, padL = +$("padL").value, cut = +$("cut").value, bermH = +$("bermH").value;
+  const x = +qel("qx").value, y = +qel("qy").value, p = phys(sel.value);
+  addOrder({ action: "Pad cut", kind: "cut", x, y, footprint_m2: padW * padL, depth_m: cut });
+  if (bermH > 0) {
+    const mass = padW * padL * cut * p.density;
+    addOrder({ action: "Berm fill", kind: "fill", x: x + 10, y: y + 10,
+               footprint_m2: +(mass / (bermH * p.density)).toFixed(1), depth_m: bermH });
+  }
+};
+qel("qstruct").onclick = async () => {                     // place a named structure -> mass-balanced orders (P2)
+  try {
+    const res = await fetch("/structure", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: qel("struct").value, x: +qel("qx").value, y: +qel("qy").value }) });
+    const j = await res.json();
+    if (!j.ok) { setQ("structure error: " + j.error); return; }
+    j.orders.forEach(addOrder);
+    setQ(`added ${j.orders.length} order(s) from ${qel("struct").value}`);
+  } catch (e) { setQ("structure failed — run server.py (" + e + ")"); }
+};
+// precedence text "Grade road > Build berm, Dig pit > Fill" -> [[before, after], ...] (I9)
+function parsePrec() {
+  return (qel("qprec").value || "").split(",").map(s => s.trim()).filter(Boolean)
+    .map(s => s.split(">").map(x => x.trim())).filter(p => p.length === 2 && p[0] && p[1]);
+}
+qel("qplan").onclick = async () => {
+  if (!ORDERS.length) { setQ("add at least one order first"); return; }
+  setQ("planning…");
+  try {
+    const res = await fetch("/plan", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: `${BODIES[sel.value].name} build`, body: sel.value, charger: [0, 0],
+        orders: ORDERS, algorithm: qel("qalgo").value, objective: qel("qobj").value, precedence: parsePrec() }) });
+    const j = await res.json();
+    if (!j.ok) { setQ("error: " + j.error); return; }
+    const t = j.totals;
+    const v = j.validation || {};
+    const vtag = v.feasible ? " · ✓ authority-validated" : (v.mass_conserved !== undefined ? " · ⚠ infeasible" : "");
+    // I10: hauls routed around real-DEM hazards — show detour over straight lines + any blocked legs
+    const rtag = t.routed_haul ? ` · haul +${(t.haul_detour_frac * 100).toFixed(1)}% around hazards`
+                 + (t.blocked_legs ? ` (⚠ ${t.blocked_legs} blocked)` : "") : "";
+    // show the chosen algorithm (resolved, if 'auto') + objective + any precedence honored
+    const atag = ` · ${t.algorithm === t.resolved_algorithm ? t.algorithm : t.algorithm + "→" + t.resolved_algorithm}`
+      + `/${t.objective}` + (t.n_precedence ? ` · ${t.n_precedence} precedence` : "");
+    // single-charge range ("true distance before recharge"): slope+slip-adjusted if a DEM was used
+    const e = j.endurance || {};
+    const erng = e.range_slopeslip_km != null ? e.range_slopeslip_km : e.range_flat_reserve_km;
+    const etag = erng != null ? ` · range ${erng.toFixed(0)} km/charge` : "";
+    setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
+         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${vtag}`);
+    LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
+    LAST_ORDERS = ORDERS.slice();
+    qel("qexec").disabled = !LAST_TIMELINE;
+    window.open(j.pdf, "_blank");                          // open the mission-control PDF
+  } catch (e) { setQ("plan failed. start the server: python3 server.py  (" + e + ")"); }
+};
+
+// ---- P5: execute + watch — animate the planned timeline top-down with a telemetry HUD ----------
+let LAST_TIMELINE = null, LAST_ORDERS = [], EXEC_RAF = 0;
+const EXEC_SPEEDUP = 60;                                   // sim seconds per wall-clock second (shown in cap)
+function execExtent(tl, orders) {
+  // world bounds covering the charger, every order site, and every route waypoint -> canvas transform
+  const xs = [tl.charger[0]], ys = [tl.charger[1]];
+  orders.forEach(o => { xs.push(o.x); ys.push(o.y); });
+  tl.frames.forEach(f => { xs.push(f.x0, f.x1); ys.push(f.y0, f.y1); });
+  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const padx = Math.max(5, (x1 - x0) * 0.12), pady = Math.max(5, (y1 - y0) * 0.12);
+  return { x0: x0 - padx, x1: x1 + padx, y0: y0 - pady, y1: y1 + pady };
+}
+function execDraw(tl, orders, ext, cv, simT) {
+  const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+  const sx = W / (ext.x1 - ext.x0), sy = H / (ext.y1 - ext.y0), s = Math.min(sx, sy);
+  const ox = (W - s * (ext.x1 - ext.x0)) / 2, oy = (H - s * (ext.y1 - ext.y0)) / 2;
+  const X = wx => ox + (wx - ext.x0) * s, Y = wy => H - (oy + (wy - ext.y0) * s);   // y up
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#05060c"; ctx.fillRect(0, 0, W, H);
+  // order footprints (cut = blue, fill = orange) as squares sized by area
+  orders.forEach(o => {
+    const half = Math.sqrt(o.footprint_m2) / 2 * s;
+    ctx.fillStyle = o.kind === "cut" ? "rgba(79,156,255,.28)" : "rgba(224,123,57,.28)";
+    ctx.strokeStyle = o.kind === "cut" ? "#4f9cff" : "#e07b39"; ctx.lineWidth = 1;
+    ctx.fillRect(X(o.x) - half, Y(o.y) - half, half * 2, half * 2);
+    ctx.strokeRect(X(o.x) - half, Y(o.y) - half, half * 2, half * 2);
+  });
+  // driven route so far (solid) + remaining (faint)
+  ctx.lineWidth = 1.5;
+  tl.frames.forEach(f => {
+    if (f.phase !== "drive") return;
+    const done = simT >= f.t1;
+    ctx.strokeStyle = done ? "#6ee7a8" : "rgba(110,231,168,.25)";
+    ctx.beginPath(); ctx.moveTo(X(f.x0), Y(f.y0)); ctx.lineTo(X(f.x1), Y(f.y1)); ctx.stroke();
+  });
+  // charger
+  ctx.fillStyle = "#ffd166"; ctx.beginPath(); ctx.arc(X(tl.charger[0]), Y(tl.charger[1]), 4, 0, 7); ctx.fill();
+  // rover marker at the interpolated position for simT
+  const fr = tl.frames.find(f => simT >= f.t0 && simT <= f.t1) || tl.frames[tl.frames.length - 1];
+  const u = fr.t1 > fr.t0 ? (simT - fr.t0) / (fr.t1 - fr.t0) : 1;
+  const rx = fr.x0 + (fr.x1 - fr.x0) * u, ry = fr.y0 + (fr.y1 - fr.y0) * u;
+  ctx.fillStyle = fr.phase === "charge" ? "#ffd166" : fr.phase === "dig" ? "#e07b39" : "#fff";
+  ctx.beginPath(); ctx.arc(X(rx), Y(ry), 5, 0, 7); ctx.fill();
+  ctx.strokeStyle = "#0b0e17"; ctx.lineWidth = 1.5; ctx.stroke();
+  return fr;
+}
+function runExecution() {
+  const tl = LAST_TIMELINE; if (!tl || !tl.frames.length) return;
+  cancelAnimationFrame(EXEC_RAF);
+  qel("execview").classList.add("show");
+  qel("execspeed").textContent = ` ${EXEC_SPEEDUP}×`;
+  const cv = qel("execcanvas"), ext = execExtent(tl, LAST_ORDERS);
+  const dur = tl.duration_s; let simT = 0, prevWall = null;
+  const fmtT = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h ${m}m`; };
+  function frame(now) {
+    if (prevWall === null) prevWall = now;
+    simT += (now - prevWall) / 1000 * EXEC_SPEEDUP; prevWall = now;
+    if (simT > dur) simT = dur;
+    const fr = execDraw(tl, LAST_ORDERS, ext, cv, simT);
+    qel("excphase").textContent = fr.phase;
+    qel("exctime").textContent = `${fmtT(simT)} / ${fmtT(dur)}`;
+    const u = fr.t1 > fr.t0 ? (simT - fr.t0) / (fr.t1 - fr.t0) : 1;
+    qel("excpos").textContent = `${(fr.x0 + (fr.x1 - fr.x0) * u).toFixed(0)}, ${(fr.y0 + (fr.y1 - fr.y0) * u).toFixed(0)} m`;
+    qel("excmass").textContent = `${(fr.cum_mass_kg / 1000).toFixed(2)} t`;
+    const bf = fr.batt0_frac + (fr.batt1_frac - fr.batt0_frac) * u;
+    qel("excbattfill").style.width = `${Math.max(0, bf * 100).toFixed(0)}%`;
+    qel("excbattfill").style.background = bf < 0.2 ? "#e0564b" : "var(--accent)";
+    qel("excbattlbl").textContent = `${(bf * 100).toFixed(0)}%`;
+    if (simT < dur) EXEC_RAF = requestAnimationFrame(frame);
+    else qel("excphase").textContent = "complete";
+  }
+  EXEC_RAF = requestAnimationFrame(frame);
+}
+qel("qexec").onclick = runExecution;
+qel("execclose").onclick = () => { cancelAnimationFrame(EXEC_RAF); qel("execview").classList.remove("show"); };
+
+// ---- compare algorithms: POST /compare -> a table sorted by the chosen objective --------------
+qel("qcompare").onclick = async () => {
+  if (!ORDERS.length) { setQ("add at least one order first"); return; }
+  const obj = qel("qobj").value;
+  setQ(`comparing algorithms by ${obj}…`);
+  try {
+    const res = await fetch("/compare", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "compare", body: sel.value, charger: [0, 0], orders: ORDERS, objective: obj, precedence: parsePrec() }) });
+    const j = await res.json();
+    if (!j.ok) { setQ("compare error: " + j.error); return; }
+    const fmt = { time_s: v => (v / 3600).toFixed(1) + " h", energy_J: v => (v / 1e6).toFixed(1) + " MJ",
+      avg_power_w: v => v.toFixed(0) + " W", distance_m: v => (v / 1000).toFixed(2) + " km",
+      charges: v => v.toFixed(0), mass_kg: v => (v / 1000).toFixed(1) + " t" };
+    const cols = ["algorithm", "time_s", "energy_J", "avg_power_w", "distance_m", "charges", "mass_kg"];
+    const head = "<tr>" + cols.map(c => `<th style="text-align:left;color:var(--muted)">${c.replace('_s','').replace('_J','').replace('_w','').replace('_m','').replace('_kg','')}</th>`).join("") + "</tr>";
+    const rows = j.rows.map((r, i) => "<tr>" + cols.map(c => {
+      if (c === "algorithm") return `<td><b>${r.algorithm}${i === 0 ? " ★" : ""}${r.pareto ? " ⬩" : ""}</b></td>`;
+      return `<td>${r.error ? "—" : fmt[c](r[c])}</td>`;
+    }).join("") + "</tr>").join("");
+    const t = qel("cmptable"); t.innerHTML = head + rows; t.style.display = "table";
+    setQ(`compared ${j.rows.length} algorithms by ${obj} (★ best, ⬩ Pareto-optimal); pick one in the dropdown to plan it`);
+  } catch (e) { setQ("compare failed — run server.py (" + e + ")"); }
+};
+
+// ---- drum-fill sensing: POST /sense (motor-current observable -> inferred mass + offload) ------
+// The "sensor noise" checkbox is the noise toggle: unchecked = OFF (deterministic), checked = seeded.
+async function senseDrum() {
+  const kg = +qel("drumkg").value, noise = qel("drumnoise").checked ? 0.15 : 0.0;
+  try {
+    const res = await fetch("/sense", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ true_mass_kg: kg, noise_frac: noise, seed: 1 }) });
+    const j = await res.json();
+    if (!j.ok) { qel("drumout").textContent = "error: " + j.error; return; }
+    qel("drumout").textContent =
+      `${j.current_a.toFixed(2)} A → inferred ${j.inferred_kg.toFixed(1)} kg `
+      + `±${(j.uncertainty_frac * 100).toFixed(1)}% (${j.lower_kg.toFixed(1)}–${j.upper_kg.toFixed(1)}) `
+      + (j.offload ? "· OFFLOAD → process" : "· keep digging");
+  } catch (e) { qel("drumout").textContent = "— start the server: python3 server.py"; }
+}
+["drumkg", "drumnoise"].forEach((id) => qel(id).addEventListener("input", senseDrum));
+
+// load the py-generated terramechanics + IPEx constants (single source); graceful on file://
+fetch("bodies.json").then((r) => (r.ok ? r.json() : null)).then((d) => {
+  if (d) { PHY = d; showTerra(); estimate(); }
+}).catch(() => {});
+senseDrum();
+
+window.addEventListener("resize", () => { if (viewer) viewer.resize(); });  // globe follows window size
+
+loadBody("moon"); estimate(); renderQueue(); showSiteDem();
+</script>
+</body>
+</html>

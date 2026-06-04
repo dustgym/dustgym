@@ -28,9 +28,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Optional, Sequence
 
+import numpy as np
+
+import eval_schema as es
+import score_map as sm
 import score_pose
 import synthetic_feed as sf
 
@@ -54,6 +59,60 @@ def run_synthetic(scene_dir: str, cfg: sf.NoiseConfig) -> dict:
         "trajectory": scorecard.to_dict(),
         "n_truth_samples": len(truth),
     }
+
+
+def _load_heightfield(path: str) -> np.ndarray:
+    """Load a heightfield [m] from a .npy file or a scene bundle dir (metadata.json + heightmap.rf32).
+
+    This is the REAL-data ingress for the map channel: the observed map comes from a producer or a real
+    DEM file you supply -- nothing is synthesised here.
+    """
+    if os.path.isdir(path):
+        with open(os.path.join(path, "metadata.json"), "r", encoding="utf-8") as fh:
+            g = json.load(fh)["grid"]
+        z = np.fromfile(os.path.join(path, "heightmap.rf32"), dtype="<f4")
+        return z.reshape(int(g["height"]), int(g["width"])).astype(np.float64)
+    if path.endswith(".npy"):
+        return np.load(path).astype(np.float64)
+    raise ValueError(f"unrecognised heightfield path (want a .npy file or a bundle dir): {path}")
+
+
+def run_map(
+    truth, observed, *, tol_m: float = 0.10, valid_mask=None,
+    truth_rocks=None, observed_rocks=None,
+) -> dict:
+    """Score the MAP channel for a SUPPLIED observed-vs-truth heightfield pair (the producer-independent
+    entry point: you bring a real observed map -- from a producer or a real DEM -- and this harness
+    fabricates none).  Report-only.  The returned Scorecard zeroes the pose channel (a different channel)
+    and carries the non-null map metrics; the two are never summed.
+    """
+    metrics = sm.score_map(observed, truth, tol_m=tol_m, valid_mask=valid_mask,
+                           truth_rocks=truth_rocks, observed_rocks=observed_rocks)
+    sc = es.Scorecard(pose_rmse_trans_mm=0.0, pose_rmse_yaw_deg=0.0, ate_mm=0.0, n_frames=0,
+                      map_rmse_m=metrics["map_rmse_m"], map_cell_pass_frac=metrics["map_cell_pass_frac"],
+                      rock_f1=metrics["rock_f1"])
+    return {"mode": "map", "report_only": True, "tol_m": float(tol_m),
+            "shape": list(np.asarray(truth).shape), "scorecard": sc.to_dict()}
+
+
+def _print_map_report(report: dict, out_path: Optional[str]) -> None:
+    """Emit the map-channel Scorecard JSON to stdout (+ --out); context to stderr (mirrors pose report)."""
+    sc_json = json.dumps(report["scorecard"], indent=2)
+    print(sc_json)
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write(sc_json + "\n")
+    sc = report["scorecard"]
+    print("", file=sys.stderr)
+    print("=== Lane-C MAP scorer (REPORT-ONLY; no pass/fail, no threshold) ===", file=sys.stderr)
+    print(f"  shape       : {report['shape']}  | tol_m: {report['tol_m']}", file=sys.stderr)
+    print("  --- map channel (observed vs truth-at-t; never summed with pose) ---", file=sys.stderr)
+    print(f"    map_rmse_m         : {sc['map_rmse_m']}", file=sys.stderr)
+    print(f"    map_cell_pass_frac : {sc['map_cell_pass_frac']}", file=sys.stderr)
+    print(f"    rock_f1            : {sc['rock_f1']}", file=sys.stderr)
+    print("  NOTE: this scores a SUPPLIED observed map; the live producer (stereo-depth/SLAM -> "
+          "heightfield) needs the Godot/sensor track and is not in this repo.", file=sys.stderr)
+    print("==================================================================", file=sys.stderr)
 
 
 def _print_report(report: dict, out_path: Optional[str]) -> None:
@@ -101,8 +160,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--synthetic", action="store_true", default=True,
         help="synthetic mode (DEFAULT and currently only mode): seeded estimate vs lifted truth")
     ap.add_argument(
-        "--scene", required=True,
-        help="scene dir under samples/ (e.g. samples/tread_track_4wheel)")
+        "--scene", default=None,
+        help="scene dir under samples/ (e.g. samples/tread_track_4wheel) -- pose channel")
+    ap.add_argument(
+        "--map-truth", default=None,
+        help="MAP channel: true-terrain heightfield (.npy or a bundle dir); pair with --map-observed")
+    ap.add_argument(
+        "--map-observed", default=None,
+        help="MAP channel: observed/reconstructed heightfield (.npy or a bundle dir)")
+    ap.add_argument("--map-tol-m", type=float, default=0.10,
+                    help="MAP channel cell-pass tolerance in m (default 0.10)")
     ap.add_argument("--out", default=None,
                     help="optional path to also write the trajectory Scorecard JSON")
     ap.add_argument("--seed", type=int, default=sf.DEFAULT_SEED,
@@ -119,6 +186,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_arg_parser().parse_args(argv)
+    if args.map_truth or args.map_observed:                  # MAP channel: score a supplied DEM pair
+        if not (args.map_truth and args.map_observed):
+            print("error: --map-truth and --map-observed must be given together", file=sys.stderr)
+            return 2
+        report = run_map(_load_heightfield(args.map_truth), _load_heightfield(args.map_observed),
+                         tol_m=args.map_tol_m)
+        _print_map_report(report, args.out)
+        return 0
+    if not args.scene:
+        print("error: --scene is required for the pose channel (or use --map-truth/--map-observed)",
+              file=sys.stderr)
+        return 2
     cfg = sf.NoiseConfig(
         sigma_trans_m=args.sigma_trans_m,
         sigma_yaw_rad=args.sigma_yaw_rad,
