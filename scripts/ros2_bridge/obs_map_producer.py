@@ -128,6 +128,71 @@ def grid_to_heightfield(points_world: np.ndarray, grid: dict, agg: str = "median
     return np.where(valid_mask, obs, 0.0), valid_mask
 
 
+# Single-view cells get this prior height-sigma (the measured passive-stereo 1-sigma floor at the
+# rover's grazing eye-height); multi-view cells get the empirical standard error of the mean instead.
+PRIOR_SIGMA_M = 0.30
+
+
+def grid_to_heightfield_uncertainty(points_world: np.ndarray, grid: dict, agg: str = "median"):
+    """Like grid_to_heightfield, but also returns a per-cell height UNCERTAINTY field + observation count.
+
+    Returns (obs HxW, sigma HxW, count HxW int, mask HxW bool). For a cell with n>=2 back-projected
+    points, sigma is the standard error of the mean height (std/sqrt(n)) -- the uncertainty of the
+    cell's height ESTIMATE, which falls as more views accumulate. A cell with one point gets the
+    PRIOR_SIGMA_M floor; unobserved cells are masked (sigma left at inf). This is the world model's
+    Uncertainty layer per-cell height_uncertainty[x,y]; the planner gates digging on it.
+    """
+    W = int(grid["width"])
+    H = int(grid["height"])
+    cell = float(grid["cell_m"])
+    x0 = float(grid["x0"])
+    y0 = float(grid["y0"])
+    gx, gy, gz = points_world[:, 0], points_world[:, 1], points_world[:, 2]
+    col = np.floor((gx - x0) / cell).astype(np.int64)
+    row = np.floor((gz - y0) / cell).astype(np.int64)
+    inb = (col >= 0) & (col < W) & (row >= 0) & (row < H)
+    row, col, gy = row[inb], col[inb], gy[inb]
+    obs = np.zeros((H, W))
+    sigma = np.full((H, W), np.inf)
+    count = np.zeros((H, W), dtype=np.int64)
+    if row.size == 0:
+        return obs, sigma, count, np.zeros((H, W), dtype=bool)
+    flat = row * W + col
+    order = np.argsort(flat, kind="stable")
+    flat_s, gy_s = flat[order], gy[order]
+    uniq, starts = np.unique(flat_s, return_index=True)
+    ends = np.r_[starts[1:], flat_s.size]
+    reducer = np.median if agg == "median" else np.max
+    for cellflat, a, b in zip(uniq, starts, ends):
+        r, c = divmod(int(cellflat), W)
+        vals = gy_s[a:b]
+        n = vals.size
+        obs[r, c] = reducer(vals)
+        count[r, c] = n
+        sigma[r, c] = float(np.std(vals) / np.sqrt(n)) if n >= 2 else PRIOR_SIGMA_M
+    mask = count > 0
+    return obs, sigma, count, mask
+
+
+def produce_uncertainty_map(egress_dirs, grid: dict):
+    """Accumulate stations -> (obs, sigma, count, mask): the observed heightfield + per-cell height
+    uncertainty + observation count. The Uncertainty layer of the world model."""
+    pts = [collect_world_points(d) for d in egress_dirs]
+    pts = [p for p in pts if p.size]
+    if not pts:
+        W, H = int(grid["width"]), int(grid["height"])
+        return (np.zeros((H, W)), np.full((H, W), np.inf), np.zeros((H, W), dtype=np.int64),
+                np.zeros((H, W), dtype=bool))
+    return grid_to_heightfield_uncertainty(np.concatenate(pts, axis=0), grid)
+
+
+def dig_ready_mask(sigma: np.ndarray, mask: np.ndarray, tol_m: float = 0.10):
+    """Cells confident enough to act on: observed AND height-sigma below tol. The 'need more
+    observations before digging' gate -- its complement (observed-but-uncertain, or unobserved) is
+    where the planner should look before committing."""
+    return mask & (sigma <= tol_m)
+
+
 def grid_from_metadata(meta_path: str) -> dict:
     """Build the grid dict from a scene metadata.json (INTERFACE.md layout)."""
     m = json.load(open(meta_path))

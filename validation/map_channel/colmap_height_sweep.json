@@ -1,0 +1,39 @@
+[
+  {
+    "registered": 2,
+    "height_m": 0.5
+  },
+  {
+    "registered": 12,
+    "n_images": 18,
+    "n_points3D": 518,
+    "mean_reproj_px": 0.5462145190354188,
+    "align_rmse_m": 0.012759218682075848,
+    "coverage": 0.00665283203125,
+    "map_rmse_m": 0.044148684705829735,
+    "cell_pass_frac": 0.9770642201834863,
+    "height_m": 1.0
+  },
+  {
+    "registered": 18,
+    "n_images": 18,
+    "n_points3D": 1617,
+    "mean_reproj_px": 0.46399798252134156,
+    "align_rmse_m": 0.022690082621946595,
+    "coverage": 0.0205078125,
+    "map_rmse_m": 0.04013587412061271,
+    "cell_pass_frac": 0.984375,
+    "height_m": 1.5
+  },
+  {
+    "registered": 18,
+    "n_images": 18,
+    "n_points3D": 2295,
+    "mean_reproj_px": 0.4816812477006082,
+    "align_rmse_m": 0.006329249694440315,
+    "coverage": 0.0292816162109375,
+    "map_rmse_m": 0.03839722312480086,
+    "cell_pass_frac": 0.9708181344450234,
+    "height_m": 2.6
+  }
+]

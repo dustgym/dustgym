@@ -126,6 +126,40 @@ def fig_vslam_features(frame_path, out):
     plt.close(fig)
 
 
+def fig_uncertainty(stations, scene, out):
+    """The world model's Uncertainty layer: observed height | per-cell height sigma | dig-ready gate."""
+    grid = omp.grid_from_metadata(os.path.join(scene, "metadata.json"))
+    obs, sigma, count, mask = omp.produce_uncertainty_map(stations, grid)
+    ready = omp.dig_ready_mask(sigma, mask, tol_m=0.10)
+    obs_show = np.where(mask, obs, np.nan)
+    sig_show = np.where(mask, np.minimum(sigma, omp.PRIOR_SIGMA_M), np.nan)
+
+    fig, ax = plt.subplots(1, 3, figsize=(13, 4.4))
+    im0 = ax[0].imshow(obs_show, cmap="terrain")
+    ax[0].set_title("Observed height (rover stereo)")
+    ax[0].set_facecolor("0.85")
+    fig.colorbar(im0, ax=ax[0], fraction=0.046, label="elevation [m]")
+    im1 = ax[1].imshow(sig_show, cmap="magma_r", vmin=0.0, vmax=omp.PRIOR_SIGMA_M)
+    ax[1].set_title("Per-cell height uncertainty (1σ)\nstd-error of the mean; single-view = prior 0.30 m")
+    ax[1].set_facecolor("0.85")
+    fig.colorbar(im1, ax=ax[1], fraction=0.046, label="sigma [m]")
+    # green = dig-ready (observed + sigma < 0.10 m), red = observed but uncertain, grey = unobserved
+    gate = np.full(mask.shape + (3,), 0.85)
+    gate[mask & ~ready] = (0.85, 0.3, 0.3)
+    gate[ready] = (0.2, 0.7, 0.3)
+    ax[2].imshow(gate)
+    ax[2].set_title(f"Dig-ready gate (σ < 0.10 m)\n"
+                    f"green {int(ready.sum())} ready · red {int((mask & ~ready).sum())} observe-more")
+    for a in ax:
+        a.set_xticks([])
+        a.set_yticks([])
+    fig.suptitle("World model Uncertainty layer: gate digging on per-cell confidence "
+                 "(real rover-stereo render, crater_boulders)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(os.path.join(out, "uncertainty_layer.png"), dpi=130)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--drive", required=True)
@@ -138,5 +172,6 @@ if __name__ == "__main__":
     sc, cov = fig_observed_vs_truth(st, args.scene, args.out)
     fig_levers(st, args.scene, args.out)
     fig_vslam_features(args.frame, args.out)
-    print(f"wrote 3 figures to {args.out}  "
+    fig_uncertainty(st, args.scene, args.out)
+    print(f"wrote 4 figures to {args.out}  "
           f"(coverage {cov*100:.1f}%, RMSE {sc['map_rmse_m']:.3f} m)")
