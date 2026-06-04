@@ -122,8 +122,15 @@ Package surface: the conserved physics-side layers ship in the installed **dustg
 `samples` from either the standalone `roversim/` sibling or the monorepo root, so the app runs from the
 installed package in both trees.
 
-Next, in order: (1) dense MVS to fill the ground-tier coverage (CUDA-gated today); (2) the learned
-perception model (JEPA or RSSM over the cheap headless rollouts) for active perception -- the one genuinely
-learned component this architecture calls for -- using the observed-map RMSE / coverage as the reward; (3)
-thread the per-cell Material into the Bekker `k_phi` sinkage too (cohesion/phi are threaded; `k_phi`
-sinkage still uses the density-stiffening factor, not the full per-cell material).
+The active-perception REWARD is now an env: **`Dust/ActivePerception-v0`** (`active_perception_env.py`) is
+next-best-view mapping where the agent drives to reduce per-cell uncertainty per joule -- the map channel /
+Uncertainty layer as the RL reward, grounded in the measured stereo sigma (range-dependent, Z^2 falloff)
+and the ipex drive energy, over real authority fbm terrain. A greedy next-best-view policy maps to
+sigma 0.37 vs random 1.23 for less energy (`validation/active_perception/`). This is the env the learned
+perception world model trains in.
+
+Next, in order: (1) the learned perception model (JEPA or RSSM) trained in `Dust/ActivePerception-v0` --
+the one genuinely learned component this architecture calls for -- to beat the greedy next-best-view
+baseline by predicting where observing pays off; (2) dense MVS to fill the ground-tier coverage
+(CUDA-gated today); (3) thread the per-cell Material into the Bekker `k_phi` sinkage too (cohesion/phi are
+threaded; `k_phi` sinkage still uses the density-stiffening factor, not the full per-cell material).
