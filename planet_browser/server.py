@@ -19,6 +19,7 @@ import shutil
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import autonomy as AUT
 import mission_planner as MP
 import structures as ST
 
@@ -57,6 +58,40 @@ def _moon_dem():
         except Exception:
             _MOON_DEM = (None, (0.0, 0.0))
     return _MOON_DEM
+
+
+def _autonomy_perception(mission, dem, origin, algorithm, objective):
+    """Fold the closed-loop autonomy + the AutoNav estimation (perception) uncertainty into /plan.
+
+    Runs the conserved-model closed loop (plan -> execute -> estimate -> replan) once. The `autonomy`
+    block summarizes the controller (recharges/replans/completion + the true-vs-budgeted energy the slip
+    truth forces); the `perception` block is the rover's onboard ESTIMATE confidence (pose sigma grows by
+    dead-reckoning, drum-fill sigma from the FDC mass-inference model, energy sigma from model error).
+    Additive: any failure returns (None, None) so the report still goes out."""
+    try:
+        cl = AUT.run_closed_loop(mission, dem=dem, dem_origin=origin, algorithm=algorithm, objective=objective)
+    except Exception:                                  # noqa: BLE001 -- autonomy is additive, never break /plan
+        return None, None
+    b, legs = cl["belief"], cl["legs"]
+    nominal = sum(leg["nominal_J"] for leg in legs)
+    true = sum(leg["true_J"] for leg in legs)
+    autonomy = {
+        "completed": cl["completed"], "n_trips": cl["n_trips"], "n_legs": len(legs),
+        "recharges": cl["recharges"], "replans": cl["replans"],
+        "final_soc": round(b.soc_frac(), 3),
+        "max_slip": round(max((leg["slip"] for leg in legs), default=0.0), 3),
+        "true_vs_nominal_energy": round(true / nominal, 3) if nominal else None,
+    }
+    leg_e_sig = max((leg["energy_sigma_J"] for leg in legs), default=0.0)
+    perception = {
+        "pose_sigma_m": round(b.pos_sigma_m, 2),               # dead-reckoning growth over the traverse
+        "energy_model_sigma_J": round(leg_e_sig, 1),           # slip model-error 1-sigma carried per leg
+        "drum_fill_uncertainty_pct": 7.4,                      # FDC mass-inference MPE (2.56% >half full, 7.40% over range)
+        "note": ("AutoNav onboard estimate: pose sigma grows by dead-reckoning; drum-fill uncertainty from the "
+                 "FDC mass-inference model; the observed-map RMSE needs a render (see /render)."),
+    }
+    return autonomy, perception
+
 
 _CTYPE = {".html": "text/html; charset=utf-8", ".json": "application/json",
           ".pdf": "application/pdf", ".md": "text/markdown; charset=utf-8",
@@ -138,6 +173,7 @@ class Handler(BaseHTTPRequestHandler):
             timeline = MP.build_timeline(mission, dem=dem, dem_origin=origin,   # P5: execute + watch
                                          algorithm=algorithm, objective=objective)
             endurance = MP.endurance(mission, dem=dem, dem_origin=origin)       # single-charge range
+            autonomy, perception = _autonomy_perception(mission, dem, origin, algorithm, objective)
         except (ValueError, RuntimeError) as e:            # bad input / sinter-gated -> honest 400
             return self._send_json(400, {"ok": False, "error": str(e)})
         return self._send_json(200, {
@@ -148,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
             "validation": validation,
             "timeline": timeline,
             "endurance": endurance,
+            "autonomy": autonomy,           # closed-loop controller summary (recharges / replans / completion)
+            "perception": perception,       # AutoNav onboard estimate uncertainty (pose / drum-fill / energy sigma)
         })
 
     def _render(self, payload):
