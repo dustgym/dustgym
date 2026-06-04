@@ -68,8 +68,9 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
     truth forces); the `perception` block is the rover's onboard ESTIMATE confidence (pose sigma grows by
     dead-reckoning, drum-fill sigma from the FDC mass-inference model, energy sigma from model error).
     Additive: any failure returns (None, None) so the report still goes out."""
-    try:
-        cl = AUT.run_closed_loop(mission, dem=dem, dem_origin=origin, algorithm=algorithm, objective=objective)
+    try:                                               # perception-in-the-loop ON: a SLAM/map pose fix per leg
+        cl = AUT.run_closed_loop(mission, dem=dem, dem_origin=origin, algorithm=algorithm,
+                                 objective=objective, perception_sigma_m=0.10)
     except Exception:                                  # noqa: BLE001 -- autonomy is additive, never break /plan
         return None, None
     b, legs = cl["belief"], cl["legs"]
@@ -78,17 +79,22 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
     autonomy = {
         "completed": cl["completed"], "n_trips": cl["n_trips"], "n_legs": len(legs),
         "recharges": cl["recharges"], "replans": cl["replans"],
+        "perception_fixes": cl["perception_fixes"], "observe_more": cl["observe_more"],
         "final_soc": round(b.soc_frac(), 3),
         "max_slip": round(max((leg["slip"] for leg in legs), default=0.0), 3),
         "true_vs_nominal_energy": round(true / nominal, 3) if nominal else None,
     }
     leg_e_sig = max((leg["energy_sigma_J"] for leg in legs), default=0.0)
     perception = {
-        "pose_sigma_m": round(b.pos_sigma_m, 2),               # dead-reckoning growth over the traverse
+        "pose_sigma_m": round(b.pos_sigma_m, 2),               # BOUNDED by the per-leg map/landmark fixes
+        "map_fixes": cl["perception_fixes"],                   # pose corrections fused into the belief
+        "observe_more_before_dig": cl["observe_more"],         # Uncertainty-layer dig-ready gate firings
+        "fix_sigma_m": 0.10,                                   # SLAM/map-match fix precision (AprilTag 12.7 mm best-case)
         "energy_model_sigma_J": round(leg_e_sig, 1),           # slip model-error 1-sigma carried per leg
         "drum_fill_uncertainty_pct": 7.4,                      # FDC mass-inference MPE (2.56% >half full, 7.40% over range)
-        "note": ("AutoNav onboard estimate: pose sigma grows by dead-reckoning; drum-fill uncertainty from the "
-                 "FDC mass-inference model; the observed-map RMSE needs a render (see /render)."),
+        "note": ("perception-in-the-loop: a map/landmark pose fix per leg bounds the dead-reckoning drift, "
+                 "and the dig-ready gate observes more before digging when the pose estimate is uncertain. "
+                 "The dense observed-map RMSE still needs a render (see /render)."),
     }
     return autonomy, perception
 

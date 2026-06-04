@@ -120,3 +120,18 @@ def test_true_drain_never_below_nominal_and_uncertainty_grows():
     # legitimately reset to 0 by a full recharge, so it's not a reliable end-of-run signal.
     assert r["belief"].pos_sigma_m > 0.0
     assert max(L["energy_sigma_J"] for L in r["legs"]) > 0.0    # energy uncertainty WAS carried in the loop
+
+
+def test_perception_in_the_loop_bounds_pose_uncertainty():
+    # with a per-leg map/landmark pose fix, the dead-reckoning drift is BOUNDED (vs growing without it),
+    # and the result stays below the dig-ready gate. Perception is now folded into the loop.
+    import autonomy as A
+    dem = MP.load_haworth_dem()
+    o = MP.flattest_anchor(dem)
+    off = A.run_closed_loop(_spread(), dem=dem, dem_origin=o)                      # perception OFF (dead-reckoning)
+    on = A.run_closed_loop(_spread(), dem=dem, dem_origin=o,                       # perception ON
+                           perception_sigma_m=0.10, dig_sigma_gate_m=0.20)
+    assert on["belief"].pos_sigma_m < off["belief"].pos_sigma_m                    # fixes bound the drift
+    assert on["belief"].pos_sigma_m <= 0.20 + 1e-6                                 # below the dig-ready gate
+    assert on["perception_fixes"] >= 1 and on["observe_more"] >= 0
+    assert on["completed"] is True
