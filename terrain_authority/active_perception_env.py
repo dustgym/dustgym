@@ -31,6 +31,16 @@ PRIOR_SIGMA_M = 2.0                            # unobserved-cell prior height un
 _MOVES = ((-1, 0), (1, 0), (0, 1), (0, -1))   # N, S, E, W
 
 
+def _fuse_sigma(sigma, pos, rr, cc, sensor_r):
+    """Range-dependent stereo fusion of one viewpoint: returns (new_sigma, kalman_gain). Pure, so the
+    env mutates its state with it AND the beam planner simulates forward on copies with it."""
+    dist = np.hypot(rr - pos[0], cc - pos[1])
+    obs_sig = OBS_SIGMA_FLOOR_M * (1.0 + (dist / sensor_r) ** 2)   # stereo Z^2 range falloff
+    var = sigma ** 2
+    k = np.where(dist <= sensor_r, var / (var + obs_sig ** 2), 0.0)
+    return np.sqrt(np.maximum(0.0, (1.0 - k) * var)), k
+
+
 class ActivePerceptionEnv(_BASE):
     """Discrete-move next-best-view mapping. action in {0..3} = move N/S/E/W one cell + observe.
     obs = [flattened sigma field, pos_row/grid, pos_col/grid, energy_frac]. reward = info gain / joule."""
@@ -61,15 +71,9 @@ class ActivePerceptionEnv(_BASE):
     def _observe(self) -> float:
         """Fuse a range-dependent stereo observation at the current pose; return summed sigma reduction."""
         before = float(self.sigma.sum())
-        r0, c0 = self.pos
-        dist = np.hypot(self._rr - r0, self._cc - c0)
-        in_view = dist <= self.sensor_r
-        obs_sig = OBS_SIGMA_FLOOR_M * (1.0 + (dist / self.sensor_r) ** 2)   # stereo Z^2 range falloff
-        var = self.sigma ** 2
-        r = obs_sig ** 2
-        k = np.where(in_view, var / (var + r), 0.0)                # Kalman gain per cell
+        new_sigma, k = _fuse_sigma(self.sigma, self.pos, self._rr, self._cc, self.sensor_r)
         self.est = self.est + k * (self.truth - self.est)         # estimate -> truth (measured w/ noise)
-        self.sigma = np.sqrt(np.maximum(0.0, (1.0 - k) * var))
+        self.sigma = new_sigma
         return before - float(self.sigma.sum())
 
     def _obs(self) -> np.ndarray:
@@ -125,3 +129,25 @@ def greedy_action(env: ActivePerceptionEnv) -> int:
         if per_j > best:
             best, best_a = per_j, a
     return best_a
+
+
+def beam_action(env: ActivePerceptionEnv, *, lookahead: int = 4, beam_width: int = 6) -> int:
+    """Multi-step next-best-view: beam-search `lookahead` viewpoints ahead (the exact env is its own
+    model), score by cumulative info-gain per joule, and return the FIRST action of the best sequence
+    (receding horizon). lookahead=1 reduces to greedy; lookahead>1 routes ahead so it stops re-covering."""
+    rr, cc, sr, grid, cm, jm = env._rr, env._cc, env.sensor_r, env.grid, env.cell_m, env.drive_j_per_m
+    beam = [(0.0, env.sigma, env.pos, None)]                      # (cum score, sigma, pos, first action)
+    for _ in range(max(1, lookahead)):
+        cand = []
+        for score, sigma, pos, first in beam:
+            ssum = float(sigma.sum())
+            for a, (dr, dc) in enumerate(_MOVES):
+                nr = min(max(pos[0] + dr, 0), grid - 1)
+                nc = min(max(pos[1] + dc, 0), grid - 1)
+                e = max((abs(nr - pos[0]) + abs(nc - pos[1])) * cm * jm, 1.0)
+                new_sigma, _ = _fuse_sigma(sigma, (nr, nc), rr, cc, sr)
+                gain = ssum - float(new_sigma.sum())
+                cand.append((score + gain / e, new_sigma, (nr, nc), a if first is None else first))
+        cand.sort(key=lambda x: -x[0])
+        beam = cand[:beam_width]
+    return beam[0][3]

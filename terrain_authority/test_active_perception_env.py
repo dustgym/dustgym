@@ -16,7 +16,12 @@ def _run(policy, *, seed=3, grid=20, charges=0.05, steps=120):
     rng = np.random.default_rng(seed)
     tot, info = 0.0, {}
     for _ in range(steps):
-        a = ap.greedy_action(env) if policy == "greedy" else int(rng.integers(4))
+        if policy == "greedy":
+            a = ap.greedy_action(env)
+        elif policy == "beam":
+            a = ap.beam_action(env, lookahead=5, beam_width=8)
+        else:
+            a = int(rng.integers(4))
         r = env.step(a)
         tot += r[1]
         info = r[-1]
@@ -38,6 +43,17 @@ def test_greedy_beats_random_on_mapping():
     assert g["sigma_mean"] < r["sigma_mean"]                  # greedy maps to lower uncertainty
     assert g["map_rmse_m"] < r["map_rmse_m"]                  # and lower height RMSE
     assert g_tot > r_tot                                      # and higher info-per-joule reward
+
+
+def test_beam_matches_greedy_submodular():
+    # next-best-view info-gain is SUBMODULAR -> greedy is near-optimal (the 1-1/e guarantee), so multi-step
+    # beam does NOT meaningfully beat it. The honest result: model-based search helps the scheduler (real
+    # multi-step routing headroom), not active perception (a submodular coverage problem).
+    g, _ = _run("greedy")
+    b, _ = _run("beam")
+    r, _ = _run("random")
+    assert g["sigma_mean"] < r["sigma_mean"] and b["sigma_mean"] < r["sigma_mean"]   # both crush random
+    assert abs(b["sigma_mean"] - g["sigma_mean"]) < 0.10                              # beam ~= greedy (no headroom)
 
 
 def test_energy_bounded_and_terminates():
