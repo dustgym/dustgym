@@ -171,6 +171,11 @@
       <div class="ctl"><input id="qprec" class="lbl" placeholder="precedence (e.g. Grade road &gt; Build berm, ...)" /></div>
       <button id="qplan" class="plan">Plan mission → open report</button>
       <button id="qexec" class="go" disabled>▶ Execute + watch</button>
+      <div class="ctl" style="margin-top:7px">
+        <button id="qexport" class="go">⤓ Export plan</button>
+        <button id="qimport" class="go">⤒ Import plan</button>
+        <input id="qfile" type="file" accept=".json,application/json" style="display:none" />
+      </div>
       <button id="qcompare" class="go">Compare algorithms ⇅</button>
       <div id="qstatus">queue empty</div>
       <table id="cmptable" style="display:none;width:100%;font-size:11px;border-collapse:collapse;margin-top:6px"></table>
@@ -480,13 +485,50 @@ qel("qplan").onclick = async () => {
     const e = j.endurance || {};
     const erng = e.range_slopeslip_km != null ? e.range_slopeslip_km : e.range_flat_reserve_km;
     const etag = erng != null ? ` · range ${erng.toFixed(0)} km/charge` : "";
+    // closed-loop autonomy + the AutoNav onboard estimate (perception) uncertainty, folded into /plan
+    const au = j.autonomy || {};
+    const autag = au.completed !== undefined
+      ? ` · autonomy ${au.completed ? "✓" : "⚠"} ${au.recharges}rch/${au.replans}rpl, SoC ${(au.final_soc * 100).toFixed(0)}%, slip ${au.max_slip}` : "";
+    const pc = j.perception || {};
+    const ptag = pc.pose_sigma_m != null
+      ? ` · est ±${pc.pose_sigma_m} m pose, drum ±${pc.drum_fill_uncertainty_pct}%` : "";
     setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
-         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${vtag}`);
+         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${vtag}${autag}${ptag}`);
     LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
     LAST_ORDERS = ORDERS.slice();
     qel("qexec").disabled = !LAST_TIMELINE;
     window.open(j.pdf, "_blank");                          // open the mission-control PDF
   } catch (e) { setQ("plan failed. start the server: python3 server.py  (" + e + ")"); }
+};
+
+// ---- import / export plans (round-trippable designer files) ------------------------------------
+function currentPlan() {
+  return { body: sel.value, orders: ORDERS, precedence: qel("qprec").value,
+           algorithm: qel("qalgo").value, objective: qel("qobj").value };
+}
+qel("qexport").onclick = () => {
+  const blob = new Blob([JSON.stringify(currentPlan(), null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${sel.value}_plan_${ORDERS.length}orders.json`;
+  a.click(); URL.revokeObjectURL(a.href);
+  setQ(`exported ${ORDERS.length} orders`);
+};
+qel("qimport").onclick = () => qel("qfile").click();
+qel("qfile").onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const p = JSON.parse(await f.text());
+    if (!Array.isArray(p.orders)) throw new Error("no orders[] in file");
+    ORDERS.length = 0; p.orders.forEach((o) => ORDERS.push(o));
+    if (p.body && BODIES[p.body]) { sel.value = p.body; sel.dispatchEvent(new Event("change")); }
+    if (p.precedence != null) qel("qprec").value = p.precedence;
+    if (p.algorithm) qel("qalgo").value = p.algorithm;
+    if (p.objective) qel("qobj").value = p.objective;
+    renderQueue();
+    setQ(`imported ${ORDERS.length} orders from ${f.name}`);
+  } catch (err) { setQ("import failed: " + err.message); }
+  e.target.value = "";
 };
 
 // ---- P5: execute + watch — animate the planned timeline top-down with a telemetry HUD ----------

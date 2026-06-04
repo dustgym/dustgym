@@ -675,6 +675,17 @@ def test_plan_endpoint_returns_fetchable_pdf(base):
     assert body["validation"]["mass_conserved"] is True                 # I8: plan validated on the authority
 
 
+def test_plan_endpoint_includes_autonomy_and_perception(base):
+    # the closed-loop autonomy + the AutoNav onboard-estimate (perception) uncertainty, folded into /plan
+    code, body = _post(base, "/plan", _payload())
+    assert code == 200 and body["ok"] is True
+    au = body["autonomy"]
+    assert au is not None and au["recharges"] >= 0 and au["replans"] >= 0
+    assert 0.0 <= au["final_soc"] <= 1.0 and isinstance(au["completed"], bool)
+    pc = body["perception"]
+    assert pc is not None and pc["pose_sigma_m"] >= 0.0 and pc["drum_fill_uncertainty_pct"] > 0.0
+
+
 def test_plan_endpoint_returns_animatable_timeline(base):
     # P5: /plan returns the execute+watch timeline the browser animates (frames + duration)
     code, body = _post(base, "/plan", _payload())
