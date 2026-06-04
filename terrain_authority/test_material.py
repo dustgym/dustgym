@@ -58,6 +58,30 @@ def test_real_worked_scene_in_range_and_varies():
     assert float(f["cohesion_pa"].max()) <= mat.COHESION_DENSE_PA + 1e-6
 
 
+def test_material_changes_drive_slip():
+    # threaded into the solver: on a forward grade, loose soil slips MORE than compacted soil, and
+    # material=False is byte-identical to the global-params path. Material is load-bearing in the dynamics.
+    from . import drive
+    from .column_state import ColumnState
+    H = W = 16
+    cols = np.arange(W)[None, :] * np.ones((H, 1))
+    datum = (cols * 0.20).astype(float)                       # forward grade along +col (~21.8 deg)
+    mass = np.full((H, W), 50.0)
+
+    def cs_with(rho):
+        return ColumnState(W, H, 0.5, mass_areal=mass.copy(), density=np.full((H, W), float(rho)),
+                           state_label=np.zeros((H, W), np.uint8), disturbance=np.zeros((H, W)),
+                           datum=datum.copy())
+
+    rc, yaw = (8.0, 8.0), 0.0                                 # facing +col (up the grade)
+    _, _, loose = drive.drive_step(cs_with(K.RHO_SURFACE), rc, yaw, 0.2, 0.0, material=True)
+    _, _, dense = drive.drive_step(cs_with(K.RHO_DEEP), rc, yaw, 0.2, 0.0, material=True)
+    assert loose["slip"] > dense["slip"]                      # loose regolith slips more (Material -> dynamics)
+    _, _, off = drive.drive_step(cs_with(1500.0), rc, yaw, 0.2, 0.0, material=False)
+    _, _, glob = drive.drive_step(cs_with(1500.0), rc, yaw, 0.2, 0.0)
+    assert off["slip"] == glob["slip"]                        # default path byte-identical (opt-in only)
+
+
 if __name__ == "__main__":                                    # pure-python runner, no pytest needed
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
