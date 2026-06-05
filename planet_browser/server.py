@@ -19,10 +19,10 @@ import shutil
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import adaptive_planner as ADP
-import autonomy as AUT
-import mission_planner as MP
-import structures as ST
+from . import adaptive_planner as ADP
+from . import autonomy as AUT
+from . import mission_planner as MP
+from . import structures as ST
 
 # plan_render_pipeline lives in scripts/ (it drives the Godot sidecar); MP already put the repo root on the
 # path. Importing it is optional -- /render degrades to a 503 if the binary is absent.
