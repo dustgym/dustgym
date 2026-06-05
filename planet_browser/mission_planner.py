@@ -573,12 +573,13 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
     `objective`), simulate it battery-aware, and return (trips, flows, per_trip, tl, totals).
 
     Multi-vehicle is OFF by default and gated (vehicles must be 1): the single-vehicle product planner is
-    the default; the multi-vehicle scheduler lives in roversim `terrain_authority/scheduler_env.py`."""
+    the default. Multi-vehicle planning (fleet allocation + deconfliction + shared-resource scheduling) is
+    designed but not built (see PRD area MV / docs/autonomous_planning_review.md)."""
     if vehicles != 1:
         raise RuntimeError(
-            f"multi-vehicle planning ({vehicles} vehicles) is not enabled in the product planner "
-            "(single-vehicle by default, by design). The multi-vehicle / multi-path scheduler lives in "
-            "roversim terrain_authority/scheduler_env.py; wire it here to enable.")
+            f"multi-vehicle planning ({vehicles} vehicles) is not enabled (single-vehicle by default, by "
+            "design). Multi-vehicle (fleet allocation, deconfliction, shared-resource scheduling) is "
+            "designed but unbuilt -- see PRD area MV / docs/autonomous_planning_review.md.")
     trips, flows, surplus_kg, meta = _build_trips(mission, dem, dem_origin, max_traverse_slope_deg)
     prec = trip_precedence(trips, mission)                  # I9: order-level precedence -> trip constraints
     order = optimize_sequence(trips, mission, algorithm=algorithm, objective=objective, precedence=prec)
