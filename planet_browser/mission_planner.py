@@ -64,6 +64,7 @@ CHARGE_W        = S.RECHARGE_POWER_W                     # 700 W [CALIB]
 RESERVE_FRAC    = S.BATTERY_RESERVE_FRAC                 # 0.10
 ROVER_MASS_KG   = S.ROVER_MASS_CLASS_KG                  # 30 kg-class (for gravity-climb drive energy)
 DRIVE_POWER_W   = S.drive_power_w()                      # ~40 W (Table 3 driving cases)
+IDLE_POWER_W    = S.IDLE_POWER_W                         # [ASSUMPTION] continuous survival draw (default 0 = off)
 SLIP_ALPHA      = 2.0                                    # [CALIB] slip energy multiplier vs tan(slope) (I10 costmap)
 _TM_PARAMS      = TM.TerramechanicsParams.from_constants()   # lunar defaults for the weight-aware leg-slip solve
 
@@ -709,7 +710,16 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
             f"(HELD_KARP_MAX_TRIPS={HELD_KARP_MAX_TRIPS}); algorithm '{resolved}' has no optimality bound.",
             stacklevel=2)
     totals = dict(core)
+    # K11c: continuous idle/heater/survival draw over the WHOLE mission duration -- the likely-dominant
+    # multi-day term the active-leg ledger omits. [ASSUMPTION] (IDLE_POWER_W, default 0 = not modelled);
+    # surfaced as its own line and folded into the headline energy/avg-power only when set, so a default
+    # plan is never silently inflated. Not coupled into the recharge schedule (a stated simplification).
+    survival_J = IDLE_POWER_W * core["time_s"]
+    if survival_J > 0.0:
+        totals["energy_J"] = core["energy_J"] + survival_J
+        totals["avg_power_w"] = totals["energy_J"] / core["time_s"] if core["time_s"] > 1e-9 else 0.0
     totals.update(
+        survival_energy_J=float(survival_J), idle_power_w=float(IDLE_POWER_W),
         cut_kg=sum(o.mass_kg(mission.density * SWELL) for o in mission.orders if o.kind == "cut"),
         fill_kg=sum(o.mass_kg(mission.density) for o in mission.orders if o.kind == "fill"),
         sinter_kg=sum(o.mass_kg(mission.density) for o in mission.orders if o.kind == "sinter"),
@@ -1426,6 +1436,11 @@ def report(mission, trips, flows, per_trip, tl, totals, out_pdf, out_md, endu=No
            f"({totals['charges']} recharge stops) · drive {totals['distance_m']/1000:.2f} km"
            + (f" · incl. **{totals['lift_energy_J']/1e6:.2f} MJ** lifting regolith uphill (exact m·g·Δh, real DEM)"
               if totals.get("lift_energy_J", 0) > 0 else ""),
+           (f"- Survival/idle power **{totals['survival_energy_J']/1e6:.1f} MJ** over the sortie "
+            f"(@ {totals['idle_power_w']:.0f} W continuous) **[ASSUMPTION]** -- folded into the total above"
+            if totals.get("survival_energy_J", 0) > 0 else
+            "- Survival/idle power **not modelled** (active legs only; set IDLE_POWER_W to include the "
+            "continuous heater/avionics load, the likely-dominant multi-day term) **[ASSUMPTION]**"),
            f"- **{totals['drum_cycles']} drum cycles** (offload events); drum fill SENSED from motor current "
            f"(no load cell, ICE-RASSOR NTRS 20210022781) -- known to ±{RM.FDC_MPE_HALF_FULL*100:.1f}% when "
            f">half full, ±{RM.FDC_MPE_ALL*100:.1f}% below; rover offloads at the upper confidence bound"]

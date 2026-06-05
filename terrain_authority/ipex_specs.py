@@ -100,6 +100,13 @@ SINTER_HEAD_POWER_W = 1000.0      # [SOURCED] domestic-microwave-class head ~0.8
 #                                   variant only. constants.SINTER_ENABLED gates it (sourced-physics rationale).
 RECHARGE_POWER_W = 700.0          # [CALIB] surface recharge power (no IPEx solar/charge spec)
 BATTERY_RESERVE_FRAC = 0.10       # operational: hold >=10% pack reserve before forcing a recharge
+# [ASSUMPTION] continuous idle / heater / avionics survival draw, NOT in [SCHULER24] and genuinely
+# data-gated. Over a multi-day sortie this term is plausibly the DOMINANT energy cost, so the planner
+# surfaces it as its OWN line, tagged [ASSUMPTION]. Default 0 W = "not modelled" (no silent inflation of
+# the headline figures); set DUSTGYM_IDLE_POWER_W (or the constant) to fold in a survival load you can
+# defend. Lunar-night heater loads for a small rover are tens-to-hundreds of W -- do NOT treat any value
+# here as sourced. (mission_planner: survival_energy_J = IDLE_POWER_W * mission duration.)
+IDLE_POWER_W = 0.0
 
 
 def energy_model(cell_m: float, *, allowance_j: float | None = None,

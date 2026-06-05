@@ -592,6 +592,19 @@ def test_plan_accounts_keepouts_end_to_end():
     assert T2["keepout_conflicts"] == 1
 
 
+# ---- K11c: continuous idle/heater/survival power (the likely-dominant multi-day term) -----------
+def test_survival_power_default_off_then_folds_in_when_set(monkeypatch):
+    m = MP.mission_from_dict(_payload())
+    _, _, _, _, T0 = MP.plan_and_simulate(m)
+    assert T0["idle_power_w"] == 0.0 and T0["survival_energy_J"] == 0.0   # default: not modelled, no inflation
+    base_energy = T0["energy_J"]
+    monkeypatch.setattr(MP, "IDLE_POWER_W", 50.0)                          # [ASSUMPTION] 50 W survival load
+    _, _, _, _, T1 = MP.plan_and_simulate(m)
+    assert T1["survival_energy_J"] == pytest.approx(50.0 * T1["time_s"])   # = idle power * mission duration
+    assert T1["energy_J"] == pytest.approx(base_energy + T1["survival_energy_J"])   # folded into the headline
+    assert T1["avg_power_w"] == pytest.approx(T1["energy_J"] / T1["time_s"])
+
+
 def test_compare_with_weighted_objective_marks_pareto():
     res = MP.compare_algorithms(_spread_mission(), objective="time:0.5,distance:0.5")
     vals = [r["objective_value"] for r in res["rows"] if "objective_value" in r]

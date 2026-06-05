@@ -654,8 +654,10 @@ qel("qplan").onclick = async () => {
         + `), drum ±${pc.drum_fill_uncertainty_pct}%` : "";
     // discrete keep-out obstacles: hauls routed around them; flag any build placed inside one
     const ktag = t.n_keepouts ? ` · ${t.n_keepouts} keep-out${t.keepout_conflicts ? ` (⚠ ${t.keepout_conflicts} build on obstacle)` : ""}` : "";
+    // K11c: continuous survival/idle power (an [ASSUMPTION] term) when modelled
+    const stag = t.survival_energy_J > 0 ? ` · +${(t.survival_energy_J / 1e6).toFixed(1)} MJ survival [assumption]` : "";
     setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
-         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${ktag}${vtag}${autag}${ptag}`);
+         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${ktag}${stag}${vtag}${autag}${ptag}`);
     LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
     LAST_ORDERS = ORDERS.slice(); LAST_KEEPOUTS = KEEPOUTS.slice();
     qel("qexec").disabled = !LAST_TIMELINE;
