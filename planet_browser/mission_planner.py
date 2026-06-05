@@ -841,6 +841,28 @@ def flattest_anchor(dem, *, window_m=20.0):
     return float(col * cell), float(row * cell)
 
 
+def latlon_to_dem_origin(lat, lon, *, bundle_dir=None):
+    """M11: project a selenographic lat/lon (deg) to the Haworth DEM order-frame origin (x, y) [m] -- the
+    SAME pixel-meter frame flattest_anchor returns -- so a globe site-pick anchors the plan where the user
+    clicked instead of the auto flattest site. The DEM is south-polar stereographic on the R=1737400 m Moon
+    sphere (IAU_2015:30135; see dem_import). Raises ValueError if the point falls outside the committed
+    tile, ImportError if pyproj (the [planner] extra) is absent so the caller can fall back to the anchor."""
+    from pyproj import CRS, Transformer
+    meta = json.load(open(os.path.join(_haworth_bundle(bundle_dir), "metadata.json")))
+    g, b = meta["grid"], meta["world_bounds_m"]
+    cell, W, H = float(g["cell_m"]), int(g["width"]), int(g["height"])
+    crs = CRS.from_user_input("IAU_2015:30135")
+    fwd = Transformer.from_crs(crs.geodetic_crs, crs, always_xy=True)
+    xs, ys = fwd.transform(float(lon), float(lat))                       # selenographic -> polar-stereographic m
+    ax0, ay0 = float(b["x0"]) + cell / 2.0, float(b["y1"]) - cell / 2.0  # pixel(0,0) CENTER (north-up raster)
+    col, row = (xs - ax0) / cell, (ay0 - ys) / cell
+    if not (-0.5 <= col <= W - 0.5 and -0.5 <= row <= H - 0.5):
+        raise ValueError(f"site lat/lon ({lat:.3f}, {lon:.3f}) is outside the mapped Haworth tile "
+                         f"({W}x{H} @ {cell:g} m, IAU_2015:30135)")
+    ci, ri = min(max(int(round(col)), 0), W - 1), min(max(int(round(row)), 0), H - 1)
+    return float(ci * cell), float(ri * cell)                            # matches flattest_anchor's frame
+
+
 # ---- I10: hazard + slope/slip-aware haul routing on a DEM costmap -------------------------------
 # A straight cut<->fill line ignores craters and steep walls. I10 routes hauls over a slope costmap:
 # steeper ground costs more (slip -> more energy/time per meter) and ground past the traverse limit is
@@ -1161,10 +1183,11 @@ def validate_plan(mission, *, cell_m=0.5, regolith_depth_m=10.0, max_cells=500, 
         feasible = False
     drift = abs(cs.total_mass() - m0)
     mass_conserved = drift <= 1e-6 * max(1.0, m0)
-    # I6: terrain-aware siting — against the real DEM, reject orders on too-steep ground (a pad on a
-    # crater wall fails even when material is available). dem = (heightmap, cell_m). M11: the order's
-    # LOCAL x,y is anchored to a real DEM site via dem_origin (DEM meters where local (0,0) sits), so
-    # the gate fires on the actual picked/auto-selected terrain rather than arbitrary corner cells.
+    # I6 + I11: terrain-aware siting against the real DEM. A pad on a crater wall fails even when material
+    # is available. dem = (heightmap, cell_m). M11: the order's LOCAL x,y is anchored to a real DEM site via
+    # dem_origin (DEM meters where local (0,0) sits). I11: gate the WHOLE footprint, not just the center cell
+    # -- a pad whose centre is flat but whose edge straddles a steep rim must still fail (worst slope over the
+    # footprint + the fraction of footprint cells over the threshold are reported as the acceptance check).
     slope_violations = []
     if dem is not None:
         Z, dem_cell = dem
@@ -1172,9 +1195,17 @@ def validate_plan(mission, *, cell_m=0.5, regolith_depth_m=10.0, max_cells=500, 
         Hd, Wd = smap.shape
         ox, oy = dem_origin
         for o in mission.orders:
-            col, row = int(round((ox + o.x) / dem_cell)), int(round((oy + o.y) / dem_cell))
-            if 0 <= row < Hd and 0 <= col < Wd and float(smap[row, col]) > max_slope_deg:
-                slope_violations.append({"action": o.action, "slope_deg": round(float(smap[row, col]), 1),
+            half = (math.sqrt(o.footprint_m2) / 2.0) / dem_cell
+            cx, cy = (ox + o.x) / dem_cell, (oy + o.y) / dem_cell
+            r0, r1 = max(0, int(round(cy - half))), min(Hd, int(round(cy + half)) + 1)
+            c0, c1 = max(0, int(round(cx - half))), min(Wd, int(round(cx + half)) + 1)
+            if r1 <= r0 or c1 <= c0:
+                continue
+            patch = smap[r0:r1, c0:c1]
+            worst = float(patch.max())
+            if worst > max_slope_deg:                          # any cell in the footprint too steep -> reject
+                slope_violations.append({"action": o.action, "slope_deg": round(worst, 1),
+                                         "frac_over": round(float((patch > max_slope_deg).mean()), 2),
                                          "x": o.x, "y": o.y})
     return {
         "feasible": bool(feasible and mass_conserved and not slope_violations),

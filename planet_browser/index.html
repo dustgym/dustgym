@@ -477,7 +477,7 @@ qel("qplan").onclick = async () => {
     const res = await fetch("/plan", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: `${BODIES[sel.value].name} build`, body: sel.value, charger: [0, 0],
         orders: ORDERS, algorithm: qel("qalgo").value, objective: qel("qobj").value, precedence: parsePrec(),
-        ...fleet() }) });
+        ...fleet(), ...site() }) });
     const j = await res.json();
     if (!j.ok) { setQ("error: " + j.error); return; }
     const t = j.totals;
@@ -664,6 +664,12 @@ async function senseDrum() {
 function fleet() {
   const tools = [...document.querySelectorAll("#tools input:checked")].map((c) => c.value);
   return { vehicle: (qel("vehicle").value || "ipex"), tools };
+}
+// M11: when a site lat/lon is set (typed or picked), send it so the plan anchors there (else the
+// planner uses the auto flattest site). Only Moon's Haworth DEM is georeferenced for this today.
+function site() {
+  const lat = parseFloat(qel("lat").value), lon = parseFloat(qel("lon").value);
+  return (Number.isFinite(lat) && Number.isFinite(lon)) ? { lat, lon } : {};
 }
 function fleetCaps() {
   const v = (PHY && PHY._vehicles) ? PHY._vehicles[qel("vehicle").value] : null;

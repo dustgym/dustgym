@@ -199,6 +199,8 @@ class PlanRequest(BaseModel):
     orders: list[Order] = Field(default_factory=list, max_length=_MAX_ORDERS)
     algorithm: str = Field(default="nearest", max_length=40)
     objective: str = Field(default="time", max_length=40)
+    lat: float | None = Field(default=None, ge=-90.0, le=90.0)   # M11: globe site-pick -> order-frame anchor
+    lon: float | None = Field(default=None, ge=-360.0, le=360.0)
 
 
 class CompareRequest(BaseModel):
@@ -334,7 +336,17 @@ def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
     payload = req.model_dump(exclude_unset=True)
     try:
         mission = MP.mission_from_dict(payload)
-        dem, origin = _moon_dem() if mission.body == "moon" else (None, (0.0, 0.0))
+        if mission.body == "moon":
+            dem, origin = _moon_dem()                  # (dem, auto flattest anchor)
+            if req.lat is not None and req.lon is not None:   # M11: a globe site-pick overrides the anchor
+                try:
+                    origin = MP.latlon_to_dem_origin(req.lat, req.lon)
+                except ImportError:
+                    log.warning("pyproj absent ([planner] extra); site lat/lon ignored, using flattest anchor")
+                except ValueError as e:
+                    return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+        else:
+            dem, origin = None, (0.0, 0.0)
         # I10: hauls routed around hazards on the real DEM; I8 + I6/M11 slope-feasible siting.
         with _REPORT_LOCK:                              # serialize the thread-unsafe matplotlib report path
             pdf, md, totals = MP.run(mission, stem=_plan_stem(payload), dem=dem, dem_origin=origin,
