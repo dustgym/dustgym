@@ -18,8 +18,8 @@ import urllib.request
 
 import pytest
 
-import mission_planner as MP
-import server as SRV
+from . import mission_planner as MP
+from . import server as SRV
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -90,7 +90,7 @@ def test_sinter_order_still_refused():
 
 # ---- I8: validate the plan on the conserved authority (column_state) ----------------------------
 def test_validate_plan_conserves_mass_and_is_feasible():
-    import structures as ST
+    from . import structures as ST
     m = MP.mission_from_dict({"name": "Pad", "body": "moon", "charger": [0, 0],
                               "orders": ST.decompose("landing_pad", 40.0, 30.0)})
     v = MP.validate_plan(m)
@@ -215,7 +215,7 @@ def test_optimality_flag_reported_and_exact_for_small_plan():
 def test_ingest_nonpolar_cylindrical_dem_relief_round_trips(tmp_path):
     import os
     import numpy as np
-    import dem_import as di
+    from . import dem_import as di
     _fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")   # CWD-independent
     heights, geom = di.load_cylindrical_fixture(
         os.path.join(_fx, "ldem4_equator_dn.npy"), os.path.join(_fx, "ldem4_equator.json"))

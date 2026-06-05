@@ -19,8 +19,8 @@ from __future__ import annotations
 import dataclasses
 import math
 
-import mission_planner as MP
-from mission_planner import BATTERY_J
+from . import mission_planner as MP
+from .mission_planner import BATTERY_J
 
 
 @dataclasses.dataclass
