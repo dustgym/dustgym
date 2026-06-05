@@ -17,8 +17,8 @@ jobs:
     name: Quality gate (lint + type + test/coverage) — must pass before publishing
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install (core + dev)
@@ -37,8 +37,8 @@ jobs:
     needs: gate                    # never publish a release that fails lint / types / tests / coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Build distributions
