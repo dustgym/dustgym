@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -73,6 +74,7 @@ _CTYPE = {".html": "text/html; charset=utf-8", ".json": "application/json",
           ".js": "text/javascript", ".css": "text/css", ".png": "image/png"}
 
 _MAX_ORDERS = 1000   # N8 input limit: refuse absurd build queues before they reach the planner
+_MAX_BODY_BYTES = int(os.environ.get("DUSTGYM_MAX_BODY_BYTES", 4 * 1024 * 1024))   # N8: request-body size cap (4 MiB)
 
 
 def _version() -> str:
@@ -248,7 +250,7 @@ def require_auth(x_api_key: str | None = Header(default=None, alias="X-API-Key")
     if not key:
         return
     supplied = x_api_key or (authorization or "").removeprefix("Bearer ").strip()
-    if supplied != key:
+    if not hmac.compare_digest(supplied.encode(), key.encode()):   # constant-time -> no timing oracle
         raise HTTPException(status_code=401, detail="invalid or missing API key")
 
 
@@ -265,15 +267,28 @@ app.add_middleware(
 @app.middleware("http")
 async def _access_log(request: Request, call_next):
     t0 = time.monotonic()
+    # N8: reject oversized bodies up front (Content-Length guard) before they reach a handler.
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            clen = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            clen = 0
+        if clen > _MAX_BODY_BYTES:
+            return JSONResponse(status_code=413,
+                                content={"ok": False, "error": f"request body too large (> {_MAX_BODY_BYTES} bytes)"})
     response = await call_next(request)
     dt = (time.monotonic() - t0) * 1000.0
-    route = request.url.path
+    raw = request.url.path
+    # key the by_route metric on the MATCHED ROUTE TEMPLATE (e.g. /figure/{key}), not the raw client path:
+    # the raw path is attacker-controlled, so an unbounded dict would be a memory-DoS. Templates are finite.
+    matched = request.scope.get("route")
+    route_key = getattr(matched, "path", "unmatched")
     _METRICS["requests_total"] += 1
     sk = str(response.status_code)
     _METRICS["by_status"][sk] = _METRICS["by_status"].get(sk, 0) + 1
-    _METRICS["by_route"][route] = _METRICS["by_route"].get(route, 0) + 1
+    _METRICS["by_route"][route_key] = _METRICS["by_route"].get(route_key, 0) + 1
     log.info('%s "%s %s" %s %.1fms',
-             request.client.host if request.client else "-", request.method, route, response.status_code, dt)
+             request.client.host if request.client else "-", request.method, raw, response.status_code, dt)
     return response
 
 
@@ -324,7 +339,10 @@ def get_dem(name: str):                                 # the real LOLA work-are
     f = {"hillshade.png": "preview_hillshade.png", "height.png": "preview_height.png"}.get(os.path.basename(name))
     if not f:
         return JSONResponse(status_code=404, content={"ok": False, "error": f"no dem {os.path.basename(name)}"})
-    return FileResponse(os.path.join(bundle, f), media_type="image/png")
+    path = os.path.join(bundle, f)
+    if not os.path.isfile(path):                        # bundle absent (e.g. a wheel install) -> 404, not a 500
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"dem preview not available: {f}"})
+    return FileResponse(path, media_type="image/png")
 
 
 # ---- engineer/developer/intern panes: validation figures + runtime config (served from source) ---
@@ -472,6 +490,8 @@ def post_compare(req: CompareRequest, _auth: None = Depends(require_auth)):
 def post_structure(req: StructureRequest, _auth: None = Depends(require_auth)):
     """Decompose a named structure (Landing Pad / Haul Road / Berm / ...) at (x,y) into mass-balanced
     cut/fill orders (structures.decompose). Returns orders the build queue can adopt."""
+    if len(req.params or {}) > 32:                      # N8: cap the param dict (decompose also rejects unknown keys)
+        return JSONResponse(status_code=400, content={"ok": False, "error": "too many structure params (max 32)"})
     try:
         orders = ST.decompose(req.name, req.x, req.y, **(req.params or {}))
     except (ValueError, TypeError) as e:

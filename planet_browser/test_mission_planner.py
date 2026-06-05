@@ -927,3 +927,34 @@ def test_api_docs_not_shadowed_by_catchall(base):
     # the API explorer pane embeds FastAPI's auto Swagger UI; the catch-all (registered last) must not eat it
     assert base.get("/openapi.json").status_code == 200
     assert base.get("/docs").status_code == 200
+
+
+# ---- N8 server hardening (a 0.0.0.0-capable service) --------------------------------------------
+def test_oversized_body_is_rejected_413(base):
+    big = "x" * (SRV._MAX_BODY_BYTES + 1)
+    r = base.post("/plan", data=big, headers={"content-type": "application/json"})
+    assert r.status_code == 413 and r.json()["ok"] is False
+
+
+def test_metrics_by_route_is_bounded_by_templates_not_raw_paths(base):
+    # hammering distinct attacker-controlled paths must NOT grow the by_route dict unboundedly:
+    # they all collapse to the catch-all template, so the key set stays tiny.
+    for i in range(40):
+        base.get(f"/nonexistent/path/{i}")
+    by_route = base.get("/metrics").json()["by_route"]
+    assert len(by_route) < 25                                   # bounded by registered routes, not by hits
+    assert not any(f"/nonexistent/path/{i}" in by_route for i in range(40))   # raw paths not keyed
+
+
+def test_structure_rejects_too_many_params(base):
+    code, body = _post(base, "/structure", {"name": "landing_pad", "x": 0, "y": 0,
+                                            "params": {f"k{i}": 1 for i in range(40)}})
+    assert code == 400 and body["ok"] is False and "params" in body["error"]
+
+
+def test_api_key_auth_constant_time_compare(base, monkeypatch):
+    # with a key set, a wrong key is 401 and the right key passes (compare is hmac.compare_digest)
+    monkeypatch.setenv("DUSTGYM_API_KEY", "s3cret")
+    assert base.post("/plan", json=_payload(), headers={"X-API-Key": "wrong"}).status_code == 401
+    ok = base.post("/plan", json=_payload(), headers={"X-API-Key": "s3cret"})
+    assert ok.status_code == 200 and ok.json()["ok"] is True
