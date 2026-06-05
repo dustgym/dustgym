@@ -156,7 +156,6 @@ def _make_patch(width: int = 200, height: int = 200, cell_m: float = 0.5) -> Col
 
 
 def _self_test() -> int:
-    import sys
 
     results: list[tuple[str, bool, str]] = []
 

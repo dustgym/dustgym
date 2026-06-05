@@ -362,7 +362,6 @@ def run_report(scene_dir: str = DEFAULT_SCENE, slp_path: str = DEFAULT_SLP) -> i
     print("\n[CRITERION 3] crater count per log-D bin <= Xiao&Werner equilibrium cap")
     diams = None
     try:
-        from terrain_authority.dem_overlay import make_crater_feature_fn  # type: ignore
         # If W2-CRATERS merged we COULD synthesize a real population; the records are internal,
         # so the standalone path measures the EXPECTED capped curve instead (still falsifiable:
         # the cap itself is asserted monotone & finite). A real diameter array is fed at the

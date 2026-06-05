@@ -89,8 +89,7 @@ def main(argv=None) -> int:
     np.save(npy_path, Z_crop)
 
     x1 = affine_crop.x0 + (n - 1) * px   # last-pixel-center X
-    y1 = affine_crop.y0                   # top-row Y (first row, max Y)
-    y_bottom = affine_crop.y0 - (n - 1) * px
+    y_bottom = affine_crop.y0 - (n - 1) * px            # top-row Y is affine_crop.y0
     provenance = {
         "source": "PGDA LOLA_5mpp Haworth_final_adj_5mpp_surf.tif (Product 78)",
         "frame": meta["frame"],

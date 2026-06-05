@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import numpy as np  # noqa: E402
 
 from terrain_authority import constants as K  # noqa: E402
-from terrain_authority.column_state import ColumnState, StateLabel  # noqa: E402
+from terrain_authority.column_state import ColumnState  # noqa: E402
 from terrain_authority.sandpile import Sandpile  # noqa: E402
 from terrain_authority.worksite import WorkSite  # noqa: E402
 

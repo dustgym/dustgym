@@ -28,7 +28,6 @@ dem_to_base and re-checked here after a save/load round-trip).
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 

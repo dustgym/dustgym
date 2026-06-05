@@ -24,14 +24,14 @@ import autonomy as AUT
 import mission_planner as MP
 import structures as ST
 
-# plan_render_pipeline lives in roversim/scripts (it drives the Godot sidecar there); MP already put
-# roversim/ on the path. Importing it is optional -- /render degrades to a 503 if the binary is absent.
-sys.path.insert(0, os.path.join(MP._ROVERSIM, "scripts"))
+# plan_render_pipeline lives in scripts/ (it drives the Godot sidecar); MP already put the repo root on the
+# path. Importing it is optional -- /render degrades to a 503 if the binary is absent.
+sys.path.insert(0, os.path.join(MP._REPO_ROOT, "scripts"))
 try:
     import plan_render_pipeline as PRP
 except Exception:   # noqa: BLE001 -- /render just becomes unavailable
     PRP = None
-_HAWORTH = os.path.join(MP._ROVERSIM, "samples", "lunar_dem", "haworth_10km_5m")
+_HAWORTH = os.path.join(MP._REPO_ROOT, "samples", "lunar_dem", "haworth_10km_5m")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPORTS = os.path.join(HERE, "reports")
@@ -148,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
             ext = os.path.splitext(name)[1]
             return self._serve_file(os.path.join(REPORTS, name), _CTYPE.get(ext, "application/octet-stream"))
         if route.startswith("/dem/"):                      # the real LOLA work-area DEM previews (Haworth)
-            bundle = os.path.join(HERE, "..", "roversim", "samples", "lunar_dem", "haworth_10km_5m")
+            bundle = os.path.join(HERE, "..", "samples", "lunar_dem", "haworth_10km_5m")
             f = {"hillshade.png": "preview_hillshade.png", "height.png": "preview_height.png"}.get(os.path.basename(route))
             if f:
                 return self._serve_file(os.path.join(bundle, f), "image/png")
