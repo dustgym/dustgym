@@ -569,3 +569,15 @@ def polar_density_profile(depth_m: float | np.ndarray) -> np.ndarray:
 REGOLITH_THICKNESS_M = 12.0        # 10-15 m highland column, central [ASSUMPTION]
 REGOLITH_THICKNESS_MIN_M = 10.0
 REGOLITH_THICKNESS_MAX_M = 15.0
+
+# ---------------------------------------------------------------------------
+# Externalized config overlay (PRD N15 / area O). Apply DUSTGYM_<NAME> env vars and the
+# DUSTGYM_CONFIG TOML file to the module-level primitives above, THEN recompute the derived
+# constants from the (possibly overridden) primitives. With no overrides this is a no-op and
+# every value is byte-identical to the literals above. See config.py + CONFIG.md.
+# ---------------------------------------------------------------------------
+from . import config as _config  # noqa: E402  (overlay must follow the primitive definitions)
+
+_config.apply(globals())
+RHO_GRAIN = G_s * RHO_WATER        # derived: solid grain density tracks G_s
+RHO_SPOIL = RHO_SURFACE / 1.0      # derived: loose spoil density tracks the surface layer

@@ -164,6 +164,14 @@ def spec_record() -> dict:
     }
 
 
+# Externalized config overlay (PRD N15 / area O): apply DUSTGYM_<NAME> env vars + the
+# DUSTGYM_CONFIG TOML to these published/planner constants. The energy/battery quantities are
+# functions that read the constants live, so a 14S override (etc.) recomputes automatically.
+from . import config as _config  # noqa: E402
+
+_config.apply(globals())
+
+
 if __name__ == "__main__":
     import json
     print(json.dumps(spec_record(), indent=2))

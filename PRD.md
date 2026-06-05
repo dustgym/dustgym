@@ -249,7 +249,7 @@ monolithic learned latent world model. The five layers and their status:
 | **N12** | **P1** | **Dependency hygiene** — a committed lockfile, version ceilings (esp. a tested `gymnasium` range), pinned `[rl]` extras, reproducible-install check (build wheel → fresh-venv import) in CI | ⬜ floor-only pins today |
 | **N13** | **P1** | **Packaging completeness** — the published artifact contains the full advertised product (`planet_browser` + a server entry point), no synthetic-default registered envs, tests excluded from the wheel; or the wheel scope is documented | ⬜ `planet_browser` absent from wheel; 51 `sys.path` hacks |
 | **N14** | **P1** | **Runtime invariant enforcement + input validation** — conservation / non-negativity / finite-state checkable at runtime (CI-gated, not `assert`); public physics + env constructors validate dims/cell-size/positive-density | ⬜ test-only today |
-| **N15** | **P2** | **Externalized config (12-factor)** — env-overridable host/port/report-dir/DEM-bundle/`[CALIB]` knobs (0 `os.environ` today) | ⬜ |
+| **N15** | **P2** | **Externalized config (12-factor)** — env-overridable host/port/report-dir/DEM-bundle/`[CALIB]` knobs | 🟡 constants + ipex_specs overlay shipped (`config.py`, `CONFIG.md`, `config.describe()`); host/port/report-dir env-wiring lands with the ASGI server (N7/N8) |
 | **N16** | **P1** | **Release process + versioning** — SemVer, `CHANGELOG.md`, `dustgym.__version__`, documented bump→tag→publish flow (replaces the old upstream-PR model) | ⬜ |
 | **N17** | **P2** | **Deployment + ops doc** — `docs/deployment.md` + a server container image + env-var config + the Godot/`/render` optional-dependency toggle | ⬜ |
 | **N18** | **P2** | **Reproducibility baselines** — checksummed data fixtures; golden-file regression on planner totals (energy/mass/distance); AprilTag 12.7 mm + map-channel RMSE tracked as regression baselines | ⬜ |
@@ -264,19 +264,20 @@ Current state (honest):
   `from_constants` / `from_json` / `to_json` / `scm_oracle`; solver functions take the moduli as kwargs).
 - ✅ **Per-body params + body selection** — `bodies.params_for_body(name)` + the `Body` registry (Moon/Mars/
   Ceres/Bennu/Phobos/Earth); add a body by adding a `Body`.
-- 🟡 **The 73 `constants.py` values, 22 `ipex_specs.py` vehicle specs, and the planner `[CALIB]` knobs**
-  (charge power, reserve, etc.) are centralized in single-source, honesty-tagged `.py` files, but changing
-  them needs a source edit (consumed as module literals; some feed import-time derived values like `J_PER_M`).
-- ❌ **No env-var / config-file overlay** (0 `os.environ`).
+- ✅ **The 73 `constants.py` values, 22 `ipex_specs.py` vehicle specs, and the planner `[CALIB]` knobs**
+  are now overridable through the env/file overlay (below) — the `.py` files stay the provenance-tagged
+  defaults and derived values recompute from the overridden base.
+- ✅ **Env-var / config-file overlay** — `terrain_authority/config.py` (`DUSTGYM_<KEY>` env + `DUSTGYM_CONFIG`
+  TOML, env wins), applied at the end of `constants.py` / `ipex_specs.py`; reference in `CONFIG.md`.
 
 Requirements:
 | ID | P | Requirement | Status |
 |---|---|---|---|
-| O1 | P1 | **Config overlay** — one mechanism (`DUSTGYM_CONFIG=<file.toml>` + `DUSTGYM_<KEY>` env vars) loaded at startup that overrides the `.py` defaults for constants / vehicle specs / planner knobs / body selection; the `.py` stays the default source. Derived values (e.g. `ipex_specs.J_PER_M`) must recompute from the overridden base (so the overlay applies before import-time derivation, or derivations become lazy). | ⬜ |
-| O2 | P1 | **Config reference (`CONFIG.md`)** — every adjustable key listed with its default, units, `[FIXED]/[CALIB]/[UNKNOWN]` tag, and the override name. | ⬜ |
-| O3 | P2 | **Wired into the product** — `dustgym-serve --config <file>` + the env overlay honored by the planner/server and the envs. | ⬜ |
+| O1 | P1 | **Config overlay** — one mechanism (`DUSTGYM_CONFIG=<file.toml>` + `DUSTGYM_<KEY>` env vars) loaded at startup that overrides the `.py` defaults for constants / vehicle specs / planner knobs / body selection; the `.py` stays the default source. Derived values (e.g. `ipex_specs.J_PER_M`) must recompute from the overridden base (so the overlay applies before import-time derivation, or derivations become lazy). | ✅ `config.py`: `DUSTGYM_<KEY>` env + `DUSTGYM_CONFIG` TOML; overlay applied then derived recompute |
+| O2 | P1 | **Config reference (`CONFIG.md`)** — every adjustable key listed with its default, units, `[FIXED]/[CALIB]/[UNKNOWN]` tag, and the override name. | ✅ `CONFIG.md` |
+| O3 | P2 | **Wired into the product** — `dustgym-serve --config <file>` + the env overlay honored by the planner/server and the envs. | 🟡 env/TOML overlay honored at import (server/planner/envs read the overridden constants); the `--config` flag is the remaining bit |
 | O4 | P2 | **Per-vehicle config** — a vehicle/rover spec object (not global `ipex_specs` singletons) so different rovers carry different specs (ties to MV6 heterogeneous fleet). | ⬜ |
-| O5 | P2 | **Settings discoverability** — `dustgym.config.describe()` (or similar) dumps the active config (every key, value, source: default/env/file) so the running configuration is inspectable. | ⬜ |
+| O5 | P2 | **Settings discoverability** — `dustgym.config.describe()` (or similar) dumps the active config (every key, value, source: default/env/file) so the running configuration is inspectable. | ✅ `config.describe()` |
 
 Sequencing: O1/O2 slot into build-sequence Phase 2 alongside N15 (externalized config); O4 lands with MV6.
 
@@ -352,7 +353,10 @@ Shipped/Forward backlog below is the detail this sequence orders.
 - **N16** CHANGELOG + SemVer + release flow · **N17** deployment doc + container · **N18** reproducibility
   baselines (golden-file planner totals; AprilTag/map-channel) · **M10** mission persistence.
 
-**Never this cycle:** git history rewrite (§15).
+**History note:** a one-time `git filter-repo` history rewrite WAS performed (owner-directed) to scrub
+AI-assistant co-author trailers from all commit messages; `main` was force-pushed and the stale merged
+branches deleted. This was a deliberate, backed-up, solo-repo exception to the earlier "no rewrite" stance
+(§15), justified by the explicit scrub request and the absence of open PRs / external clones.
 
 > **Critical path (★):** N9 CI → package-ify `planet_browser` → ASGI server → multi-vehicle. Everything else
 > (the AL correctness fixes, the operational-shell sub-items, the J4/I11 expressiveness, the science track, the
