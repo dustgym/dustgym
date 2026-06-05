@@ -327,6 +327,48 @@ def get_dem(name: str):                                 # the real LOLA work-are
     return FileResponse(os.path.join(bundle, f), media_type="image/png")
 
 
+# ---- engineer/developer/intern panes: validation figures + runtime config (served from source) ---
+_VALIDATION = os.path.join(MP._REPO_ROOT, "validation")
+
+
+def _validation_figures() -> dict:
+    """Map 'category/file.png' -> absolute path for every PNG under validation/. Served from the source
+    tree (empty if absent, e.g. a wheel install). The returned keys are the allowlist -> traversal-proof."""
+    out: dict = {}
+    if not os.path.isdir(_VALIDATION):
+        return out
+    for root, _dirs, files in os.walk(_VALIDATION):
+        for fn in sorted(files):
+            if fn.endswith(".png"):
+                rel = os.path.relpath(os.path.join(root, fn), _VALIDATION).replace(os.sep, "/")
+                out[rel] = os.path.join(root, fn)
+    return out
+
+
+@app.get("/figures")
+def get_figures():
+    """List the validation figures (engineer pane). key = 'category/file.png'; fetch via /figure/{key}."""
+    figs = _validation_figures()
+    return {"ok": True, "figures": [{"key": k, "category": k.split("/")[0], "url": "/figure/" + k}
+                                    for k in sorted(figs)]}
+
+
+@app.get("/figure/{key:path}")
+def get_figure(key: str):
+    """Serve a validation PNG by allowlisted key (only the keys /figures lists -> no path traversal)."""
+    p = _validation_figures().get(key)
+    if not p:
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"no figure {key}"})
+    return FileResponse(p, media_type="image/png")
+
+
+@app.get("/config")
+def get_config():
+    """Runtime config overlay state (intern/dev pane): config_file + overrides + applied (PRD N15)."""
+    from terrain_authority import config as _cfg
+    return {"ok": True, **_cfg.describe()}
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "version": _version(), "uptime_s": round(time.monotonic() - _START, 1)}

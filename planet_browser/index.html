@@ -90,7 +90,17 @@
   /* REPORT pane: the generated mission-control PDF, embedded */
   #reportframe { flex: 1 1 auto; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; display: none; }
   #reportframe.show { display: block; }
-  #pane-report .cap a { color: var(--accent); text-decoration: none; }
+  #pane-report .cap a, .pane .cap a { color: var(--accent); text-decoration: none; }
+  /* engineer / developer / intern panes */
+  .vtsep { color: var(--dim); align-self: center; padding: 0 5px; user-select: none; }
+  #valimg { max-width: 100%; display: block; border-radius: 4px; background: #05060c; align-self: center; }
+  #valselect { max-width: 300px; }
+  #apiframe, #docsframe { flex: 1 1 auto; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .mono { color: var(--txt); background: #05060c; border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; font: 12px/1.55 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap;
+    overflow: auto; flex: 0 0 auto; }
+  #pane-config .mono { max-height: 38%; margin-bottom: 8px; }
+  #srvout { flex: 1 1 auto; }
 </style>
 </head>
 <body>
@@ -218,6 +228,11 @@
       <button class="vtab" data-view="perception">Perception</button>
       <button class="vtab" data-view="metrics">Metrics</button>
       <button class="vtab" data-view="report">Report</button>
+      <span class="vtsep" title="engineer / developer / intern views">·</span>
+      <button class="vtab" data-view="validation">Validation</button>
+      <button class="vtab" data-view="api">API</button>
+      <button class="vtab" data-view="server">Server</button>
+      <button class="vtab" data-view="config">Config</button>
     </nav>
     <div id="viewarea">
       <div id="cesium"></div>
@@ -256,6 +271,29 @@
         <iframe id="reportframe" title="mission-control report"></iframe>
         <div id="reportempty" class="empty">No report yet. Build a queue and press
           <b>Plan mission → open report</b> (Plan tab); the PDF appears here.</div>
+      </div>
+      <div id="pane-validation" class="pane">
+        <div class="cap"><span>VALIDATION — figures from <b>validation/</b> (conserved-truth measurements)</span>
+          <select id="valselect" title="pick a figure"></select></div>
+        <img id="valimg" alt="validation figure" style="display:none" />
+        <div id="valempty" class="empty">No figures served. Run from the source tree (the
+          <b>validation/</b> directory is not shipped in the wheel).</div>
+      </div>
+      <div id="pane-api" class="pane">
+        <div class="cap"><span>API — FastAPI interactive docs (Swagger), every endpoint</span>
+          <a id="apiopen" href="/docs" target="_blank" rel="noopener">open in tab ↗</a></div>
+        <iframe id="apiframe" title="API docs"></iframe>
+      </div>
+      <div id="pane-server" class="pane">
+        <div class="cap"><span>SERVER — health + metrics</span>
+          <button id="srvrefresh" class="go">↻ refresh</button></div>
+        <pre id="srvout" class="mono">—</pre>
+      </div>
+      <div id="pane-config" class="pane">
+        <div class="cap"><span>CONFIG — runtime overlay (PRD N15) + docs</span>
+          <a id="docsopen" href="https://dustgym.github.io/dustgym/" target="_blank" rel="noopener">docs site ↗</a></div>
+        <pre id="cfgout" class="mono">—</pre>
+        <iframe id="docsframe" title="docs" src="https://dustgym.github.io/dustgym/"></iframe>
       </div>
     </div>
   </div>
@@ -365,15 +403,48 @@ const $ = (id) => document.getElementById(id);
 // --- view tabs: swap the stage between Plan (globe) / Perception (render) / Metrics (telemetry) / Report.
 // The globe (#cesium) stays mounted under the panes (no Cesium re-init); the active pane covers it.
 let VIEW = "plan";
-const VIEW_PANE = { perception: "renderpanel", metrics: "execview", report: "pane-report" };
+const VIEW_PANE = { perception: "renderpanel", metrics: "execview", report: "pane-report",
+                    validation: "pane-validation", api: "pane-api", server: "pane-server", config: "pane-config" };
+const _PANE_LOADED = {};
 function setView(name) {
   VIEW = name;
   document.querySelectorAll(".vtab").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   for (const [v, id] of Object.entries(VIEW_PANE)) $(id).classList.toggle("active", v === name);
   if (name === "plan") { showSiteDem(); if (viewer) viewer.resize(); }   // restore the Plan inset + keep globe crisp
   else $("workarea").classList.remove("show");                            // the inset belongs to the Plan tab
+  loadPane(name);
 }
 document.querySelectorAll(".vtab").forEach((b) => { b.onclick = () => setView(b.dataset.view); });
+
+// lazy-load the engineer/dev/intern panes the first time shown (Server refreshes live each open). All read
+// real server endpoints; on file:// or a down server they keep their empty state (no fabricated content).
+async function loadPane(name) {
+  try {
+    if (name === "api") {
+      if (!_PANE_LOADED.api) { $("apiframe").src = "/docs"; _PANE_LOADED.api = true; }   // FastAPI Swagger
+    } else if (name === "validation" && !_PANE_LOADED.validation) {
+      _PANE_LOADED.validation = true;
+      const d = await (await fetch("/figures")).json();
+      const vs = $("valselect");
+      if (d.ok && d.figures.length) {
+        vs.innerHTML = d.figures.map((f) => `<option value="${f.url}">${f.key}</option>`).join("");
+        $("valempty").style.display = "none";
+        const show = () => { $("valimg").src = vs.value; $("valimg").style.display = "block"; };
+        vs.onchange = show; show();
+      }
+    } else if (name === "server") {                                       // live ops view: refresh every open
+      const [h, m] = await Promise.all([fetch("/healthz").then((r) => r.json()),
+                                        fetch("/metrics").then((r) => r.json())]);
+      $("srvout").textContent = "health\n" + JSON.stringify(h, null, 2)
+                              + "\n\nmetrics\n" + JSON.stringify(m, null, 2);
+    } else if (name === "config" && !_PANE_LOADED.config) {
+      _PANE_LOADED.config = true;
+      const c = await (await fetch("/config")).json();
+      $("cfgout").textContent = "runtime config overlay (PRD N15)\n" + JSON.stringify(c, null, 2);
+    }
+  } catch (e) { /* server not reachable (file://) -> panes keep their placeholder/empty state */ }
+}
+$("srvrefresh").onclick = () => loadPane("server");
 
 // PHYSICS loaded from bodies.json (the sim's sysrev-sourced terrain_authority/bodies.py) -> single source
 // of truth. phys() prefers the loaded body terramechanics; falls back to embedded BODIES if the file

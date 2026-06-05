@@ -853,3 +853,29 @@ def test_static_index_and_bodies_served(base):
     assert r.status_code == 200 and b"<" in r.content[:2048]    # serves some HTML
     d = base.get("/bodies.json").json()
     assert "moon" in d and "_ipex" in d                        # the py-generated bodies + ipex mirror
+
+
+# ---- engineer/developer/intern panes: validation figures, config, API docs --------------------
+def test_figures_list_and_serve(base):
+    # the Validation pane: /figures lists the real on-disk figures, /figure/{key} serves the PNG
+    d = base.get("/figures").json()
+    assert d["ok"] and isinstance(d["figures"], list) and len(d["figures"]) > 0   # real figures present
+    f0 = d["figures"][0]
+    assert f0["key"] and f0["url"] == "/figure/" + f0["key"] and "/" in f0["key"]  # 'category/file.png'
+    img = base.get(f0["url"])
+    assert img.status_code == 200 and img.content[:8] == b"\x89PNG\r\n\x1a\n"      # a real PNG
+    # allowlist -> path traversal is refused (only listed keys serve)
+    assert base.get("/figure/../server.py").status_code == 404
+    assert base.get("/figure/nope/missing.png").status_code == 404
+
+
+def test_config_pane_endpoint(base):
+    # the Config pane: the runtime overlay state (PRD N15)
+    d = base.get("/config").json()
+    assert d["ok"] and "config_file" in d and "overrides" in d and "applied" in d
+
+
+def test_api_docs_not_shadowed_by_catchall(base):
+    # the API explorer pane embeds FastAPI's auto Swagger UI; the catch-all (registered last) must not eat it
+    assert base.get("/openapi.json").status_code == 200
+    assert base.get("/docs").status_code == 200
