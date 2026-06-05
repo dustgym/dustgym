@@ -65,7 +65,7 @@ class RoverSimEnv(_BASE):
                  start_col: float = 16.0, goal_col: float = 80.0, goal_radius_cells: float = 2.0,
                  v_max: float = 0.3, omega_max: float = 1.0, dt: float = 0.1,
                  max_steps: int = 200, payload_kg: float = 0.0,
-                 params: "tm.TerramechanicsParams | None" = None, body=None,
+                 params: "tm.TerramechanicsParams | None" = None, body=None, soil=None,
                  randomize: bool = False, slope_max_deg: float = 40.0, patch: int = 5):
         super().__init__()
         self.grid = int(grid)
@@ -85,7 +85,10 @@ class RoverSimEnv(_BASE):
             _b = _bodies.get_body(body)
             self.body = _b.name
             self.g = _b.g
-            self.params_base = params if params is not None else _bodies.params_for_body(_b)
+            # soil override: swap the regolith model (e.g. Earth soil on a lunar map) while keeping the
+            # body's gravity. `soil` is a body name; None -> the body's own regolith.
+            soil_src = _bodies.get_body(soil) if soil is not None else _b
+            self.params_base = params if params is not None else _bodies.params_for_body(soil_src)
             if _b.bekker_regime == "microgravity":         # honest: Bekker model is out of regime
                 import warnings
                 warnings.warn(

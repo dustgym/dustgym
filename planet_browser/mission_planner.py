@@ -49,6 +49,7 @@ from terrain_authority import rassor_mass_model as RM   # ICE-RASSOR drum-fill s
 from terrain_authority import slip as TMS               # conserved slip ladder — weight-aware leg slip
 from terrain_authority import terramechanics as TM      # TerramechanicsParams for the slip solve
 from terrain_authority import vehicles as V             # vehicle/tool capability registry (gate order kinds)
+from terrain_authority.bodies import get_body as _get_body, params_for_body  # soil model (soil override)
 from terrain_authority.column_state import ColumnState  # conserved authority — for I8 plan validation
 
 DRIVE_SPEED_MS  = S.DRIVE_SPEED_MS                       # 0.30 m/s
@@ -123,8 +124,16 @@ class Mission:
     precedence: list = dataclasses.field(default_factory=list)
     vehicle: str = "ipex"                              # the platform doing the work (vehicles.VEHICLES)
     tools: tuple = ()                                  # tools mounted on it (vehicles.TOOLS) -> extra capabilities
+    soil: str = ""                                     # regolith model override (a body name); "" -> the body's own
     @property
     def density(self): return body_density(self.body)
+
+
+def mission_soil_params(mission):
+    """The TerramechanicsParams (soil/Bekker model) a mission's drive physics uses: its `soil` override
+    (any body's regolith, e.g. Earth dry-sand on a lunar map) or the body's own when no override is set.
+    Gravity stays the body's (see body_gravity) -- soil and gravity are independent (terramechanics.py)."""
+    return params_for_body(mission.soil or mission.body)
 
 
 _ORDER_KINDS = ("cut", "fill", "sinter")
@@ -152,6 +161,14 @@ def mission_from_dict(payload):
         caps = V.capabilities_of(veh, tools=tools)
     except KeyError as e:
         raise ValueError(str(e))                       # unknown vehicle/tool -> 400, not 500
+    soil = str(payload.get("soil") or "").strip()      # regolith model override (a body name); "" -> body's own
+    if soil:
+        try:
+            _get_body(soil)                            # validate it is a known body (the soil source)
+        except KeyError as e:
+            raise ValueError(str(e))
+        if _get_body(soil).name == _get_body(body).name:
+            soil = ""                                  # same as the body -> no override stored
     raw = payload.get("orders")
     if not isinstance(raw, list) or not raw:
         raise ValueError("mission needs a non-empty 'orders' list")
@@ -179,7 +196,7 @@ def mission_from_dict(payload):
                                  note=str(o.get("note", ""))))
     c = payload.get("charger", (0.0, 0.0))
     kwargs = dict(name=str(payload.get("name", "Build Mission")), body=body, orders=orders,
-                  charger=(float(c[0]), float(c[1])), vehicle=veh, tools=tools)
+                  charger=(float(c[0]), float(c[1])), vehicle=veh, tools=tools, soil=soil)
     if "date" in payload:
         kwargs["date"] = str(payload["date"])
     prec = payload.get("precedence")                       # I9: [[before_action, after_action], ...]
@@ -256,6 +273,7 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
     per-trip dig/haul/lift energy so any visit order can be simulated/scored downstream."""
     rho = mission.density
     g = body_gravity(mission.body)                          # for haul lift energy (exact m*g*dh)
+    _soil = mission_soil_params(mission)                    # soil model for the haul slip (soil override)
     flows, surplus_kg = balance(mission)
     sinters = [o for o in mission.orders if o.kind == "sinter"]
     if sinters and not C.SINTER_ENABLED:
@@ -288,8 +306,8 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
             # weight-coupled: the loaded outbound leg (carrying ~DRUM_KG) slips more than the empty
             # return; each pays 1/(1-slip) per ground metre. (haul_m = out + back = 2*leg*loads.)
             out_m = back_m = leg * loads
-            slip_loaded = slip_alpha_to_slip(slope_haul, payload_kg=DRUM_KG, g=g)
-            slip_empty = slip_alpha_to_slip(slope_haul, payload_kg=0.0, g=g)
+            slip_loaded = slip_alpha_to_slip(slope_haul, payload_kg=DRUM_KG, g=g, params=_soil)
+            slip_empty = slip_alpha_to_slip(slope_haul, payload_kg=0.0, g=g, params=_soil)
             haul_e = (out_m * DRIVE_J_PER_M / (1.0 - slip_loaded)
                       + back_m * DRIVE_J_PER_M / (1.0 - slip_empty))
             trips.append(dict(kind="cutfill", site=(co.x, co.y), label=f"{co.action} → {fo.action}",
@@ -1102,14 +1120,14 @@ def endurance(mission, *, dem=None, dem_origin=(0.0, 0.0), power_site="psr_tower
         r0 = min(max(0, rc - 200), max(0, H - 400)); c0 = min(max(0, cc0 - 200), max(0, W - 400))
         win = np.asarray(Z)[r0:r0 + 400, c0:c0 + 400]
         med_slope = float(np.median(slope_deg_map(win, cell))) if win.size else 0.0
-        slip = min(0.95, slip_alpha_to_slip(med_slope))     # representative slip from the work-area slope
+        slip = min(0.95, slip_alpha_to_slip(med_slope, params=mission_soil_params(mission)))   # soil-aware
         out["work_area_median_slope_deg"] = med_slope
         out["range_slopeslip_km"] = single_charge_range_m(g, slope_deg=med_slope, slip=slip) / 1000.0
         out["reach"] = reachable_radius_on_dem(dem, dem_origin, BATTERY_J * (1 - RESERVE_FRAC), g)
     return out
 
 
-def slip_alpha_to_slip(slope_deg, payload_kg=0.0, g=None):
+def slip_alpha_to_slip(slope_deg, payload_kg=0.0, g=None, params=None):
     """Wheel slip from terrain slope AND the rover's laden weight, via the CONSERVED slip ladder
     (slip.slip_sinkage_equilibrium): a steeper grade OR a heavier rover (full drum) -> more slip,
     entrapping near ~45 deg. ``payload_kg`` is the regolith in the drum on this leg (0 = empty); ``g``
@@ -1117,9 +1135,10 @@ def slip_alpha_to_slip(slope_deg, payload_kg=0.0, g=None):
     the 1/(1-slip) drive-energy inflation) is weight-coupled, consistent with the simulator authority.
     (The per-cell routing costmap keeps the cheap SLIP_ALPHA*tan(slope) ranking heuristic.)"""
     gg = C.g if g is None else float(g)
+    p = params if params is not None else _TM_PARAMS     # soil model (params_for_body(soil)); default lunar
     weight_n = (ROVER_MASS_KG + max(0.0, payload_kg)) * gg
     eq = TMS.slip_sinkage_equilibrium(weight_n, math.radians(max(0.0, slope_deg)),
-                                      params=_TM_PARAMS, contact_len_m=0.10, contact_width_m=0.18)
+                                      params=p, contact_len_m=0.10, contact_width_m=0.18)
     return max(0.0, min(0.95, float(eq["slip"])))
 
 

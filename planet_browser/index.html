@@ -107,7 +107,8 @@
 
     <section>
       <h3>Fleet</h3>
-      <div class="ctl"><label>Vehicle <select id="vehicle"></select></label></div>
+      <div class="ctl"><label>Vehicle <select id="vehicle"></select></label>
+        <label title="regolith model — defaults to the body's own; override to e.g. run Earth soil on a lunar map">Soil <select id="soil"></select></label></div>
       <div class="ctl" id="tools">tools —</div>
       <div id="fleetcaps">capabilities —</div>
     </section>
@@ -663,7 +664,8 @@ async function senseDrum() {
 // appears when a sinter tool is mounted (it is a separate entity, not on the IPEx excavator).
 function fleet() {
   const tools = [...document.querySelectorAll("#tools input:checked")].map((c) => c.value);
-  return { vehicle: (qel("vehicle").value || "ipex"), tools };
+  const soil = qel("soil") ? qel("soil").value : "";        // "" -> the body's own regolith
+  return { vehicle: (qel("vehicle").value || "ipex"), tools, ...(soil ? { soil } : {}) };
 }
 // M11: when a site lat/lon is set (typed or picked), send it so the plan anchors there (else the
 // planner uses the auto flattest site). Only Moon's Haworth DEM is georeferenced for this today.
@@ -690,6 +692,11 @@ function populateFleet() {
     .map(([k, v]) => `<option value="${k}">${v.label}</option>`).join("");
   qel("tools").innerHTML = "tools: " + (PHY._tools ? Object.entries(PHY._tools)
     .map(([k, t]) => `<label><input type="checkbox" value="${k}"> ${t.label}</label>`).join(" ") : "none");
+  if (qel("soil")) {                                          // soil model = any body's regolith (default: this body's)
+    const bodies = Object.keys(PHY).filter((k) => !k.startsWith("_"));
+    qel("soil").innerHTML = '<option value="">(body default)</option>'
+      + bodies.map((k) => `<option value="${k}">${(PHY[k].label || k)} soil</option>`).join("");
+  }
   [...document.querySelectorAll("#tools input")].forEach((c) => c.addEventListener("change", syncKinds));
   qel("vehicle").addEventListener("change", syncKinds);
   syncKinds();

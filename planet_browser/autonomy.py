@@ -113,7 +113,7 @@ def nominal_leg_energy_J(pose, leg):
             + haul_e + leg.get("lift_e", 0.0))
 
 
-def execute_leg(belief, leg, *, dem=None, dem_origin=(0.0, 0.0), g=None, body="moon"):
+def execute_leg(belief, leg, *, dem=None, dem_origin=(0.0, 0.0), g=None, body="moon", params=None):
     """Step the rover from its believed pose through one leg, returning the TRUE telemetry it experiences:
     the inter-leg drive costs `135/(1-slip) + rover_mass*g*Δh` (slope→slip from the real DEM + exact gravity
     climb), plus the leg's dig/haul/lift. This is the physical truth that diverges from the flat nominal plan."""
@@ -126,7 +126,7 @@ def execute_leg(belief, leg, *, dem=None, dem_origin=(0.0, 0.0), g=None, body="m
     # the regolith in the drum on this leg drives BOTH the slip (heavier -> more slip) and the gravity
     # climb (the load's m*g*h): hauling a full drum up a grade costs more than the dry rover (weight-coupled).
     haul_mass_kg = max(0.0, float(leg.get("mass", 0.0)))
-    slip = MP.slip_alpha_to_slip(slope_deg, payload_kg=haul_mass_kg, g=g)
+    slip = MP.slip_alpha_to_slip(slope_deg, payload_kg=haul_mass_kg, g=g, params=params)
     true_drive_J = (drive_m * MP.DRIVE_J_PER_M / (1.0 - slip)
                     + (MP.ROVER_MASS_KG + haul_mass_kg) * g * max(0.0, dh))
     haul_e = leg.get("haul_e", leg.get("haul_m", 0.0) * MP.DRIVE_J_PER_M)   # #1 slip-aware haul (the plan's)
@@ -175,7 +175,8 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
                 belief = update_pose(belief, (belief.x, belief.y), perception_sigma_m)
                 observe_more += 1
         nominal_J = nominal_leg_energy_J((belief.x, belief.y), leg)
-        telem = execute_leg(belief, leg, dem=dem, dem_origin=dem_origin, g=g, body=mission.body)
+        telem = execute_leg(belief, leg, dem=dem, dem_origin=dem_origin, g=g, body=mission.body,
+                            params=MP.mission_soil_params(mission))
         # ESTIMATE: move (pose uncertainty grows with distance), and grow the energy uncertainty by the
         # leg's model error (a priori the plan can't see the slip truth -> carry it as 1-sigma).
         belief = predict(belief, moved_to=telem["new_pose"], drive_m=telem["drive_m"], energy_spent_J=0.0)

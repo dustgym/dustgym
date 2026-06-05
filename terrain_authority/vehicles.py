@@ -175,13 +175,17 @@ class Placement:
     placements can sit on different bodies. ``power`` empty -> the vehicle's onboard source(s)."""
     instance: str                      # fleet-unique instance name (e.g. "rover_1")
     vehicle: str                       # VEHICLES key
-    body: str                          # BODIES key (the world it operates on)
+    body: str                          # BODIES key (the world it operates on: terrain geometry + gravity)
     tools: tuple = ()                  # TOOLS keys mounted on it
     power: tuple = ()                  # POWER_SOURCES keys (empty -> the vehicle's onboard_power)
+    soil: str = ""                     # regolith model override (a BODIES key); "" -> the body's own soil
+    g: float | None = None             # gravity override [m/s^2]; None -> the body's own gravity
 
     def __post_init__(self):
         get_vehicle(self.vehicle)      # validate every reference against the registries
         B.get_body(self.body)
+        if self.soil:
+            B.get_body(self.soil)      # the soil source is also a body (its regolith)
         for t in self.tools:
             get_tool(t)
         for p in self.power:
@@ -210,8 +214,16 @@ class Deployment:
         return [p for p in self.placements if B.get_body(p.body).name == b]
 
     def params_for(self, instance):
-        """The body-correct TerramechanicsParams for this instance (gravity + sourced regolith)."""
-        return B.params_for_body(self.placement(instance).body)
+        """The TerramechanicsParams (soil/Bekker) for this instance: its `soil` override (e.g. Earth soil
+        on a lunar map) or the body's own regolith. Soil and gravity are independent (see gravity_for)."""
+        p = self.placement(instance)
+        return B.params_for_body(p.soil or p.body)
+
+    def gravity_for(self, instance) -> float:
+        """The gravity [m/s^2] for this instance: its `g` override or the body's own. Decoupled from soil,
+        so e.g. Earth soil under lunar gravity (body=moon, soil=earth) or Earth gravity on lunar terrain."""
+        p = self.placement(instance)
+        return float(p.g) if p.g is not None else B.get_body(p.body).g
 
     def capabilities_for(self, instance) -> frozenset:
         p = self.placement(instance)
