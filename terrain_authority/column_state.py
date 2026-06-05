@@ -20,6 +20,7 @@ closes exactly.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -75,6 +76,11 @@ class ColumnState:
     drum_inventory: float = 0.0  # kg held in drums (not on the grid)
 
     def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:                                  # N14: validate public ctor
+            raise ValueError(
+                f"ColumnState grid must be positive (got width={self.width}, height={self.height})")
+        if self.cell_m <= 0:
+            raise ValueError(f"ColumnState cell_m (cell size in m) must be > 0 (got {self.cell_m})")
         shape = (self.height, self.width)
         if self.mass_areal is None:
             # Default: a uniform loose layer ~ Z_T thick at surface density.
@@ -117,6 +123,34 @@ class ColumnState:
         effect, not a bulk mass sink, so they stay out of the invariant.
         """
         return self.grid_mass() + self.drum_inventory
+
+    def check_invariants(self) -> None:
+        """N14: runtime guard for the conserved-state invariants (spec §10), raising on violation. Unlike
+        the test-only assertions, this is callable in production / CI: mass finite and non-negative, density
+        positive (so height is well-defined), derived height finite, drum inventory non-negative."""
+        if not np.all(np.isfinite(self.mass_areal)):
+            raise ValueError("ColumnState invariant violated: mass_areal has non-finite values")
+        if np.any(self.mass_areal < 0.0):
+            raise ValueError("ColumnState invariant violated: negative mass_areal")
+        if np.any(self.density <= 0.0):
+            raise ValueError("ColumnState invariant violated: non-positive density (height undefined)")
+        if not np.all(np.isfinite(self.derive_height())):
+            raise ValueError("ColumnState invariant violated: derived height is non-finite")
+        if self.drum_inventory < 0.0:
+            raise ValueError("ColumnState invariant violated: negative drum_inventory")
+
+    @contextlib.contextmanager
+    def conserves_mass(self, *, rtol: float = 1e-9):
+        """N14: guard a mutating block that must not create or destroy mass -- total_mass() is asserted
+        unchanged (within rtol) on exit. Use as ``with cs.conserves_mass(): cs.<op>()``."""
+        before = self.total_mass()
+        yield
+        after = self.total_mass()
+        ref = max(abs(before), 1.0)
+        if abs(after - before) > rtol * ref:
+            raise ValueError(
+                f"mass not conserved across block: {before:.6g} -> {after:.6g} kg "
+                f"(rel drift {abs(after - before) / ref:.2e} > rtol {rtol:.0e})")
 
     # -- column-thickness helpers (used by carving / rover / sandpile) -----
 
