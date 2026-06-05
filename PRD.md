@@ -1,6 +1,6 @@
 # PRD — dustgym: Lunar Construction Planner + Mission-Control Report
 
-**Date:** 2026-06-04 · **Status:** living (v4, production-grade + single-software reframe). **Software:**
+**Date:** 2026-06-04 · **Status:** living (v5, production-grade + single-software + autonomous-planning-limits reframe; see `docs/autonomous_planning_review.md`). **Software:**
 there is one software, the **dustgym** monorepo (flat layout: `terrain_authority/` core + `dustgym/` package
 + `planet_browser/` product, all at the repo root); the former `roversim` dev tree is deprecated and folded
 in. The conserved Tier-2 terramechanics core originates with **John McCardle** (CC0 provenance); dustgym is
@@ -135,7 +135,7 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 | I7 | P0 | **Bulking-correct balance** — balance by MASS with the in-situ→spoil swell (cut ρ_deep ≈1920 → fill ρ_spoil ≈1300, ~1.5× volume), not by volume | ✅ **both layers**: `structures.py` `SWELL=RHO_DEEP/RHO_SPOIL` (≈1.48, single-source, loose fill bulks +48%) **and** `mission_planner` mass model (cut @ρ_bank, fill @ρ_loose) so the planner no longer reports a phantom deficit on bulked structures; mass exact, `test_structures` mass-balance tests |
 | I8 | P0 | **Plan validation on the conserved authority** — execute the plan through `column_state` for real, mass-exact feasibility, not the abstract footprint estimate | ✅ `mission_planner.validate_plan` rasterizes orders onto a `ColumnState`, runs cuts→drum→fills; returns feasible / mass_conserved (drift 0.0) / executed-vs-planned kg; flags too-deep cuts (datum floor); `test_mission_planner` validate tests. (On a flat scene now; real-DEM siting = I6) |
 | I9 | P1 | **Precedence / dependency DAG** — order build steps by dependency (grade road before haul on it; dig borrow before the berm it feeds; level pad before its berm), not spatial TSP alone | ✅ `Mission.precedence` (before→after action pairs) → `trip_precedence` lifts to trip constraints → **every** sequencer respects them (eligible-set for nearest/greedy, valid-permutation filter for brute, **SOP-aware Held-Karp** masking, topology-valid moves for 2-opt/Or-opt/LK); `/plan`+`/compare` accept `precedence`, browser has a precedence field; `test_precedence_is_respected_by_every_algorithm` |
-| I10 | P1 | **Hazard-aware routing + slope/slip energy** — route hauls on a DEM costmap (avoid craters/steep/PSR), with slope- and slip-aware leg energy, not straight lines at flat 135 J/m | ✅ `slope_costmap` (cost = 1 + slip·tan θ; impassable > traverse cap) + `route_least_cost` (8-conn Dijkstra) + `routed_distance`; wired into `plan_and_simulate`/`run`/`/plan` for Moon (real Haworth, cached DEM); totals carry `routed_haul`/`blocked_legs`/`haul_detour_frac`; report + browser show the detour. Live: spread hauls +4.5% around hazards; 4 routing tests. **Slope energy: exact gravity lift DONE** — `haul_elevation_gain_m` + `body_gravity` add `mass·g·Δh` (real-DEM Δh) per uphill haul to the energy/battery/time, `totals.lift_energy_J`, surfaced in the report (live: 0.14 MJ; Mars no-DEM 0); exactness test. **slip-loss multiplier still [CALIB]-deferred** (drive base stays 135 J/m × geometric routed metres) |
+| I10 | P1 | **Hazard-aware routing + slope/slip energy** — route hauls on a DEM costmap (avoid craters/steep/PSR), with slope- and slip-aware leg energy, not straight lines at flat 135 J/m | ✅ `slope_costmap` (cost = 1 + slip·tan θ; impassable > traverse cap) + `route_least_cost` (8-conn Dijkstra) + `routed_distance`; wired into `plan_and_simulate`/`run`/`/plan` for Moon (real Haworth, cached DEM); totals carry `routed_haul`/`blocked_legs`/`haul_detour_frac`; report + browser show the detour. Live: spread hauls +4.5% around hazards; 4 routing tests. **Slope energy: exact gravity lift DONE** — `haul_elevation_gain_m` + `body_gravity` add `mass·g·Δh` (real-DEM Δh) per uphill haul to the energy/battery/time, `totals.lift_energy_J`, surfaced in the report (live: 0.14 MJ; Mars no-DEM 0); exactness test. **Slip IS coupled into haul drive energy** via a single `[CALIB]` slip-vs-slope shape (`slip_alpha_to_slip`, a `1/(1−slip)` haul multiplier), **not** the full conserved `slip.py` ladder; the `[CALIB]` shape is the remaining ceiling (was previously mis-stated as "deferred") |
 | I11 | P1 | **Per-structure acceptance** — verify flatness RMSE / berm profile / bearing vs spec (taxonomy §3), and enforce angle-of-repose + compaction so fills hold | ⬜ |
 | I12 | P2 | **Robust plan / uncertainty bands** — confidence on energy/time/feasibility vs DEM error, [UNKNOWN] soil, slip variance, and the drum-fill ± | ⬜ (drum-fill ± is the only uncertainty modeled) |
 
@@ -157,6 +157,40 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 | K7 | P1 | **Drum-fill sensing observable + offload autonomy** | ✅ `DrumSensor` (forward `freespin_drum_current_a` + calibrated-on-conserved-signal inverse + `should_offload`) with a **toggleable seeded noise** (`noise_frac=0` off by default, deterministic). Wired into `worksite_env`/`scheduler_env` (optional `drum_sensor` → sensed drum-fill obs, default off = non-breaking), the planner report (`drum_cycles` + sensed-fill note), and the web (`server.py POST /sense` + the browser DRUM SENSOR widget with a noise checkbox). `test_drum_sensing.py` + `/sense` tests |
 | K8 | P1 | **Realistic surface power** — at a PSR (Haworth) there is NO sun to charge from; power is a lander/tower budget, with IPEx thermal derating (−35/+40 °C, FIX-5) and the 14-day day/night cycle | ⬜ **wrong for the work site:** charging is a flat `[CALIB]` 700 W at (0,0) |
 | K9 | P2 | **Operational windows** — sun / thermal / comms windows coupled to the mission clock (drive/dig/charge gated by availability) | ⬜ clock exists; no window coupling |
+
+### Autonomous-planning limits — the ceilings on the I/K planner (stated explicitly; `docs/autonomous_planning_review.md`)
+The planner solves single-rover, cut-fill-balanced, recharge-coupled routing genuinely — but its autonomy is
+action-level, single-vehicle, open-loop-replan, and silently capped. The hard ceilings (the PRD previously
+stated capabilities without these):
+
+| ID | Limit |
+|---|---|
+| AL1 | **Exactness ceiling.** `brute` is exact on the chosen objective only ≤7 trips; Held-Karp is exact on *driving distance only* ≤16 (assumes dig dominates, order-independent); above 16, `auto` degrades to unbounded local search **with no quality bound and no user-facing warning**. |
+| AL2 | **Infeasible-precedence cliff.** A cyclic / unsatisfiable SOP DAG makes `brute` raise and Held-Karp return a silently "successful" **0-trip plan**; there is no acyclicity/feasibility precheck. |
+| AL3 | **Objective grammar can't express real constraints** — no deadline/time-window/makespan (K9), no soft constraints, no risk term; it optimizes an unconstrained-in-time world. |
+| AL4 | **Action-level, not goal-level instruction.** The user enumerates every cut/fill + depth; the goal-level `Challenge.objective`+tolerance schema is disconnected from the product `Mission` (no "build a pad to ±2 cm, you sequence it"). |
+| AL5 | **Footprints are scalar areas → axis-aligned squares** (a 15×2 m road becomes a 5.48 m square); no shape/orientation/corridor/polygon. `budget`/`scoring`/`priority`/`keepout` are **silently dropped** by `mission_from_dict` (the J4 grammar gap). |
+| AL6 | **No as-built acceptance (I11 ⬜).** `validate_plan` checks mass conservation + the **center cell's** slope on a **flat synthetic mantle**, never the built structure vs its spec (flatness-RMSE / berm profile / repose). |
+| AL7 | **Closed-loop autonomy = open-loop replan over a self-simulator.** It executes its own energy model (not telemetry / not perception), **battery is the only replan trigger**, there is **no fault detection or handling**, and pose σ runs open to ~11.5 m by dead reckoning without the (Godot-gated) perception fix. |
+
+### MV. Multi-vehicle planning (L6/L7) — DESIGNED, UNBUILT (new area; `docs/autonomous_planning_review.md` §2)
+There is **zero** multi-vehicle planning today (both the planner and `scheduler_env.py` are one-rover /
+one-drum). The conserved per-cell authority gives fleet **mass/energy conservation for free** but has **no
+multi-body dynamics** — collision can only ever be a planning constraint, not a simulated event. Staged design:
+
+| ID | P | Requirement | Status |
+|---|---|---|---|
+| MV1 | P2 | **Fleet API** — `Mission` carries N rovers (count, per-rover start/charger, capability vector); `mission_from_dict` + `/plan` accept `rovers`; removes the `vehicles=1` raise | ⬜ |
+| MV2 | P2 | **Task allocation** — `allocate(mission, rovers)` above `optimize_sequence`: sequential-greedy / regret-insertion bidding (bid = marginal `_simulate` cost via the real scorer), MILP/VRP exact oracle at ≤3 rovers; per-rover subsets reuse the existing sequencing pipeline | ⬜ |
+| MV3 | P2 | **Spatial + temporal deconfliction** — prioritized planning over a cell/corridor reservation table (reuses `routed_distance` paths) + shared work-site time-windows; CBS fallback. Collision = scheduling constraint, not physics | ⬜ |
+| MV4 | P2 | **Shared-resource scheduling** — charger as a queued single/k-server (a rover waits → wait = real makespan; fixes K8); borrow-pit / drum / ISRU-plant as locked decrementing resources in a fleet `_simulate` | ⬜ |
+| MV5 | P2 | **Coordinated replan** — `run_closed_loop` extended to N shared-world `Belief`s; re-clear allocation (MV2) on recharge / model-error / pit-empty (AutoNav market re-clearing) | ⬜ |
+| MV6 | P3 | **Heterogeneous fleet** — per-rover capability vector (drum cap, dig rate, drive speed, battery, tools) replacing the global `ipex_specs` singletons in the fleet simulator | ⬜ |
+| MV7 | P2 | **Validity gate** — fleet mass conservation (free, one `ColumnState`) asserted; no double-claim on pits; charger-queue makespan accounted; a **2-rover EXACT baseline (extend `beam_search` to fleet state) required before any "learned ≫ greedy multi-vehicle" claim ships** | ⬜ |
+
+Tractability: **2 rovers** exact-VRP-oracle viable (the only regime to validate learned-vs-exact) · **5**
+auction + prioritized planning + queued charger (the charger queue becomes the dominant makespan term) ·
+**20** auction + prioritized planning only (resource contention, not physics, caps useful fleet size).
 
 ### L. World model (cross-cutting, sample efficiency / planning)
 
@@ -343,7 +377,12 @@ phases, foundation-first:
 - **Status:** ✅ **estimator + belief** — `autonomy.py` (`Belief`, `initial_belief`, `_kf_update`, `predict`, `update_drum`/`update_pose`/`update_energy`); measurements grounded in the real drum-sensor uncertainty (FDC ±2.56%) + a real conserved-authority cut. ✅ **executor + controller (the closed loop)** — `nominal_leg_energy_J` (flat plan), `execute_leg` (slip+slope-adjusted TRUE telemetry from the real DEM), `run_closed_loop` = plan→execute→estimate(predict+grow σ)→**replan/recharge against the estimate**; reserve-aware closed-loop battery management; pose σ grows by dead-reckoning, energy σ by model error. Runs in the conserved-model sim first (AutoNav self-simulation). `test_autonomy.py` (**8**): KF identities, predict grows σ, drum measurement shrinks σ + brackets truth within 2σ, pose fix shrinks σ; `execute_leg` truth ≥ nominal; loop completes + recharges + bounds SoC; true ≥ nominal + σ carried. Live: 2-trip Moon plan completes, 2 recharges + 1 replan, pose σ → 11.5 m. **Honest finding:** on dig-dominated missions slip barely moves the total (dig ≫ drive — the endurance result), so the dominant model-error to track is the drum-fill ± (estimator handles) + dig variance; slip bites on traverse-heavy plans and once it's wired into the haul (#1). ⬜ fault protection · ⬜ wire perception (P6 producer, Godot-gated) · ⬜ terrain mutation on the authority during the loop (validate_plan has the machinery).
 - **Builds on:** I12 (uncertainty bands) — the estimator IS the uncertainty foundation; the conserved closed drive loop + scheduler + beam-search as the execute/model substrate; P6 map channel as the perception input. #2 (power model) folds in as "estimate energy/battery state with uncertainty and replan against it."
 
-**Deferred (until explicitly requested):** multivehicle (parallel rovers / conflict). The scheduler already shows learned ≫ greedy here, but it stays parked per direction.
+**Multi-vehicle (corrected 2026-06-04):** the software has **zero multi-vehicle planning** today — both the
+product planner and `scheduler_env.py` are strictly one-rover / one-drum. The earlier "the scheduler shows
+learned ≫ greedy in multi-vehicle" note was **overstated**: that result (`beam_search` 24 legs vs greedy 28 /
+PPO 27) is **single-rover** trip-leg makespan ordering, not parallelism or conflict. Multi-vehicle is now a
+designed-but-unbuilt area (MV1-MV7 below); the `vehicles=1` gate is a deliberate seam, not an architectural
+dead-end. A 2-rover EXACT baseline is required before any "learned ≫ greedy multi-vehicle" claim ships.
 
 > Dependency: **P1 (round-trip) + P2 (structure authoring) have landed** — the product *flow* is real.
 > **P8 is the keystone for realism**: today the plan is an abstract footprint+TSP estimate decoupled from
