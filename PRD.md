@@ -1,11 +1,19 @@
-# PRD — Lunar Construction Planner + Mission-Control Report (foss_ipex)
+# PRD — dustgym: Lunar Construction Planner + Mission-Control Report
 
-**Owner:** Aaron (product direction) on John McCardle's `foss_ipex` Tier-2 core. **Date:** 2026-06-03 ·
-**Status:** living (v3, product reframe). **Related:** `platform_architecture.md` (north-star),
-`building_taxonomy.md` (verbs/nouns/resources), `rl_construction_design.md` (agents),
-`plan_tier2_slip_rl.md` (Tier-2 build), `planet_browser/mission_planner.py` (the planner + report),
-`planet_browser/index.html` (the browser), `DEFERRED_FIXES.md`. **Legend:** ✅ done · 🟡 partial · ⬜ to build · ⛔ gated (needs euclid oracle / render
-throughput). **Priority:** P0 core-now · P1 next · P2 later · P3 research-bet.
+**Date:** 2026-06-04 · **Status:** living (v4, production-grade + single-software reframe). **Software:**
+there is one software, the **dustgym** monorepo (flat layout: `terrain_authority/` core + `dustgym/` package
++ `planet_browser/` product, all at the repo root); the former `roversim` dev tree is deprecated and folded
+in. The conserved Tier-2 terramechanics core originates with **John McCardle** (CC0 provenance); dustgym is
+the single CC0 software going forward. **Related:** `docs/architecture_review.md` (the production-readiness
+review this version answers), `docs/world_model.md`, `building_taxonomy.md`, `planet_browser/mission_planner.py`
+(planner + report), `planet_browser/server.py` (the API). **Legend:** ✅ done · 🟡 partial · ⬜ to build · ⛔
+gated (render throughput / external oracle). **Priority:** P0 core-now · P1 next · P2 later · P3 research-bet.
+
+**This version's intent (new):** make dustgym a **production-grade system**, not a research artifact. The
+science core is correct, honest, fast, and well-tested (296 tests, conserved + sub-ms); the gap is the
+operational shell. The production requirements are first-class here (Section 6, N9-N18), not a deferred
+appendix. A six-agent architectural review (`docs/architecture_review.md`) graded the system **pre-production**
+and set the roadmap this PRD now encodes.
 
 ---
 
@@ -121,7 +129,7 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 | I2 | P1 | Mission/Task planner (structure→skills + mass routing source↔sink + schedule) | 🟡 `scheduler_env.py` (trip-leg scheduling; beam-search 24 legs, PPO 27, greedy 28); structure-decomposition front-end ⬜ |
 | I3 | P2 | Learned skill-selector (HRL options) | ⬜ |
 | I4 | P0 | **Sequence optimizer** (cut-fill balancing source→sink + route order + battery-aware mid-task recharge) | ✅ `mission_planner.balance` + `_build_trips`/`_simulate`/`plan_and_simulate` |
-| I13 | P1 | **Pluggable algorithm × objective** — run different path-planning/optimization algorithms, optimize/sort by any metric (duration, energy, power, distance, recharges, mass) incl. **multi-objective**; multi-vehicle off-by-default seam | ✅ **7 algorithms** `optimize_sequence`: heuristics **nearest/greedy/two_opt/or_opt/lk** (sim-scored), **exact** **brute** (≤7 perms) + **Held-Karp** DP (exact driving tour, ≤16, SOP-aware), and **auto** (dispatch: brute ≤7 · **Held-Karp-seed → LK-polish** 8-16 · LK >16 — "solved in sequence"). **Multi-objective**: `parse_objective` accepts a name, a `name:w,..` weighted spec (reference-normalized), or a dict. `compare_algorithms` ranks best-first + flags the **Pareto** frontier (non-dominated over time/energy/distance/charges). `/plan`+`/compare` take `algorithm`/`objective`/`precedence`; browser has algorithm + objective (incl. "balanced") + precedence inputs and a Compare table (★ best, ⬩ Pareto). Live (10 trips): auto **7.03 km** < lk 7.09 < held_karp 7.36 < nearest 7.50; Held-Karp = exact driving tour (verified vs full enumeration). **Multi-vehicle gated** (`vehicles=1`; `>1` raises → roversim `scheduler_env.py`). 15 tests. Multi-path coordination = future. |
+| I13 | P1 | **Pluggable algorithm × objective** — run different path-planning/optimization algorithms, optimize/sort by any metric (duration, energy, power, distance, recharges, mass) incl. **multi-objective**; multi-vehicle off-by-default seam | ✅ **7 algorithms** `optimize_sequence`: heuristics **nearest/greedy/two_opt/or_opt/lk** (sim-scored), **exact** **brute** (≤7 perms) + **Held-Karp** DP (exact driving tour, ≤16, SOP-aware), and **auto** (dispatch: brute ≤7 · **Held-Karp-seed → LK-polish** 8-16 · LK >16 — "solved in sequence"). **Multi-objective**: `parse_objective` accepts a name, a `name:w,..` weighted spec (reference-normalized), or a dict. `compare_algorithms` ranks best-first + flags the **Pareto** frontier (non-dominated over time/energy/distance/charges). `/plan`+`/compare` take `algorithm`/`objective`/`precedence`; browser has algorithm + objective (incl. "balanced") + precedence inputs and a Compare table (★ best, ⬩ Pareto). Live (10 trips): auto **7.03 km** < lk 7.09 < held_karp 7.36 < nearest 7.50; Held-Karp = exact driving tour (verified vs full enumeration). **Multi-vehicle gated** (`vehicles=1`; `>1` raises → `terrain_authority/scheduler_env.py`). 15 tests. Multi-path coordination = future. |
 | I5 | P0 | **Mission-control report** (2-3pp PDF: trip table, route+material-flow map, battery%/speed vs time, per-trip + cumulative energy/mass, material balance) + markdown | ✅ `mission_planner.report` (`planet_browser/reports/`) |
 | I6 | P0 | **Terrain-aware siting** — read the DEM at each order's footprint (slope); reject sites above a buildability threshold | ✅ **LIVE** — `validate_plan(dem=, dem_origin=, max_slope_deg=)` + `load_haworth_dem`/`slope_deg_map`: real Haworth gate (flat 0.0° feasible, crater wall 69.8° rejected); **wired into `/plan` for Moon** via M11 anchor (cached DEM, graceful fallback). `test_mission_planner` slope + live-server tests |
 | I7 | P0 | **Bulking-correct balance** — balance by MASS with the in-situ→spoil swell (cut ρ_deep ≈1920 → fill ρ_spoil ≈1300, ~1.5× volume), not by volume | ✅ **both layers**: `structures.py` `SWELL=RHO_DEEP/RHO_SPOIL` (≈1.48, single-source, loose fill bulks +48%) **and** `mission_planner` mass model (cut @ρ_bank, fill @ρ_loose) so the planner no longer reports a phantom deficit on bulked structures; mass exact, `test_structures` mass-balance tests |
@@ -198,9 +206,19 @@ monolithic learned latent world model. The five layers and their status:
 | N3 | P0 | No synthetic/stub data; honesty tags ([CALIB]/[UNKNOWN]) | ✅ |
 | N4 | P1 | Headless step perf (sub-ms authority step) | ✅ |
 | N5 | P1 | License-clean core (numpy-only); heavy deps (SB3/torch/Godot) optional/gated | ✅ |
-| N6 | P0 | Test + regression gate | ✅ 190 (roversim) + 25 (planet_browser) pytest; all 9 `Dust/*` envs pass strict env_checker (warnings-as-errors, after the rover_env ±1e3 obs bound) |
-| N7 | P2 | **Production server** — ASGI (e.g. FastAPI/uvicorn) + concurrency + auth; today the planner server is single-user stdlib `http.server` (fine for a demo, not production) | ⬜ |
-| N8 | P2 | **API hardening** — CI on the planner/server, structured logging/observability, robust error handling + input limits | 🟡 input validation + ruff/pytest exist; CI/logging ⬜ |
+| N6 | P0 | Tests exist (regression coverage) | 🟡 **296 pytest** (`terrain_authority` 210 + `planet_browser` 86, + 26 in `scripts/`); all 10 registered `Dust/*` IDs pass strict env_checker locally. **But the gate is local-only** — see N9 (no CI runs them yet) |
+| N7 | **P1** | **Production server** — ASGI (FastAPI/uvicorn): concurrency, request size/time limits, graceful shutdown, configurable host/port/workers. Today the server is a multi-threaded stdlib `ThreadingHTTPServer` with **thread-unsafe per-request report generation** (global pyplot) + no auth/limits | ⬜ |
+| N8 | **P1** | **API hardening** — input size caps + path-traversal guards (✅ on `/reports/`,`/dem`) + auth on mutating routes + CORS policy + `pip-audit`; robust error handling | 🟡 input validation + traversal guards exist; auth/limits/CORS ⬜ |
+| **N9** | **P0** | **CI gate** — a `ci.yml` runs on push/PR: `ruff check` + `pytest` (3.10-3.12 matrix) + strict env_checker (warnings-as-errors) on all 10 `Dust/*` IDs; pytest markers gate the GPU/Godot/COLMAP/Chrono tiers; merge blocked on green; publish `needs:` CI. **Today the only workflow is publish-only** | ⬜ |
+| **N10** | **P1** | **Structured logging + observability** — `logging` (not the 360 `print()`); per-module loggers; server emits request + error logs (id/route/duration/outcome) + `/healthz` + `/metrics` | ⬜ |
+| **N11** | **P0** | **Code-quality tooling, committed + enforced** — `[tool.ruff]` + `[tool.mypy]` + `[tool.pytest.ini_options]` in `pyproject.toml`, `.pre-commit-config.yaml`, `py.typed`; wired into N9 | ⬜ |
+| **N12** | **P1** | **Dependency hygiene** — a committed lockfile, version ceilings (esp. a tested `gymnasium` range), pinned `[rl]` extras, reproducible-install check (build wheel → fresh-venv import) in CI | ⬜ floor-only pins today |
+| **N13** | **P1** | **Packaging completeness** — the published artifact contains the full advertised product (`planet_browser` + a server entry point), no synthetic-default registered envs, tests excluded from the wheel; or the wheel scope is documented | ⬜ `planet_browser` absent from wheel; 51 `sys.path` hacks |
+| **N14** | **P1** | **Runtime invariant enforcement + input validation** — conservation / non-negativity / finite-state checkable at runtime (CI-gated, not `assert`); public physics + env constructors validate dims/cell-size/positive-density | ⬜ test-only today |
+| **N15** | **P2** | **Externalized config (12-factor)** — env-overridable host/port/report-dir/DEM-bundle/`[CALIB]` knobs (0 `os.environ` today) | ⬜ |
+| **N16** | **P1** | **Release process + versioning** — SemVer, `CHANGELOG.md`, `dustgym.__version__`, documented bump→tag→publish flow (replaces the old upstream-PR model) | ⬜ |
+| **N17** | **P2** | **Deployment + ops doc** — `docs/deployment.md` + a server container image + env-var config + the Godot/`/render` optional-dependency toggle | ⬜ |
+| **N18** | **P2** | **Reproducibility baselines** — checksummed data fixtures; golden-file regression on planner totals (energy/mass/distance); AprilTag 12.7 mm + map-channel RMSE tracked as regression baselines | ⬜ |
 
 ## 7. KPIs
 Benchmark: # authored challenges/missions; agent score vs baseline; train→held-out generalization gap.
@@ -214,6 +232,11 @@ Each stage names its **Deliverable** (what ships), **Files** (touched / NEW, so 
 explicit), **Adds** (what is new), and **Tests** (what verifies it). "Shipped" is the record of done
 stages; "Forward plan" is the live work. Multivehicle is deferred until explicitly requested.
 
+> **Historical note:** the Shipped table below records the build history; the per-stage `PR #N` tags and
+> the "tests at the time" counts are **historical waypoints from before the single-repo consolidation** (when
+> the core was upstreamed to a separate fork). They are not the current state. Current state: one repo, 296
+> tests. This history will migrate to `CHANGELOG.md` (N16).
+
 ### Shipped
 | Stage | Deliverable | Key files | Tests at the time |
 |---|---|---|---|
@@ -225,8 +248,8 @@ stages; "Forward plan" is the live work. Multivehicle is deferred until explicit
 | S5 | **product layer: planner + report + browser** | `planet_browser/mission_planner.py` (balance + optimize + 3pp report), `index.html` (Cesium browser + live estimate), `gen_bodies_json.py`→`bodies.json`; sinter = conserved primitive + WorkSite seam + planner order, **GATED OFF** | gate + deposit 9/9 |
 | S6 | **config consolidation (single source = .py)** | planner imports `terrain_authority`; one `SINTER_ENABLED` in `constants.py`; `[CALIB]` knobs in `ipex_specs.py`; browser reads `bodies.json` `_ipex` | 168 pytest |
 | S7 | **browser → plan → report round-trip (P1)** | `planet_browser/index.html` (build QUEUE add/list/reorder/delete + "Plan" → opens the PDF + the missing `bodies.json` fetch), NEW `server.py` (stdlib http; serves front-end + `POST /plan` + `/reports/`), `mission_planner.mission_from_dict` + `run(stem=)` | NEW `test_mission_planner.py` 13/13 (incl. real-socket `/plan` + PDF fetch); ruff-F clean; live curl drive (58 KB PDF, sinter→400) |
-| S8 | **drum-mass sensing + offload autonomy** (ICE-RASSOR, areas K6/K7) | `rassor_mass_model.py` (`DrumSensor` + toggleable seeded noise, `freespin_drum_current_a`, `should_offload`; NTRS 20210022781), sinter primitive + gate, `worksite_env`/`scheduler_env` optional `drum_sensor`. **In PR #7** (`jmccardle/roversim#7`, reconciled onto main) | `test_rassor_mass_model` + `test_drum_sensing`; 190 pytest |
-| S9 | **product/UI overhaul + release prep** | Earth render fix (Esri WebMercator), single-sidebar redesign + professional palette, imagery **layer selector** (Mars MOLA shaded-relief), terramechanics **ⓘ** info button (per-body), responsive layout, **Haworth work-area DEM inset** (`server.py /dem` + auto-show on Moon); `AGENTS.md`; PR #7 pushed + merge-ready | Playwright-snapshot verified; 190 (roversim) + 15 (planet_browser) |
+| S8 | **drum-mass sensing + offload autonomy** (ICE-RASSOR, areas K6/K7) | `rassor_mass_model.py` (`DrumSensor` + toggleable seeded noise, `freespin_drum_current_a`, `should_offload`; NTRS 20210022781), sinter primitive + gate, `worksite_env`/`scheduler_env` optional `drum_sensor` (landed pre-consolidation) | `test_rassor_mass_model` + `test_drum_sensing`; 190 pytest (historical) |
+| S9 | **product/UI overhaul + release prep** | Earth render fix (Esri WebMercator), single-sidebar redesign + professional palette, imagery **layer selector** (Mars MOLA shaded-relief), terramechanics **ⓘ** info button (per-body), responsive layout, **Haworth work-area DEM inset** (`server.py /dem` + auto-show on Moon); `AGENTS.md` | Playwright-snapshot verified; 190 + 15 (historical) |
 | S10 | **author by structure (P2)** | NEW `planet_browser/structures.py` (8 taxonomy templates → **volume-balanced** cut/fill orders) + `server.py POST /structure` + `index.html` structure picker → build queue | NEW `test_structures.py` 8/8 + 2 `/structure` endpoint tests (TDD red→green); ruff-F clean; UI snapshot-verified |
 
 ### Forward plan
@@ -289,17 +312,36 @@ channel) / P7 (Chrono) on the science side; P3 (sinter un-gate) when its numbers
 - **Files:** ✅ `mission_planner.py` — `power_regime(mission, kind=, charge_power_w=, temp_c=)` (PSR `psr_tower` = anytime/duty 1.0 vs `sunlit_solar` = duty `daylight_h/solar_day_h`, effective_charge_w), `thermal_derate(temp_c)` (cold Li-ion fraction, FIX-5 qual context); wired into `endurance().power` + the report "Power:" line. Fixes the flagged-wrong "flat 700 W solar at a PSR" (the recharge model IS the tower — correct for a PSR; calling it solar was the error). **Remaining:** simulate the duty-limited solar recharge against the mission clock (night-parking), per-site illumination (K9).
 - **Tests:** ✅ 3 — PSR tower duty 1.0/anytime vs sunlit-solar duty<1/daylight-only; thermal derate cold<1 floored 0.5; endurance carries the power regime. ⬜ window-gated charge-blocked-outside-window.
 
-**P11 — Production hardening [P2].**
-- **Deliverable:** mission persistence (M10), a geodetic site frame from the globe pick (M11), a production ASGI server + auth (N7), and API CI/observability (N8).
-- **Files:** `planet_browser/server.py` (→ ASGI + auth + save/load routes), `index.html` (lat/lon↔site-frame), NEW persistence + CI config.
-- **Adds:** save/load/versioning, real server, coordinate transform, CI/logging.
-- **Tests:** a mission round-trips through save/load; lat/lon↔meters transform is invertible; auth gate; CI green.
+**P11 — Production hardening [P0, the new headline program]. Realizes N9-N18 + M10/M11.** This is the work
+that takes dustgym from pre-production to production-grade (see `docs/architecture_review.md`). Built in
+phases, foundation-first:
+- **P11a — CI + quality gate (P0, N9/N11/N14).** `ci.yml` (ruff + pytest matrix + strict env_checker, gated
+  test markers, branch protection, publish-needs-CI); commit `[tool.ruff]`/`[tool.mypy]`/`[tool.pytest]` +
+  `.pre-commit` + `py.typed`; runtime invariant guard (`conserves_mass`/`check_invariants`) + public-constructor
+  validation. **Tests:** CI is green and required; an invariant guard catches an injected mass leak; an invalid
+  `ColumnState` is rejected.
+- **P11b — Observability + config + deps (P1, N10/N12/N15).** `logging` replacing library/server `print`;
+  request + error logging + `/healthz`/`/metrics`; env-overridable config; a lockfile + version ceilings +
+  `pip-audit`. **Tests:** the server logs a request id + outcome; a bad config is rejected; a fresh-venv install
+  reproduces from the lock.
+- **P11c — ASGI server + API hardening (P1, N7/N8/N13).** FastAPI/uvicorn with Pydantic request/response
+  models (the API contract), input size/time limits, auth on mutating routes, CORS policy, thread/async-safe
+  OO-matplotlib report generation, `reports/` TTL/quota; package `planet_browser` + a server entry point in the
+  wheel and delete the `sys.path` hacks. **Tests:** oversized body → 413; unauthenticated mutate → 401;
+  concurrent `/plan` produce uncorrupted reports; `pip install` exposes the server entry point.
+- **P11d — Persistence + geodesy + release (P1/P2, M10/M11/N16/N18).** Mission save/load/version (SQLite or
+  files); the lat/lon↔local-meters transform driving the plan from the globe pick; `CHANGELOG.md` + SemVer +
+  `__version__`; golden-file regression on planner totals + AprilTag/map-channel baselines. **Tests:** a mission
+  round-trips through save/load; lat/lon↔meters is invertible; planner totals match the golden file.
+- **P11e — roversim purge (P0, mechanical).** Remove every `roversim` path, the dual-tree resolver, the
+  user-facing multi-vehicle raise string, and PR references from code + docs + this PRD's history. There is
+  one software.
 
 **P12 — Closed-loop autonomy (the AutoNav model) [P1]. 🟡 STARTED (TDD) 2026-06-04.**
-- **Design basis:** DS1 AutoNav (Riedel/Bhaskaran, JPL) runs sense→**estimate(+covariance)**→plan→execute→re-estimate→**replan** onboard. We already own PLAN (`mission_planner`: algorithms×objectives, precedence = AutoNav's "legal" check, model-based self-simulation), EXECUTE (roversim `drive_step`/worksite + the conserved authority), and one real observable (drum motor-current sensing). The gaps are the **ESTIMATE** half (state + uncertainty) and the **closed-loop replan**. Loop runs in the conserved-authority sim first (AutoNav's self-simulation), real telemetry later.
+- **Design basis:** DS1 AutoNav (Riedel/Bhaskaran, JPL) runs sense→**estimate(+covariance)**→plan→execute→re-estimate→**replan** onboard. We already own PLAN (`mission_planner`: algorithms×objectives, precedence = AutoNav's "legal" check, model-based self-simulation), EXECUTE (`terrain_authority` `drive_step`/worksite + the conserved authority), and one real observable (drum motor-current sensing). The gaps are the **ESTIMATE** half (state + uncertainty) and the **closed-loop replan**. Loop runs in the conserved-authority sim first (AutoNav's self-simulation), real telemetry later.
 - **Deliverable:** `autonomy/` layer — `belief` (estimated pose / energy SoC / drum fill / task ledger, each with 1-σ), `estimator` (recursive Kalman/Bayesian fusion; predict grows uncertainty, update_* shrinks it), `executor` (steps the authority through a leg), `controller` (plan→execute→sense→estimate→replan + fault protection).
 - **Status:** ✅ **estimator + belief** — `autonomy.py` (`Belief`, `initial_belief`, `_kf_update`, `predict`, `update_drum`/`update_pose`/`update_energy`); measurements grounded in the real drum-sensor uncertainty (FDC ±2.56%) + a real conserved-authority cut. ✅ **executor + controller (the closed loop)** — `nominal_leg_energy_J` (flat plan), `execute_leg` (slip+slope-adjusted TRUE telemetry from the real DEM), `run_closed_loop` = plan→execute→estimate(predict+grow σ)→**replan/recharge against the estimate**; reserve-aware closed-loop battery management; pose σ grows by dead-reckoning, energy σ by model error. Runs in the conserved-model sim first (AutoNav self-simulation). `test_autonomy.py` (**8**): KF identities, predict grows σ, drum measurement shrinks σ + brackets truth within 2σ, pose fix shrinks σ; `execute_leg` truth ≥ nominal; loop completes + recharges + bounds SoC; true ≥ nominal + σ carried. Live: 2-trip Moon plan completes, 2 recharges + 1 replan, pose σ → 11.5 m. **Honest finding:** on dig-dominated missions slip barely moves the total (dig ≫ drive — the endurance result), so the dominant model-error to track is the drum-fill ± (estimator handles) + dig variance; slip bites on traverse-heavy plans and once it's wired into the haul (#1). ⬜ fault protection · ⬜ wire perception (P6 producer, Godot-gated) · ⬜ terrain mutation on the authority during the loop (validate_plan has the machinery).
-- **Builds on:** I12 (uncertainty bands) — the estimator IS the uncertainty foundation; the roversim closed drive loop + scheduler + beam-search as the execute/model substrate; P6 map channel as the perception input. #2 (power model) folds in as "estimate energy/battery state with uncertainty and replan against it."
+- **Builds on:** I12 (uncertainty bands) — the estimator IS the uncertainty foundation; the conserved closed drive loop + scheduler + beam-search as the execute/model substrate; P6 map channel as the perception input. #2 (power model) folds in as "estimate energy/battery state with uncertainty and replan against it."
 
 **Deferred (until explicitly requested):** multivehicle (parallel rovers / conflict). The scheduler already shows learned ≫ greedy here, but it stays parked per direction.
 
@@ -310,10 +352,13 @@ channel) / P7 (Chrono) on the science side; P3 (sinter un-gate) when its numbers
 > builds on it. P10 (polar power) and P3 (sinter) are independent grounding; P11 is production hardening;
 > P5 (animation) and P6/P7 (map-channel/Chrono science depth) extend the rest.
 
-## 9. Delivery / PR status
-PR #1 (L0-L4 Tier-2 core) **MERGED** into `jmccardle/roversim`. PR #2 (RL training) + PR #3 (challenge
-platform/M1) **OPEN + MERGEABLE** (READ-only access; John merges). Repo is John's — RL/platform layers
-upstream via PR + coordination.
+## 9. Delivery / release
+**Single software, single repo (`dustgym/dustgym`).** There is no upstream fork and no cross-repo PR model
+anymore; the former `roversim` history is folded in (the Tier-2 core remains CC0, John McCardle's provenance).
+Delivery is a standard release flow (N16): land work on a branch → green CI (N9) → merge to `main` → bump
+`pyproject.toml` version + `CHANGELOG.md` → tag `vX.Y.Z` → the publish workflow ships to PyPI. Current state:
+`main` is clean, 296 tests pass locally, the package builds (`dustgym 0.1.0`); the production-grade release gate
+(N9-N16) is the work this PRD version prioritizes. dustgym is **not yet on PyPI** (pre-release).
 
 ## 10. Dependencies & risks
 Tier-3 forces (A5/A6) + camera RL (F3, perception) gated on euclid oracle / render throughput. Energy/
@@ -321,9 +366,11 @@ battery (K2) is a new resource model (not physics). Scale (D5/E2) + the 3D app (
 Over-claim risk: keep "real physics" = conserved Tier-2 (N3); keep app shell ≠ benchmark core (§1).
 
 ## 11. Open questions
-v1 Mission grammar scope (which structures first: Pad+Road+Berm?). 3D-app engine (Godot vs web viewer).
-Battery model fidelity (constant draw vs actuator-resolved). Single-agent v1 vs multi-agent schema now.
-General map ingest (polar-only vs reproject equatorial). Where RL/app code lives (John's repo vs platform repo).
+v1 Mission grammar scope (which structures first: Pad+Road+Berm?). 3D-app engine (Godot vs web viewer — the
+M-section recommendation is React + three.js + FastAPI). Battery model fidelity (constant draw vs
+actuator-resolved). Single-agent v1 vs multi-agent schema now. (Resolved: there is one software, one repo —
+the old "where RL/app code lives" question is closed; general map ingest now supports polar + reprojected
+equatorial.)
 
 ## 12. Out of scope (v1)
 Flight autonomy; granular DEM at scale; tool-wear/thermal-power; camera-RL/perception track; multi-agent;
