@@ -184,7 +184,6 @@ def _flat_plane_lit(heightmap: np.ndarray, sun_el_deg: float) -> np.ndarray:
 
 
 def _self_test() -> int:
-    import sys
 
     failures = 0
 

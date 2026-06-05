@@ -140,7 +140,7 @@ def _draw_frame(ax, fields: dict, meta: dict, cell_m: float, width: int, height:
     sl = fields["state_label"]
     n_tread = int(((sl == K.STATE_TREAD) | (sl == K.STATE_COMPACTED_BERM)).sum())
     if frame_idx == 0:
-        cap = f"t000  pristine\nno rover yet -> 1 coarse ROOT leaf\n0 TREAD cells"
+        cap = "t000  pristine\nno rover yet -> 1 coarse ROOT leaf\n0 TREAD cells"
     else:
         pct = 100.0 * frame_idx / (n_frames - 1)
         cap = (f"t{frame_idx:03d}  drive {pct:.0f}%\n"

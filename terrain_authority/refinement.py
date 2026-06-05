@@ -42,7 +42,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import constants as K
 from .column_state import ColumnState, StateLabel
 
 # ---------------------------------------------------------------------------

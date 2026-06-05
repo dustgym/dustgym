@@ -12,7 +12,7 @@ import os
 import numpy as np
 import pytest
 
-from terrain_authority.column_state import ColumnState, StateLabel
+from terrain_authority.column_state import StateLabel
 from terrain_authority.worksite import WorkSite
 
 BUNDLE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

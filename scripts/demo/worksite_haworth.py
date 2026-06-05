@@ -44,7 +44,7 @@ def run(charges, seed):
 
 def main():
     if not os.path.isdir(BUNDLE):
-        print(f"Haworth DEM bundle not found at {BUNDLE} (ships with the roversim repo). Skipping.")
+        print(f"Haworth DEM bundle not found at {BUNDLE} (expected in the repo's samples/). Skipping.")
         return
     print(f"IPEx battery: {ix.battery_energy_wh():.0f} Wh = {ix.battery_energy_j()/1e6:.2f} MJ/charge; "
           f"dig {ix.dig_energy_per_kg():.0f} J/kg, drive {ix.drive_energy_per_m():.0f} J/m")

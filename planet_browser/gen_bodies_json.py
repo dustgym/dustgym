@@ -9,7 +9,7 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "roversim"))
+sys.path.insert(0, os.path.join(HERE, ".."))   # the monorepo root holds terrain_authority/
 
 from terrain_authority import bodies as B  # noqa: E402
 from terrain_authority import ipex_specs as S  # noqa: E402

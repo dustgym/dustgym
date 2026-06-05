@@ -178,11 +178,47 @@ def test_validate_plan_anchored_to_dem_origin():
     assert vs["feasible"] is False and vs["slope_violations"]
 
 
+# ---- AL2: infeasible precedence fails loud, not a silent 0-trip "success" -------------------------
+def test_precedence_feasibility_unit():
+    assert MP._precedence_is_feasible(3, [(0, 1), (1, 2)]) is True       # a chain: feasible
+    assert MP._precedence_is_feasible(2, [(0, 1), (1, 0)]) is False      # a 2-cycle: infeasible
+    assert MP._precedence_is_feasible(1, []) is True                     # trivial
+
+
+def test_cyclic_precedence_fails_loud_not_silent():
+    # two separated cut->fill builds whose cross-precedence forms a cycle (A before B and B before A)
+    m = MP.mission_from_dict({"name": "cyc", "body": "moon", "charger": [0, 0],
+        "orders": [
+            {"action": "cutA", "kind": "cut", "x": 5, "y": 5, "footprint_m2": 40, "depth_m": 0.3},
+            {"action": "fillA", "kind": "fill", "x": 5, "y": 5, "footprint_m2": 40, "depth_m": 0.3},
+            {"action": "cutB", "kind": "cut", "x": 60, "y": 60, "footprint_m2": 40, "depth_m": 0.3},
+            {"action": "fillB", "kind": "fill", "x": 60, "y": 60, "footprint_m2": 40, "depth_m": 0.3}],
+        "precedence": [["fillA", "cutB"], ["fillB", "cutA"]]})
+    with pytest.raises(RuntimeError, match="precedence"):
+        MP.plan_and_simulate(m)
+
+
+def test_optimality_flag_reported_and_exact_for_small_plan():
+    # AL1: a small plan is solved exactly (brute) and the optimality is reported, not silent
+    m = MP.mission_from_dict({"name": "small", "body": "moon", "charger": [0, 0],
+        "orders": [{"action": "cut_pad", "kind": "cut", "x": 5, "y": 5, "footprint_m2": 40, "depth_m": 0.3},
+                   {"action": "fill_low", "kind": "fill", "x": 12, "y": 8, "footprint_m2": 40, "depth_m": 0.3}]})
+    _, _, _, _, totals = MP.plan_and_simulate(m, algorithm="auto")
+    assert totals["optimality"] == "exact"                  # 2 trips <= BRUTE_MAX_TRIPS -> brute = exact
+    assert totals["resolved_algorithm"] == "brute"
+    # and the default heuristic path is honestly labelled, not silently "exact"
+    _, _, _, _, t_nn = MP.plan_and_simulate(m, algorithm="nearest")
+    assert t_nn["optimality"] == "heuristic"
+
+
 # ---- P4: non-polar DEM ingest (reproject a cylindrical lat/lon product to the local metric grid) -
 def test_ingest_nonpolar_cylindrical_dem_relief_round_trips(tmp_path):
+    import os
     import numpy as np
     import dem_import as di
-    heights, geom = di.load_cylindrical_fixture("fixtures/ldem4_equator_dn.npy", "fixtures/ldem4_equator.json")
+    _fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")   # CWD-independent
+    heights, geom = di.load_cylindrical_fixture(
+        os.path.join(_fx, "ldem4_equator_dn.npy"), os.path.join(_fx, "ldem4_equator.json"))
     assert abs(0.5 * (geom["lat_top_deg"] + geom["lat_bottom_deg"])) < 60.0      # genuinely NON-polar
     Z, cell = di.reproject_cylindrical(
         heights, lat_top=geom["lat_top_deg"], lat_bottom=geom["lat_bottom_deg"],
