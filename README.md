@@ -98,7 +98,7 @@ Build-planning software: place build orders on a real map, an optimizer sequence
 physics + battery + time, and you get a 2–3 page mission-control report.
 
 ```bash
-python -m planet_browser.server              # stdlib http.server, no framework (or: dustgym-serve)
+python -m planet_browser.server              # FastAPI/uvicorn ASGI (or: dustgym-serve)
 # open the printed URL; CesiumJS globe (NASA Trek Moon/Mars tiles), build queue, Plan mission -> PDF
 ```
 

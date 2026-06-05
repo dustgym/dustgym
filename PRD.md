@@ -10,7 +10,7 @@ review this version answers), `docs/world_model.md`, `building_taxonomy.md`, `pl
 gated (render throughput / external oracle). **Priority:** P0 core-now · P1 next · P2 later · P3 research-bet.
 
 **This version's intent (new):** make dustgym a **production-grade system**, not a research artifact. The
-science core is correct, honest, fast, and well-tested (296 tests, conserved + sub-ms); the gap is the
+science core is correct, honest, fast, and well-tested (701 tests, conserved + sub-ms); the gap is the
 operational shell. The production requirements are first-class here (Section 6, N9-N18), not a deferred
 appendix. A six-agent architectural review (`docs/architecture_review.md`) graded the system **pre-production**
 and set the roadmap this PRD now encodes.
@@ -102,6 +102,7 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 ### E. Scale / LOD (L2)
 | E1 | P0 | Interaction-keyed quadtree LOD | ✅ `quadtree.py` (21MB vs 4GB demo) |
 | E2 | P2 | Multi-site / multi-agent active regions | ⬜ |
+| E3 | P1 | **Runtime tiled-LOD mosaic** (assemble a viewport from cached tiles at mixed resolution) | ✅ `tiles_mosaic.py` (tested) |
 
 ### F. Sensor model / rendering (L3)
 | F1 | P0 | Sensor-faithful Hapke render (grazing sun, shadows) | ✅ Godot `godot_sidecar` |
@@ -114,6 +115,8 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 | G2 | P0 | Goal-conditioned construction env (`H_target`) | ✅ `terrain_target_env.py` (drive + drum cut/dump) |
 | G3 | P0 | Honest control reward + domain randomization | ✅ |
 | G4 | P0 | Trainable (real RL converges) | ✅ PPO 0→100%; CEM 60→100% |
+| G5 | P1 | **Active-perception env** (next-best-view: drive to reduce per-cell map uncertainty per joule) | ✅ `active_perception_env.py` (`Dust/ActivePerception-v0`, tested). Honest finding: submodular → greedy NBV ties multi-step beam (1−1/e); learning's value is the expensive-observation regime |
+| G6 | P1 | **Self-optimizing slip-energy loop** (observe model-vs-truth gap → fit `inflation(slope)` online → re-price routes) | ✅ `self_optimizing.py` (online regression, held-out error ~20%→<1%) + `adaptive_planner.py` (re-prices routes, wired into `/plan`); only the inflation regression is learned, dynamics stay conserved (tested) |
 
 ### H. Construction skill library — taxonomy verbs (L5)
 | ID | P | Skill | Status |
@@ -167,8 +170,8 @@ stated capabilities without these):
 
 | ID | Limit |
 |---|---|
-| AL1 | **Exactness ceiling.** `brute` is exact on the chosen objective only ≤7 trips; Held-Karp is exact on *driving distance only* ≤16 (assumes dig dominates, order-independent); above 16, `auto` degrades to unbounded local search **with no quality bound and no user-facing warning**. |
-| AL2 | **Infeasible-precedence cliff.** A cyclic / unsatisfiable SOP DAG makes `brute` raise and Held-Karp return a silently "successful" **0-trip plan**; there is no acyclicity/feasibility precheck. |
+| AL1 | **Exactness ceiling.** `brute` is exact on the chosen objective only ≤7 trips; Held-Karp is exact on *driving distance only* ≤16 (assumes dig dominates, order-independent); above 16, `auto` degrades to unbounded local search with no quality bound. ✅ *Fixed:* the degradation now emits a user-facing `warnings.warn` (`mission_planner.py:669`). The exactness ceiling itself remains (a true algorithmic limit). |
+| AL2 | **Infeasible-precedence cliff.** A cyclic / unsatisfiable SOP DAG used to make `brute` raise and Held-Karp return a silently "successful" **0-trip plan**. ✅ *Fixed:* `_precedence_is_feasible` (`mission_planner.py:653`) prechecks the DAG for acyclicity and fails loud before planning. (Residual: the public `optimize_sequence`/`_held_karp` path still returns `[]` on a cycle rather than raising — MED bug in the architecture review.) |
 | AL3 | **Objective grammar can't express real constraints** — no deadline/time-window/makespan (K9), no soft constraints, no risk term; it optimizes an unconstrained-in-time world. |
 | AL4 | **Action-level, not goal-level instruction.** The user enumerates every cut/fill + depth; the goal-level `Challenge.objective`+tolerance schema is disconnected from the product `Mission` (no "build a pad to ±2 cm, you sequence it"). |
 | AL5 | **Footprints are scalar areas → axis-aligned squares** (a 15×2 m road becomes a 5.48 m square); no shape/orientation/corridor/polygon. `budget`/`scoring`/`priority`/`keepout` are **silently dropped** by `mission_from_dict` (the J4 grammar gap). |
@@ -242,14 +245,14 @@ monolithic learned latent world model. The five layers and their status:
 | N3 | P0 | No synthetic/stub data; honesty tags ([CALIB]/[UNKNOWN]) | ✅ |
 | N4 | P1 | Headless step perf (sub-ms authority step) | ✅ |
 | N5 | P1 | License-clean core (numpy-only); heavy deps (SB3/torch/Godot) optional/gated | ✅ |
-| N6 | P0 | Tests exist (regression coverage) | 🟡 **296 pytest** (`terrain_authority` 210 + `planet_browser` 86, + 26 in `scripts/`); all 10 registered `Dust/*` IDs pass strict env_checker locally. **But the gate is local-only** — see N9 (no CI runs them yet) |
+| N6 | P0 | Tests exist (regression coverage) | ✅ **701 pytest** (`terrain_authority` + `planet_browser`); all 10 registered `Dust/*` IDs pass strict env_checker; coverage 95.7% with an 85% `fail_under` gate. Now CI-enforced — see N9 |
 | N7 | **P1** | **Production server** — ASGI (FastAPI/uvicorn): concurrency, request size/time limits, graceful shutdown, configurable host/port/workers | ✅ `server.py` is now FastAPI/uvicorn; report generation serialized under a lock (pyplot thread-safe); `dustgym-serve` / `python -m planet_browser.server`; `server` extra. (multi-worker deploy = N17) |
 | N8 | **P1** | **API hardening** — input size caps + path-traversal guards (✅ on `/reports/`,`/dem`) + auth on mutating routes + CORS policy + `pip-audit`; robust error handling | ✅ Pydantic request models + input limits (`_MAX_ORDERS`, field bounds), optional API-key auth on POST (`$DUSTGYM_API_KEY`), CORS (`$DUSTGYM_CORS_ORIGINS`), `{ok:false,error}` envelope at 400, reports TTL. (`pip-audit` in CI = N12 follow-on) |
-| **N9** | **P0** | **CI gate** — a `ci.yml` runs on push/PR: `ruff check` + `pytest` (3.10-3.12 matrix) + strict env_checker (warnings-as-errors) on all 10 `Dust/*` IDs; pytest markers gate the GPU/Godot/COLMAP/Chrono tiers; merge blocked on green; publish `needs:` CI. **Today the only workflow is publish-only** | ⬜ |
+| **N9** | **P0** | **CI gate** — a `ci.yml` runs on push/PR: `ruff check` + `pytest` (3.10-3.13 matrix) + strict env_checker (warnings-as-errors) on all 10 `Dust/*` IDs; pytest markers gate the GPU/Godot/COLMAP/Chrono tiers; merge blocked on green; publish `needs:` CI | ✅ `.github/workflows/ci.yml` runs ruff-F + mypy + pytest/coverage on a 3.10–3.13 matrix; `publish-dustgym.yml` has a `gate` job the `build` `needs:` (no release ships on a red gate). GPU/Godot/COLMAP/Chrono tiers skip cleanly on the CPU runner |
 | **N10** | **P1** | **Structured logging + observability** — `logging` (not the 360 `print()`); per-module loggers; server emits request + error logs (id/route/duration/outcome) + `/healthz` + `/metrics` | 🟡 server access-logging + previously-silent failure paths now route through `logging` (`planet_browser.server`, `$DUSTGYM_LOG_LEVEL`); TDD'd. CLI/self-test `print()`s are correct stdout. `/healthz` + `/metrics` + per-request access-log middleware now live on the ASGI server; Prometheus-format `/metrics` is an optional follow-on |
 | **N11** | **P0** | **Code-quality tooling, committed + enforced** — `[tool.ruff]` + `[tool.mypy]` + `[tool.pytest.ini_options]` in `pyproject.toml`, `.pre-commit-config.yaml`, `py.typed`; wired into N9 | 🟡 ruff-F ✅, pytest config + 85% coverage gate ✅, **`[tool.mypy]` ✅ — type-checks the mission-planning layer (`planet_browser/*`) + core physics; the sim scene/RL-env/DEM-ingest/viz modules are on a documented ratchet (`ignore_errors`) to be typed incrementally; "Success, 50 files"; mypy step added to the CI reference**. Remaining: `.pre-commit-config.yaml` + shrink the mypy ratchet |
 | **N12** | **P1** | **Dependency hygiene** — a committed lockfile, version ceilings (esp. a tested `gymnasium` range), pinned `[rl]` extras, reproducible-install check (build wheel → fresh-venv import) in CI | 🟡 version ceilings added (numpy<3, scipy<2, gymnasium<2, torch<3, sb3<3) + `tomli` declared for the TOML overlay on py<3.11; a committed lockfile + the wheel→fresh-venv CI check remain |
-| **N13** | **P1** | **Packaging completeness** — the published artifact contains the full advertised product (`planet_browser` + a server entry point), no synthetic-default registered envs, tests excluded from the wheel; or the wheel scope is documented | ⬜ `planet_browser` absent from wheel; 51 `sys.path` hacks |
+| **N13** | **P1** | **Packaging completeness** — the published artifact contains the full advertised product (`planet_browser` + a server entry point), no synthetic-default registered envs, tests excluded from the wheel; or the wheel scope is documented | ✅ the wheel ships `planet_browser` + the `dustgym-serve` console entry point; tests excluded. Residual: ~45 `sys.path` inserts to retire (cosmetic, Phase 1) |
 | **N14** | **P1** | **Runtime invariant enforcement + input validation** — conservation / non-negativity / finite-state checkable at runtime (CI-gated, not `assert`); public physics + env constructors validate dims/cell-size/positive-density | ⬜ test-only today |
 | **N15** | **P2** | **Externalized config (12-factor)** — env-overridable host/port/report-dir/DEM-bundle/`[CALIB]` knobs | 🟡 constants + ipex_specs overlay shipped (`config.py`, `CONFIG.md`, `config.describe()`); the ASGI server adds host/port (`--host/--port`) + env knobs (`DUSTGYM_API_KEY`/`CORS_ORIGINS`/`REPORTS_TTL_S`/`LOG_LEVEL`); a configurable report-dir is the last bit |
 | **N16** | **P1** | **Release process + versioning** — SemVer, `CHANGELOG.md`, `dustgym.__version__`, documented bump→tag→publish flow (replaces the old upstream-PR model) | ⬜ |
@@ -297,7 +300,7 @@ stages; "Forward plan" is the live work. Multivehicle is deferred until explicit
 
 > **Historical note:** the Shipped table below records the build history; the per-stage `PR #N` tags and
 > the "tests at the time" counts are **historical waypoints from before the single-repo consolidation** (when
-> the core was upstreamed to a separate fork). They are not the current state. Current state: one repo, 296
+> the core was upstreamed to a separate fork). They are not the current state. Current state: one repo, 701
 > tests. This history will migrate to `CHANGELOG.md` (N16).
 
 ### 8.0 Optimized build sequence (the authoritative ordering)
@@ -307,12 +310,12 @@ production, multi-vehicle planner is marked ★; the science track runs in paral
 IDs (above) and the source review (`docs/architecture_review.md`, `docs/autonomous_planning_review.md`). The
 Shipped/Forward backlog below is the detail this sequence orders.
 
-**Phase 0 — Foundation (now; cheap; guards everything). ★**
-- ★ **N9 CI gate** + **N11 quality config** (`ci.yml`: ruff + pytest 3.10-3.12 matrix + strict env_checker;
-  commit `[tool.ruff]`/`[tool.mypy]`/`[tool.pytest]`, `py.typed`, pre-commit). Do first: every later phase
-  regression-guards through it, and it is the cheapest production win.
-- **AL2 fix** — guard the infeasible-precedence cliff (precheck the DAG; fail loud, not a silent 0-trip
-  "success"). **AL1 fix** — emit a warning/flag when `auto` degrades past the exact caps. Real correctness bugs.
+**Phase 0 — Foundation. ★ ✅ DONE.**
+- ★ ✅ **N9 CI gate** + **N11 quality config** — `ci.yml` runs ruff-F + mypy + pytest/coverage on a
+  3.10–3.13 matrix; `[tool.ruff]`/`[tool.mypy]`/`[tool.pytest]` + `py.typed` committed; publish is gated.
+  Residual: `.pre-commit-config.yaml` + shrinking the mypy ratchet.
+- ✅ **AL2 fix** — `_precedence_is_feasible` prechecks the SOP DAG and fails loud. ✅ **AL1 fix** — `auto`
+  degradation past the exact caps emits a `warnings.warn`.
 
 **Phase 1 — Package boundary (the one real structural "before-production" fix). ★**
 - ★ **Restructure step 1+2 + P11e** — make `planet_browser` a real package (`__init__.py`, relative imports),
@@ -489,7 +492,7 @@ dead-end. A 2-rover EXACT baseline is required before any "learned ≫ greedy mu
 anymore; the former `roversim` history is folded in (the Tier-2 core remains CC0, John McCardle's provenance).
 Delivery is a standard release flow (N16): land work on a branch → green CI (N9) → merge to `main` → bump
 `pyproject.toml` version + `CHANGELOG.md` → tag `vX.Y.Z` → the publish workflow ships to PyPI. Current state:
-`main` is clean, 296 tests pass locally, the package builds (`dustgym 0.1.0`); the production-grade release gate
+`main` is clean, 701 tests pass locally, the package builds (`dustgym 0.1.0`); the production-grade release gate
 (N9-N16) is the work this PRD version prioritizes. dustgym is **not yet on PyPI** (pre-release).
 
 ## 10. Dependencies & risks
@@ -551,7 +554,7 @@ multi-vehicle (build-sequence Phase 1).
   files **evaporate** once `pip install -e .` is the workflow; tests move to a top-level `tests/`.
 - **Order:** package-ify `planet_browser` + delete `_ROVERSIM` (Phase 1, blocking) → wheel + entry point →
   *then later, incremental* the `src/` rename + `tests/` move + scripts/viz hack removal (pure hygiene, the
-  296-test suite protects it). Only the `planet_browser` package-ification is "before production."
+  701-test suite protects it). Only the `planet_browser` package-ification is "before production."
 
 **Rebase: NO.** 39 commits, **linear PR-merge history, no roversim history folded in** (a clean
 re-origination — the first commits already say "dustgym"). The large tracked binaries (two 40 MB demo GIFs,

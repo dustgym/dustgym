@@ -46,7 +46,7 @@ python mission_planner.py            # writes reports/<date>_mission_plan.pdf + 
 | File | What it is |
 |---|---|
 | `index.html` | CesiumJS browser (NASA Solar System Treks tiles) + build-order queue + live regolith estimate. |
-| `server.py` | Stdlib `http.server` (no framework). Serves the front-end + `bodies.json` + `/reports/`; `POST /plan` runs the planner and returns the report URL. |
+| `server.py` | FastAPI/uvicorn (ASGI). Serves the front-end + `bodies.json` + `/reports/`; `POST /plan` runs the planner and returns the report URL. |
 | `mission_planner.py` | Cut-fill balancing → **pluggable sequencer × objective** (`optimize_sequence`: nearest/greedy/2-opt/Or-opt/LK/brute/Held-Karp/auto; `compare_algorithms` + Pareto) → terrain-aware + authority-validated (`validate_plan`) → slip-adjusted hazard routing → endurance/range → battery-aware mid-task recharge → 3-page PDF + markdown report. Grounded in `ipex_specs` + `bodies.json`. |
 | `autonomy.py` | Closed-loop autonomy (P12, the AutoNav model): `Belief` + Kalman `estimator` (`predict`/`update_*`), `execute_leg` (slip-adjusted true telemetry), `run_closed_loop` (plan→execute→estimate→replan + reserve-aware recharge). Runs in the conserved-model sim. |
 | `dem_import.py` | Reproject a non-polar (cylindrical lat/lon) DEM product to the local metric grid via `pyproj` (P4); real LOLA `ldem_4` fixture in `fixtures/`. |

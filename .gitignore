@@ -138,3 +138,9 @@ planet_browser/reports/
 # systematic-review publication folder (downloaded copyrighted PDFs + drafts) -- not for the CC0 repo
 publication/
 planet_browser/profiles/
+
+# coverage.py artifacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

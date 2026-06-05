@@ -1,4 +1,4 @@
-# planet_browser deps (the server itself is stdlib http.server; these are for the planner/ingest).
+# planet_browser deps (the server is FastAPI/uvicorn; these are for the planner/ingest).
 # Install into the runtime venv: pip install -r requirements.txt
 numpy            # heightfields, mission_planner, validate_plan
 matplotlib       # mission-control PDF report

@@ -2,7 +2,7 @@
 
 dustgym is a research simulator and planning tool released into the public domain (CC0). It does not
 process sensitive data or credentials. The one network-facing component is the optional mission-planner
-web UI (`planet_browser/server.py`), a standard-library `http.server` intended for local or trusted-LAN
+web UI (`planet_browser/server.py`), a FastAPI/uvicorn (ASGI) service intended for local or trusted-LAN
 use.
 
 ## Supported versions
