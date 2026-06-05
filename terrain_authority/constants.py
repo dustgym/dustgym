@@ -116,7 +116,7 @@ SLIP_C1 = 0.4
 SLIP_C2 = 0.3
 
 # ---------------------------------------------------------------------------
-# Rover mass / weight-on-wheels (added 2026-06-01 for load-bearing sinkage).
+# Rover mass / weight-on-wheels (for load-bearing sinkage).
 #   Sourced from the IPEx TRL-5 design overview (papers/ascend24-ipex-trl-5-
 #   design-overview.pdf; NTRS 20240008162, p.2): "The IPEx project is developing
 #   a 30 kg-class excavator." Low mass is the DESIGN THESIS — counter-rotating
@@ -250,7 +250,7 @@ SINTER_ENABLED = False
 # ===========================================================================
 # DEM-TERRAIN THRUST — sourced procgen parameters (Lane B, ADDITIVE block).
 # ===========================================================================
-# Added 2026-05-31 for the real-DEM 10 km terrain work (docs/dem_terrain_contract.md
+# For the real-DEM 10 km terrain work (docs/dem_terrain_contract.md
 # §6, docs/lunar_dem_10km_eval.md §6 + papers/CITATIONS.md "Lunar DEM / terrain-
 # statistics references"). NOTHING above this line is modified — every name here is
 # NEW, so existing scenes/tests are byte-for-byte unaffected (HARD BACKWARD-COMPAT).
@@ -292,7 +292,7 @@ SINTER_ENABLED = False
 #: uncertainty and does NOT move the sub-10 m band the sim actually uses — that band is
 #: governed by the eq_sfd equilibrium cap below, not by extrapolating this polynomial — so
 #: it is left as-is and documented rather than force-reconciled.
-#: LICENSE: cratermaker is GPL-3.0 (verified 2026-05-31 at github.com/MintonGroup/cratermaker).
+#: LICENSE: cratermaker is GPL-3.0 (github.com/MintonGroup/cratermaker).
 #: GPL-3.0 is copyleft, so NO cratermaker CODE may be copied into this CC0 repo; only the
 #: numeric coefficients are reused — uncopyrightable scientific facts, cited to Neukum/
 #: Ivanov/Hartmann 2001 by author/year. No cratermaker code is vendored or copied.

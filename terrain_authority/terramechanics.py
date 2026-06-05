@@ -63,8 +63,8 @@ class TerramechanicsParams:
     cohesion: float = K.COHESION             # [Pa]
     phi_rad: float = float(K.PHI)            # internal friction [rad]
     k_shear: float = K.K_SHEAR               # Janosi-Hanamoto shear modulus [m]
-    slip_c1: float = K.SLIP_C1               # slip-sinkage c1 (Phase 2)
-    slip_c2: float = K.SLIP_C2               # slip-sinkage c2 (Phase 2)
+    slip_c1: float = K.SLIP_C1               # slip-sinkage c1
+    slip_c2: float = K.SLIP_C2               # slip-sinkage c2
     rho_surface: float = K.RHO_SURFACE       # loose surface density [kg/m^3]
     rho_deep: float = K.RHO_DEEP             # compacted ceiling [kg/m^3]
     rover_mass_dry_kg: float = K.ROVER_MASS_DRY_KG
@@ -214,7 +214,7 @@ def sinkage_to_density_factor(z_m: float, thickness_m: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Slip-sinkage multiplier (Phase 2) — theta_m=(c1+c2*s)*theta_f rearward stress
+# Slip-sinkage multiplier — theta_m=(c1+c2*s)*theta_f rearward stress
 # migration deepens the rut with wheel slip. [UNKNOWN] magnitude (SLIP_C1/SLIP_C2).
 # ---------------------------------------------------------------------------
 
@@ -261,7 +261,7 @@ def physical_compaction_field(density, mass_areal, load_n: float, *,
     k = p.k_c / b + p.k_phi * s_stiff
     z = (pressure / k) ** (1.0 / p.n_sinkage)             # per-cell static sinkage [m]
     if slip and slip > 0.0:
-        z = z * slip_sinkage_multiplier(slip, c1=p.slip_c1, c2=p.slip_c2)   # Phase 2
+        z = z * slip_sinkage_multiplier(slip, c1=p.slip_c1, c2=p.slip_c2)
     thickness = np.asarray(mass_areal, dtype=np.float64) / density
     # Bare / near-zero-thickness cells (EXCAVATED to the firm layer on real scenes)
     # cannot be compacted further: clamp sinkage below thickness and guard the divide
@@ -312,7 +312,7 @@ def lyasko_reduce(params: TerramechanicsParams, *, g: float = K.g, g_earth: floa
 
 
 # ---------------------------------------------------------------------------
-# Domain randomization (Phase 4) — sample params within the SOURCED envelopes.
+# Domain randomization — sample params within the SOURCED envelopes.
 #   The honesty tags ARE the randomization spec (spec §7.5): each range is the
 #   documented [CALIB]/[UNKNOWN] envelope, NOT an invented spread.
 # ---------------------------------------------------------------------------

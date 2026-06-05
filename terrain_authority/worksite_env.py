@@ -210,7 +210,7 @@ class WorkSiteConstructEnv(_BASE):
             k = next((i for i, d in enumerate(self._berm_done) if not d), None)
             if k is not None:
                 mask = self._slice_mask(self.berm_rows, k)
-                # FIX-4 per-cell fill_toward (no overshoot) instead of WorkSite.dump's even-spread, which
+                # per-cell fill_toward (no overshoot) instead of WorkSite.dump's even-spread, which
                 # cannot profile-fill an uneven real-DEM berm to tolerance -> drives the ledger directly.
                 # (This is exactly the drop-in upgrade proposed for WorkSite.dump.)
                 self.fine.drum_inventory = self.ws.inventory_kg            # prime the transient register

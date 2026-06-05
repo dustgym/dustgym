@@ -45,7 +45,7 @@ N_WHEELS = 4
 ARM_EXCAVATION_LOAD_NM = 18.5
 
 # ---- Battery [BATTERY] --------------------------------------------------------------------
-BATTERY_SERIES_CELLS = 12         # 12S -> ~44 V pack (project lead confirmed 44 V, 2026-06-02)
+BATTERY_SERIES_CELLS = 12         # 12S -> ~44 V pack
 BATTERY_CAPACITY_AH = 30.0        # ~30 Ah
 LIION_NOMINAL_V_PER_CELL = 3.7    # standard Li-ion nominal: 12 * 3.7 = 44.4 V ~= 44 V
 # NOTE: IPEx actuators were qualified at -35 C / +40 C (TC2). That lunar-grade thermal range is

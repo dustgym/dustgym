@@ -23,7 +23,7 @@ All work on a **feature branch**, keep John's authorship and his honesty-tag con
 > `RoverSimEnv` (gym-optional) over `drive_step`; honest control reward; domain randomization from the
 > sourced envelopes; core 9/9 (gym.Env path = FIX-3). **In-repo plan (Phases 1–4) DONE.** 58 pytest +
 > 19/19. Remaining external/deferred: FIX-1/FIX-2 (euclid oracle), FIX-3 (gymnasium env_checker), optional
-> Phase 5 (learned world model). Live table in `CLAUDE.md`.
+> Phase 5 (learned world model). Live table in `PRD.md`.
 
 ---
 

@@ -157,7 +157,7 @@ Without pass/fail criteria the "sourced" claim is unfalsifiable. A synthesized t
 
 **L0 — Contracts (on `main`, frozen seams, no behaviour change).** Freeze: (a) `dem_import` signature incl. vertical-datum handling; (b) additive per-tile metadata (`world_bounds_m.{x0,y0}` global offsets + local datum offset + `base_cell_m`/`fine_cell_m`/`region_rc`; `schema_version` stays 1.0); (c) the procgen-overlay hook signature incl. the zero-mean + cross-cell + mean-preserving-smoothing contract; (d) the **coordinate-hashed seed contract** (`procgen_seed`); (e) the windowed-base-reader signature; (f) the §8 acceptance-test spec. Add `CITATIONS.md` rows for every §6 source (tagged). *The seed-determinism and anti-aliasing designs are resolved here — they are contract-level, not lane-internal.*
 
-**Wave-1 (parallel isolated worktrees, disjoint owned files; John reviews, Claude merges):**
+**Wave-1 (parallel isolated worktrees, disjoint owned files; John reviews, maintainer merges):**
 - **Lane A — DEM ingest + projection + datum** → `dem_import.py`, `scripts/build_from_dem.py`, `scripts/crop_lola_tile.sh`. Produces the committable CC0 Haworth 10 km @ 5 m sample tile.
 - **Lane B — Sourced procgen + crater population** → `constants.py` (honest-tagged block), `procgen.py` (gain fix **and** renorm replacement), `procgen_csfd.py`. **May not label anything "sourced" until the prior/caveat tags are in.**
 - **Lane C — Tiled mosaic + windowed I/O + quadtree-10km + seed** → `tiles_mosaic.py`, `dem_io.py`, `procgen_seed.py`, `quadtree.py` padding helper.

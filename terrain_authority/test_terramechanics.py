@@ -178,7 +178,7 @@ def test_scm_oracle_params_match_kwarg_path():
     assert math.isclose(z_obj, z_kw, rel_tol=1e-12), (z_obj, z_kw)
 
 
-# -- Phase 1.3: wiring into rover.four_wheel_pass (opt-in physical path) ------
+# -- wiring into rover.four_wheel_pass (opt-in physical path) ------
 
 def test_four_wheel_pass_default_path_unchanged():
     """physical=False (default) is byte-identical to the prior constant path."""
@@ -239,7 +239,7 @@ def test_conform_pose_payload_scales_load():
     assert math.isclose(laden, (K.ROVER_MASS_DRY_KG + K.DRUM_PAYLOAD_MAX_KG) * K.g, rel_tol=1e-6)
 
 
-# -- Phase 1.4: Lyasko 1g->1/6g reduced-gravity correction -------------------
+# -- Lyasko 1g->1/6g reduced-gravity correction -------------------
 
 def test_lyasko_increases_sinkage():
     """The sourced NET truth: reduced gravity -> MORE sinkage under the same load."""
@@ -279,7 +279,7 @@ def test_lunar_params_json_roundtrip():
     assert back == lunar
 
 
-# -- Phase 2 hooks: slip-sinkage multiplier + four_wheel_pass slip -----------
+# -- slip-sinkage multiplier + four_wheel_pass slip -----------
 
 def test_slip_sinkage_multiplier_monotone():
     assert tm.slip_sinkage_multiplier(0.0) == 1.0
@@ -310,7 +310,7 @@ def test_four_wheel_pass_slip_deepens_rut_mass_conserved():
     assert with_slip.density.max() > no_slip.density.max()
 
 
-# -- Phase 4 hook: domain randomization within sourced envelopes -------------
+# -- domain randomization within sourced envelopes -------------
 
 def test_domain_randomize_within_envelopes():
     p = tm.domain_randomize(np.random.default_rng(0))

@@ -412,10 +412,10 @@ def conform_pose(heightmap: np.ndarray, center_rc: tuple[float, float], heading_
     nrm /= np.linalg.norm(nrm)
     slope_fwd = a * ch + b * sh           # forward world (x,z)=(cos h, sin h)
     slope_lat = a * (-sh) + b * ch        # left world=(-sin h, cos h)
-    # Per-wheel NORMAL load (added 2026-06-01 for load-bearing sinkage): the weight
+    # Per-wheel NORMAL load (for load-bearing sinkage): the weight
     # component along the surface normal, split equally over the 4 contacts. nrm[1] is
-    # cos(tilt) (flat -> full weight; steeper -> less normal load -> the slip driver,
-    # Phase 2). Equal split; CG-based fore/aft transfer is a refinement (CG height not
+    # cos(tilt) (flat -> full weight; steeper -> less normal load -> the slip driver).
+    # Equal split; CG-based fore/aft transfer is a refinement (CG height not
     # in the public TRL-5 overview). Feeds four_wheel_pass(physical=True, loads=...).
     total_weight_n = (rover_mass_dry_kg + max(0.0, payload_kg)) * float(g)
     normal_total_n = total_weight_n * float(nrm[1])
@@ -528,7 +528,7 @@ def build_drum_marks_meta(swath_rc: list[tuple[float, float]], heading_rad: floa
 
 
 # ---------------------------------------------------------------------------
-# Differential-drive kinematic step (Phase 3 — close the loop, 2026-06-01).
+# Differential-drive kinematic step (closes the loop).
 #
 # The missing (state, command) -> next_pose primitive: today the rover replays a
 # precomputed path (spiral_path/drive_spiral); this lets a controller (ROS cmd_vel
