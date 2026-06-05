@@ -159,6 +159,7 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
         "energy_actual_kj": round(energy["actual_J"] / 1e3, 1),
     }
     leg_e_sig = max((leg["energy_sigma_J"] for leg in legs), default=0.0)
+    mc = cl.get("map_channel", {})
     perception = {
         "pose_sigma_m": round(b.pos_sigma_m, 2),               # BOUNDED by the per-leg map/landmark fixes
         "map_fixes": cl["perception_fixes"],                   # pose corrections fused into the belief
@@ -166,9 +167,15 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
         "fix_sigma_m": 0.10,                                   # SLAM/map-match fix precision (AprilTag 12.7 mm best-case)
         "energy_model_sigma_J": round(leg_e_sig, 1),           # slip model-error 1-sigma carried per leg
         "drum_fill_uncertainty_pct": 7.4,                      # FDC mass-inference MPE (2.56% >half full, 7.40% over range)
-        "note": ("perception-in-the-loop: a map/landmark pose fix per leg bounds the dead-reckoning drift, "
-                 "and the dig-ready gate observes more before digging when the pose estimate is uncertain. "
-                 "The dense observed-map RMSE still needs a render (see /render)."),
+        # P6 / LAC section 10 map channel, closed into the loop: the executed route's worksite COVERAGE +
+        # residual map uncertainty (onboard-observability tier), and the digs gated on local map coverage.
+        "map_coverage": round(mc.get("coverage", 0.0), 3),
+        "map_uncertainty_m": round(mc.get("mean_uncertainty_m", 0.0), 2),
+        "map_observe_more_before_dig": cl.get("map_observe_more", 0),
+        "note": ("perception-in-the-loop: a map/landmark pose fix per leg bounds dead-reckoning drift; the "
+                 "dig-ready gate observes more before digging when the pose is uncertain OR the dig site's "
+                 "local map coverage is low. map_coverage is the onboard-observability tier (what the route "
+                 "sees) -- the dense observed-map RMSE is the gated render/COLMAP tier (see /render)."),
     }
     return autonomy, perception
 

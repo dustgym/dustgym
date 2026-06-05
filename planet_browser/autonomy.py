@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import math
 
+from . import map_channel as MC
 from . import mission_planner as MP
 from .mission_planner import BATTERY_J
 
@@ -155,6 +156,8 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
     remaining = list(order)
     recharges = replans = 0
     perception_fixes = observe_more = 0
+    map_observe_more = 0                                   # P6: digs gated on local map coverage
+    stations = [tuple(mission.charger)]                   # P6: where the rover has observed the worksite from
     legs = []
 
     def _recharge(b):
@@ -174,6 +177,13 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
             while belief.pos_sigma_m > dig_sigma_gate_m:
                 belief = update_pose(belief, (belief.x, belief.y), perception_sigma_m)
                 observe_more += 1
+        # MAP-CHANNEL-IN-THE-LOOP (P6 / LAC section 10): don't commit to digging terrain the route hasn't
+        # mapped well enough yet. If the dig site's local observed-coverage (from stations visited so far) is
+        # below the gate, survey from the approach first (count an observe-more; arriving then adds coverage).
+        if leg.get("dig_e", 0.0) > 0.0:
+            if MC.local_coverage(stations, leg["site"]) < MC.COVERAGE_DIG_GATE:
+                map_observe_more += 1
+        stations.append(tuple(leg["site"]))               # the rover observes the worksite from each station
         nominal_J = nominal_leg_energy_J((belief.x, belief.y), leg)
         telem = execute_leg(belief, leg, dem=dem, dem_origin=dem_origin, g=g, body=mission.body,
                             params=MP.mission_soil_params(mission))
@@ -207,6 +217,10 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
                      "dig_e": float(leg.get("dig_e", 0.0)),     # dig doesn't slip; only the drive portion inflates
                      "soc": belief.soc_frac(), "slope_deg": telem["slope_deg"], "slip": telem["slip"],
                      "energy_sigma_J": e_sig})
+    # P6: the closed map-channel reward -- how well the executed route observed the worksite (coverage +
+    # residual map uncertainty), the LAC section 10 mapping objective fed back, not just pose/energy.
+    map_channel = MC.map_channel_score(mission, stations)
     return {"belief": belief, "completed": belief.tasks_done == len(trips), "n_trips": len(trips),
             "recharges": recharges, "replans": replans, "legs": legs,
-            "perception_fixes": perception_fixes, "observe_more": observe_more}
+            "perception_fixes": perception_fixes, "observe_more": observe_more,
+            "map_observe_more": map_observe_more, "map_channel": map_channel}

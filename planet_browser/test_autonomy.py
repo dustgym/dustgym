@@ -107,6 +107,20 @@ def test_closed_loop_completes_and_manages_the_battery():
     assert all(-1e-9 <= L["soc"] <= 1.0001 for L in r["legs"])
 
 
+def test_closed_loop_reports_the_map_channel_reward():
+    # P6 / LAC section 10: the loop now closes the map-channel reward -- the executed route's worksite
+    # coverage + residual map uncertainty are fed back, and digs are gated on local map coverage.
+    from . import autonomy as A
+    from . import map_channel as MC
+    dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
+    r = A.run_closed_loop(_spread(), dem=dem, dem_origin=o, algorithm="nearest", objective="time")
+    mc = r["map_channel"]
+    assert 0.0 < mc["coverage"] <= 1.0                        # the route observed some of the worksite
+    assert MC.ONBOARD_STEREO_SIGMA_M <= mc["mean_uncertainty_m"] <= MC.PRIOR_SIGMA_M
+    assert isinstance(r["map_observe_more"], int) and r["map_observe_more"] >= 0
+    assert mc["dense_rmse_available"] is False                # dense reconstruction RMSE is the gated tier
+
+
 def test_true_drain_never_below_nominal_and_uncertainty_grows():
     # AutoNav model-vs-truth: the slip-adjusted truth is never cheaper than the flat nominal plan, and the
     # estimate carries growing uncertainty (the loop replans against the estimate, not assumed-perfect state).

@@ -655,12 +655,16 @@ qel("qplan").onclick = async () => {
       ? ` · est ±${pc.pose_sigma_m} m pose (${pc.map_fixes} map fixes`
         + (pc.observe_more_before_dig ? `, ${pc.observe_more_before_dig} observe-more` : "")
         + `), drum ±${pc.drum_fill_uncertainty_pct}%` : "";
+    // P6 map channel (LAC §10): worksite coverage the executed route observed (onboard-observability tier)
+    const mtag = pc.map_coverage != null
+      ? ` · map ${(pc.map_coverage * 100).toFixed(0)}% covered`
+        + (pc.map_observe_more_before_dig ? ` (${pc.map_observe_more_before_dig} survey-first)` : "") : "";
     // discrete keep-out obstacles: hauls routed around them; flag any build placed inside one
     const ktag = t.n_keepouts ? ` · ${t.n_keepouts} keep-out${t.keepout_conflicts ? ` (⚠ ${t.keepout_conflicts} build on obstacle)` : ""}` : "";
     // K11c: continuous survival/idle power (an [ASSUMPTION] term) when modelled
     const stag = t.survival_energy_J > 0 ? ` · +${(t.survival_energy_J / 1e6).toFixed(1)} MJ survival [assumption]` : "";
     setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
-         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${ktag}${stag}${vtag}${autag}${ptag}`);
+         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${ktag}${stag}${vtag}${autag}${ptag}${mtag}`);
     LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
     LAST_ORDERS = ORDERS.slice(); LAST_KEEPOUTS = KEEPOUTS.slice();
     qel("qexec").disabled = !LAST_TIMELINE;
