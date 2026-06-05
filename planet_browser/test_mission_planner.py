@@ -9,14 +9,11 @@ bodies.json + the real grounded planner (no synthetic constants) and a small REA
 """
 from __future__ import annotations
 
-import json
 import math
 import os
-import threading
-import urllib.error
-import urllib.request
 
 import pytest
+from fastapi.testclient import TestClient
 
 from . import mission_planner as MP
 from . import server as SRV
@@ -680,34 +677,23 @@ def test_build_timeline_routes_with_dem():
     assert (tlj["frames"][-1]["x1"], tlj["frames"][-1]["y1"]) == tuple(m.charger)
 
 
-# ---- /plan server endpoint (real socket: drive the app) -----------------------------------------
+# ---- /plan server endpoint (the FastAPI app via TestClient) -------------------------------------
 @pytest.fixture()
 def base():
-    srv = SRV.make_server(0)                                # ephemeral port
-    th = threading.Thread(target=srv.serve_forever, daemon=True)
-    th.start()
-    try:
-        yield "http://127.0.0.1:%d" % srv.server_address[1]
-    finally:
-        srv.shutdown()
+    return TestClient(SRV.app)
 
 
 def _post(base, route, obj):
-    req = urllib.request.Request(base + route, data=json.dumps(obj).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read())
+    r = base.post(route, json=obj)
+    return r.status_code, r.json()
 
 
 def test_plan_endpoint_returns_fetchable_pdf(base):
     code, body = _post(base, "/plan", _payload())
     assert code == 200 and body["ok"] is True
     assert body["pdf"].startswith("/reports/") and body["totals"]["cut_kg"] > 0
-    with urllib.request.urlopen(base + body["pdf"], timeout=30) as r:   # the report is actually served back
-        assert r.status == 200 and r.read(5) == b"%PDF-"
+    pr = base.get(body["pdf"])                                          # the report is actually served back
+    assert pr.status_code == 200 and pr.content[:5] == b"%PDF-"
     assert body["validation"]["mass_conserved"] is True                 # I8: plan validated on the authority
 
 
@@ -775,13 +761,8 @@ def test_plan_endpoint_rejects_unknown_body(base):
 
 
 def test_plan_endpoint_rejects_bad_json(base):
-    req = urllib.request.Request(base + "/plan", data=b"{not json", method="POST",
-                                 headers={"Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(req, timeout=30)
-        assert False, "expected 400"
-    except urllib.error.HTTPError as e:
-        assert e.code == 400
+    r = base.post("/plan", content=b"{not json", headers={"content-type": "application/json"})
+    assert r.status_code == 400 and r.json()["ok"] is False and "bad JSON" in r.json()["error"]
 
 
 def test_sense_endpoint_noise_off_and_on(base):
@@ -820,8 +801,7 @@ def test_structure_endpoint_rejects_unknown(base):
 
 
 def test_static_index_and_bodies_served(base):
-    with urllib.request.urlopen(base + "/", timeout=30) as r:
-        assert r.status == 200 and b"<" in r.read(2048)    # serves some HTML
-    with urllib.request.urlopen(base + "/bodies.json", timeout=30) as r:
-        d = json.loads(r.read())
-        assert "moon" in d and "_ipex" in d                # the py-generated bodies + ipex mirror
+    r = base.get("/")
+    assert r.status_code == 200 and b"<" in r.content[:2048]    # serves some HTML
+    d = base.get("/bodies.json").json()
+    assert "moon" in d and "_ipex" in d                        # the py-generated bodies + ipex mirror

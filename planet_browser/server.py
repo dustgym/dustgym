@@ -1,33 +1,48 @@
 #!/usr/bin/env python3
-"""server.py -- local server for the planet browser (P1: place -> queue -> optimize -> report).
+"""server.py -- ASGI server for the planet browser + mission planner (PRD N7/N8).
 
-Serves the static front-end (index.html, bodies.json) + the generated reports, and exposes
-POST /plan : a build-order queue (JSON) -> mission_planner -> a mission-control PDF, returned as a
-URL the browser opens. No web framework -- stdlib http.server only, so planet_browser/ stays
-dependency-light (matplotlib, already used by the report, is the only heavy dep).
+FastAPI/uvicorn. Serves the static front-end (index.html, bodies.json), the generated reports, and the
+JSON API the browser drives: POST /plan, /sense, /structure, /compare, /render. Production hardening:
+Pydantic request models (typed contract + input limits), optional API-key auth on the mutating routes,
+CORS, a thread-safe (locked) matplotlib report path, a reports/ TTL sweep, structured access logging
+(PRD N10), and /healthz + /metrics.
 
-    python3 server.py [--port 8770]      # then open the printed URL in a browser
+    python -m planet_browser.server [--port 8770] [--host 0.0.0.0]    # or the `dustgym-serve` entry point
+
+Env knobs (PRD N15 overlay style): DUSTGYM_API_KEY (auth on POST when set), DUSTGYM_CORS_ORIGINS
+(comma-list or *), DUSTGYM_REPORTS_TTL_S (report retention, default 86400), DUSTGYM_LOG_LEVEL.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import logging
 import os
-import re
 import shutil
 import sys
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+import time
+
+import uvicorn
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import adaptive_planner as ADP
 from . import autonomy as AUT
 from . import mission_planner as MP
 from . import structures as ST
 
-# PRD N10: structured logging + observability. The logger is used for access logs (every request +
-# status), startup, and the previously-silent additive-failure paths. Level via $DUSTGYM_LOG_LEVEL.
+# PRD N10: structured logging + observability. Used for access logs, startup, and the additive
+# failure paths. Level via $DUSTGYM_LOG_LEVEL.
 log = logging.getLogger("planet_browser.server")
+
+_START = time.monotonic()
+_REPORT_LOCK = threading.Lock()                 # matplotlib pyplot is process-global + thread-unsafe
+_METRICS: dict = {"requests_total": 0, "by_status": {}, "by_route": {}}
 
 
 def _configure_logging(level: str | None = None) -> None:
@@ -35,6 +50,7 @@ def _configure_logging(level: str | None = None) -> None:
     lvl = (level or os.environ.get("DUSTGYM_LOG_LEVEL", "INFO")).upper()
     logging.basicConfig(level=getattr(logging, lvl, logging.INFO),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
+
 
 # plan_render_pipeline lives in scripts/ (it drives the Godot sidecar); MP already put the repo root on the
 # path. Importing it is optional -- /render degrades to a 503 if the binary is absent.
@@ -48,6 +64,38 @@ _HAWORTH = os.path.join(MP._REPO_ROOT, "samples", "lunar_dem", "haworth_10km_5m"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPORTS = os.path.join(HERE, "reports")
+
+_CTYPE = {".html": "text/html; charset=utf-8", ".json": "application/json",
+          ".pdf": "application/pdf", ".md": "text/markdown; charset=utf-8",
+          ".js": "text/javascript", ".css": "text/css", ".png": "image/png"}
+
+_MAX_ORDERS = 1000   # N8 input limit: refuse absurd build queues before they reach the planner
+
+
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("dustgym")
+    except Exception:   # noqa: BLE001 -- not installed (editable/source run)
+        return "0.1.0"
+
+
+def _prune_reports(ttl_s: float | None = None) -> int:
+    """Delete report files older than the TTL (default $DUSTGYM_REPORTS_TTL_S or 86400 s). Returns count."""
+    ttl = float(ttl_s if ttl_s is not None else os.environ.get("DUSTGYM_REPORTS_TTL_S", 86400))
+    if ttl <= 0 or not os.path.isdir(REPORTS):
+        return 0
+    now, removed = time.time(), 0
+    for n in os.listdir(REPORTS):
+        p = os.path.join(REPORTS, n)
+        try:
+            if os.path.isfile(p) and now - os.path.getmtime(p) > ttl:
+                os.remove(p)
+                removed += 1
+        except OSError:
+            pass
+    return removed
+
 
 def _totals_json(totals):
     """JSON-safe totals: numbers -> float, but pass bools and strings (e.g. algorithm/objective) through."""
@@ -120,200 +168,283 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
     return autonomy, perception
 
 
-_CTYPE = {".html": "text/html; charset=utf-8", ".json": "application/json",
-          ".pdf": "application/pdf", ".md": "text/markdown; charset=utf-8",
-          ".js": "text/javascript", ".css": "text/css", ".png": "image/png"}
-
-
 def _plan_stem(payload):
     """Stable, collision-free report stem from the mission (name slug + content hash) -- repeatable,
     no wall-clock, so the same queue regenerates the same file instead of piling up duplicates."""
+    import json
+    import re
     name = re.sub(r"[^a-z0-9]+", "-", str(payload.get("name", "mission")).lower()).strip("-") or "mission"
     digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:8]
     return f"{name}-{digest}"
 
 
-class Handler(BaseHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/json"):
-        if isinstance(body, str):
-            body = body.encode()
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+# --------------------------------------------------------------------------------------------------
+# Request models (PRD N8: the typed API contract + input limits). extra="allow" passes through the
+# optional per-kind order fields the planner reads; the limits below cap obviously-abusive inputs.
+# --------------------------------------------------------------------------------------------------
+class Order(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    action: str | None = Field(default=None, max_length=120)
+    kind: str | None = Field(default=None, max_length=40)
+    x: float = 0.0
+    y: float = 0.0
+    footprint_m2: float = Field(default=1.0, gt=0, le=1e8)
+    depth_m: float = Field(default=0.0, ge=-100.0, le=100.0)
 
-    def _send_json(self, code, obj):
-        self._send(code, json.dumps(obj), "application/json")
 
-    def _serve_file(self, path, ctype):
-        if not os.path.isfile(path):
-            return self._send_json(404, {"ok": False, "error": f"not found: {os.path.basename(path)}"})
-        with open(path, "rb") as f:
-            self._send(200, f.read(), ctype)
+class PlanRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    name: str = Field(default="mission", max_length=200)
+    body: str = Field(default="moon", max_length=40)
+    orders: list[Order] = Field(default_factory=list, max_length=_MAX_ORDERS)
+    algorithm: str = Field(default="nearest", max_length=40)
+    objective: str = Field(default="time", max_length=40)
 
-    def do_GET(self):
-        route = self.path.split("?", 1)[0]
-        if route in ("/", "/index.html"):
-            return self._serve_file(os.path.join(HERE, "index.html"), _CTYPE[".html"])
-        if route == "/bodies.json":
-            return self._serve_file(os.path.join(HERE, "bodies.json"), _CTYPE[".json"])
-        if route.startswith("/reports/"):
-            name = os.path.basename(route)                 # basename only -> no path traversal
-            ext = os.path.splitext(name)[1]
-            return self._serve_file(os.path.join(REPORTS, name), _CTYPE.get(ext, "application/octet-stream"))
-        if route.startswith("/dem/"):                      # the real LOLA work-area DEM previews (Haworth)
-            bundle = os.path.join(HERE, "..", "samples", "lunar_dem", "haworth_10km_5m")
-            f = {"hillshade.png": "preview_hillshade.png", "height.png": "preview_height.png"}.get(os.path.basename(route))
-            if f:
-                return self._serve_file(os.path.join(bundle, f), "image/png")
-            return self._send_json(404, {"ok": False, "error": f"no dem {os.path.basename(route)}"})
-        return self._send_json(404, {"ok": False, "error": f"no route {route}"})
 
-    def do_POST(self):
-        route = self.path.split("?", 1)[0]
-        if route not in ("/plan", "/sense", "/structure", "/compare", "/render"):
-            return self._send_json(404, {"ok": False, "error": f"no route {route}"})
-        try:
-            n = int(self.headers.get("Content-Length", 0))
-            payload = json.loads(self.rfile.read(n) or b"{}")
-        except (ValueError, json.JSONDecodeError) as e:
-            return self._send_json(400, {"ok": False, "error": f"bad JSON: {e}"})
-        if route == "/sense":
-            return self._sense(payload)
-        if route == "/structure":
-            return self._structure(payload)
-        if route == "/compare":
-            return self._compare(payload)
-        if route == "/render":
-            return self._render(payload)
-        algorithm = payload.get("algorithm", "nearest")   # pluggable sequencer + objective (user-selected)
-        objective = payload.get("objective", "time")
-        try:
-            mission = MP.mission_from_dict(payload)
-            dem, origin = _moon_dem() if mission.body == "moon" else (None, (0.0, 0.0))
-            # I10: hauls routed around hazards on the real DEM; I8 (physical realizability) + I6/M11
-            # (slope-feasible siting), local order frame anchored to the auto-selected flattest region.
+class CompareRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    name: str = Field(default="mission", max_length=200)
+    body: str = Field(default="moon", max_length=40)
+    orders: list[Order] = Field(default_factory=list, max_length=_MAX_ORDERS)
+    objective: str = Field(default="time", max_length=40)
+
+
+class SenseRequest(BaseModel):
+    true_mass_kg: float = Field(ge=0.0, le=1e5)
+    capacity_kg: float | None = Field(default=None, gt=0.0, le=1e5)
+    noise_frac: float = Field(default=0.0, ge=0.0, le=1.0)
+    seed: int = Field(default=0, ge=0)
+
+
+class StructureRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    name: str | None = Field(default=None, max_length=80)
+    x: float = 0.0
+    y: float = 0.0
+    params: dict = Field(default_factory=dict)
+
+
+class RenderRequest(BaseModel):
+    u: float = Field(default=0.5, ge=0.0, le=1.0)
+    v: float = Field(default=0.5, ge=0.0, le=1.0)
+    pad_frac: float = Field(default=0.5, gt=0.0, le=1.0)
+
+
+def require_auth(x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+                 authorization: str | None = Header(default=None)):
+    """N8: API-key auth on mutating routes. Enabled only when $DUSTGYM_API_KEY is set (open in dev).
+    Accepts `X-API-Key: <key>` or `Authorization: Bearer <key>`."""
+    key = os.environ.get("DUSTGYM_API_KEY")
+    if not key:
+        return
+    supplied = x_api_key or (authorization or "").removeprefix("Bearer ").strip()
+    if supplied != key:
+        raise HTTPException(status_code=401, detail="invalid or missing API key")
+
+
+app = FastAPI(title="dustgym planet browser + mission planner", version=_version())
+
+_cors = os.environ.get("DUSTGYM_CORS_ORIGINS", "*").strip()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if _cors == "*" else [o.strip() for o in _cors.split(",") if o.strip()],
+    allow_methods=["*"], allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def _access_log(request: Request, call_next):
+    t0 = time.monotonic()
+    response = await call_next(request)
+    dt = (time.monotonic() - t0) * 1000.0
+    route = request.url.path
+    _METRICS["requests_total"] += 1
+    sk = str(response.status_code)
+    _METRICS["by_status"][sk] = _METRICS["by_status"].get(sk, 0) + 1
+    _METRICS["by_route"][route] = _METRICS["by_route"].get(route, 0) + 1
+    log.info('%s "%s %s" %s %.1fms',
+             request.client.host if request.client else "-", request.method, route, response.status_code, dt)
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def _on_validation_error(request: Request, exc: RequestValidationError):
+    """Surface Pydantic validation failures in the {ok:false,error} envelope at 400 (not FastAPI's 422
+    default), preserving the API contract. Malformed JSON is reported as 'bad JSON'."""
+    errs = exc.errors()
+    if any(e.get("type") == "json_invalid" for e in errs):
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"bad JSON: {errs[0].get('msg', '')}"})
+    msg = "; ".join(f"{'.'.join(str(p) for p in e['loc'][1:]) or e['loc'][-1]}: {e['msg']}" for e in errs[:3])
+    return JSONResponse(status_code=400, content={"ok": False, "error": msg or "invalid request"})
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _on_http_exc(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.detail})
+
+
+# ---- GET: static front-end + generated reports + DEM previews + ops ------------------------------
+@app.get("/")
+@app.get("/index.html")
+def get_index():
+    return FileResponse(os.path.join(HERE, "index.html"), media_type=_CTYPE[".html"])
+
+
+@app.get("/bodies.json")
+def get_bodies():
+    p = os.path.join(HERE, "bodies.json")
+    if not os.path.isfile(p):
+        return JSONResponse(status_code=404, content={"ok": False, "error": "not found: bodies.json"})
+    return FileResponse(p, media_type=_CTYPE[".json"])
+
+
+@app.get("/reports/{name}")
+def get_report(name: str):
+    safe = os.path.basename(name)                       # basename only -> no path traversal
+    p = os.path.join(REPORTS, safe)
+    if not os.path.isfile(p):
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"not found: {safe}"})
+    ext = os.path.splitext(safe)[1]
+    return FileResponse(p, media_type=_CTYPE.get(ext, "application/octet-stream"))
+
+
+@app.get("/dem/{name}")
+def get_dem(name: str):                                 # the real LOLA work-area DEM previews (Haworth)
+    bundle = os.path.join(HERE, "..", "samples", "lunar_dem", "haworth_10km_5m")
+    f = {"hillshade.png": "preview_hillshade.png", "height.png": "preview_height.png"}.get(os.path.basename(name))
+    if not f:
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"no dem {os.path.basename(name)}"})
+    return FileResponse(os.path.join(bundle, f), media_type="image/png")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "version": _version(), "uptime_s": round(time.monotonic() - _START, 1)}
+
+
+@app.get("/metrics")
+def metrics():
+    return {"uptime_s": round(time.monotonic() - _START, 1), **_METRICS}
+
+
+# ---- POST: the planner API (auth-gated when $DUSTGYM_API_KEY is set) -----------------------------
+@app.post("/plan")
+def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
+    _prune_reports()
+    payload = req.model_dump(exclude_unset=True)
+    try:
+        mission = MP.mission_from_dict(payload)
+        dem, origin = _moon_dem() if mission.body == "moon" else (None, (0.0, 0.0))
+        # I10: hauls routed around hazards on the real DEM; I8 + I6/M11 slope-feasible siting.
+        with _REPORT_LOCK:                              # serialize the thread-unsafe matplotlib report path
             pdf, md, totals = MP.run(mission, stem=_plan_stem(payload), dem=dem, dem_origin=origin,
-                                     algorithm=algorithm, objective=objective)
-            validation = MP.validate_plan(mission, dem=dem, dem_origin=origin)
-            timeline = MP.build_timeline(mission, dem=dem, dem_origin=origin,   # P5: execute + watch
-                                         algorithm=algorithm, objective=objective)
-            endurance = MP.endurance(mission, dem=dem, dem_origin=origin)       # single-charge range
-            autonomy, perception = _autonomy_perception(mission, dem, origin, algorithm, objective)
-        except (ValueError, RuntimeError) as e:            # bad input / sinter-gated -> honest 400
-            return self._send_json(400, {"ok": False, "error": str(e)})
-        return self._send_json(200, {
-            "ok": True,
-            "pdf": "/reports/" + os.path.basename(pdf),
-            "md": "/reports/" + os.path.basename(md),
-            "totals": _totals_json(totals),
-            "validation": validation,
-            "timeline": timeline,
-            "endurance": endurance,
-            "autonomy": autonomy,           # closed-loop controller summary (recharges / replans / completion)
-            "perception": perception,       # AutoNav onboard estimate uncertainty (pose / drum-fill / energy sigma)
-        })
-
-    def _render(self, payload):
-        """Crop a Haworth window at the picked (u,v), plan a flatten, render BEFORE/AFTER in Godot, and
-        return the figure URL + earthwork volumes. Slow (two Godot renders); 503 if the binary is absent."""
-        if PRP is None:
-            return self._send_json(503, {"ok": False, "error": "render pipeline unavailable (Godot binary absent)"})
-        try:
-            u = float(payload.get("u", 0.5))
-            v = float(payload.get("v", 0.5))
-            pad_frac = float(payload.get("pad_frac", 0.5))
-        except (TypeError, ValueError) as e:
-            return self._send_json(400, {"ok": False, "error": f"bad params: {e}"})
-        stem = "render_" + hashlib.sha1(f"{u:.4f}_{v:.4f}_{pad_frac:.2f}".encode()).hexdigest()[:10]
-        try:
-            r = PRP.render_map_area(_HAWORTH, u, v, os.path.join(REPORTS, stem), pad_frac=pad_frac)
-        except Exception as e:                             # noqa: BLE001 -- render failure -> honest 500
-            log.exception("render failed for (u=%s, v=%s)", payload.get("u"), payload.get("v"))
-            return self._send_json(500, {"ok": False, "error": f"render failed: {e}"})
-        fig_name = stem + ".png"
-        shutil.copyfile(r["figure"], os.path.join(REPORTS, fig_name))
-        return self._send_json(200, {
-            "ok": True, "figure": "/reports/" + fig_name,
-            "cut_vol_m3": round(r["cut_vol_m3"], 2), "fill_vol_m3": round(r["fill_vol_m3"], 2),
-            "cut_kg": round(r["cut_kg"]), "extent_m": round(r["extent_m"], 1), "cell_m": round(r["cell_m"], 2),
-        })
-
-    def _compare(self, payload):
-        """Run every sequencer and return their metrics sorted by the chosen objective (the multi-algorithm
-        comparison the UI sorts by)."""
-        objective = payload.get("objective", "time")
-        try:
-            mission = MP.mission_from_dict(payload)
-            dem, origin = _moon_dem() if mission.body == "moon" else (None, (0.0, 0.0))
-            result = MP.compare_algorithms(mission, objective=objective, dem=dem, dem_origin=origin)
-        except (ValueError, RuntimeError) as e:
-            return self._send_json(400, {"ok": False, "error": str(e)})
-        return self._send_json(200, {"ok": True, **result})
-
-    def _structure(self, payload):
-        """Decompose a named structure (Landing Pad / Haul Road / Berm / ...) placed at (x,y) into
-        mass-balanced cut/fill orders (structures.decompose). Returns orders the build queue can adopt."""
-        name = payload.get("name")
-        try:
-            x = float(payload.get("x", 0.0))
-            y = float(payload.get("y", 0.0))
-        except (TypeError, ValueError):
-            return self._send_json(400, {"ok": False, "error": "x and y must be numeric"})
-        params = payload.get("params") or {}
-        try:
-            orders = ST.decompose(name, x, y, **params)
-        except (ValueError, TypeError) as e:
-            return self._send_json(400, {"ok": False, "error": str(e)})
-        return self._send_json(200, {"ok": True, "name": name, "orders": orders})
-
-    def _sense(self, payload):
-        """Drum-fill sensing (ICE-RASSOR): true drum mass -> motor-current observable -> inferred mass +
-        offload decision. `noise_frac` toggles seeded sensor noise (0 = OFF). Calibrates a DrumSensor over
-        a mass grid up to `capacity_kg`, so the inference is fit-from-data, not hard-coded."""
-        try:
-            true_mass = float(payload["true_mass_kg"])
-        except (KeyError, TypeError, ValueError):
-            return self._send_json(400, {"ok": False, "error": "POST /sense needs numeric true_mass_kg"})
-        cap = float(payload.get("capacity_kg", MP.RM.REGOLITH_PER_CYCLE_KG))
-        noise = float(payload.get("noise_frac", 0.0))      # 0 = noise OFF (deterministic)
-        seed = int(payload.get("seed", 0))
-        grid = [cap * f for f in (0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0)]
-        sensor = MP.RM.DrumSensor.calibrated(grid, capacity_kg=cap, noise_frac=noise, seed=seed)
-        current = sensor.current(true_mass)
-        inferred = sensor.infer(current)
-        dec = sensor.offload(inferred)
-        return self._send_json(200, {
-            "ok": True, "true_mass_kg": true_mass, "current_a": current, "inferred_kg": inferred,
-            "uncertainty_frac": dec.uncertainty_frac, "lower_kg": dec.lower_kg, "upper_kg": dec.upper_kg,
-            "capacity_kg": cap, "offload": dec.offload, "noise_frac": noise,
-        })
-
-    def log_message(self, fmt, *args):                     # PRD N10: route access logs through the logger
-        log.info("%s %s", self.address_string(), fmt % args)
+                                     algorithm=req.algorithm, objective=req.objective)
+        validation = MP.validate_plan(mission, dem=dem, dem_origin=origin)
+        timeline = MP.build_timeline(mission, dem=dem, dem_origin=origin,
+                                     algorithm=req.algorithm, objective=req.objective)
+        endurance = MP.endurance(mission, dem=dem, dem_origin=origin)
+        autonomy, perception = _autonomy_perception(mission, dem, origin, req.algorithm, req.objective)
+    except (ValueError, RuntimeError) as e:             # bad input / sinter-gated -> honest 400
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+    return {
+        "ok": True,
+        "pdf": "/reports/" + os.path.basename(pdf),
+        "md": "/reports/" + os.path.basename(md),
+        "totals": _totals_json(totals),
+        "validation": validation,
+        "timeline": timeline,
+        "endurance": endurance,
+        "autonomy": autonomy,
+        "perception": perception,
+    }
 
 
-def make_server(port=0, host="127.0.0.1"):
-    """A ThreadingHTTPServer. host defaults to localhost (tests + safe default); pass 0.0.0.0 to reach it
-    from other devices on the LAN/tailnet. port=0 picks an ephemeral port (used by the tests)."""
-    return ThreadingHTTPServer((host, port), Handler)
+@app.post("/compare")
+def post_compare(req: CompareRequest, _auth: None = Depends(require_auth)):
+    payload = req.model_dump(exclude_unset=True)
+    try:
+        mission = MP.mission_from_dict(payload)
+        dem, origin = _moon_dem() if mission.body == "moon" else (None, (0.0, 0.0))
+        result = MP.compare_algorithms(mission, objective=req.objective, dem=dem, dem_origin=origin)
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+    return {"ok": True, **result}
+
+
+@app.post("/structure")
+def post_structure(req: StructureRequest, _auth: None = Depends(require_auth)):
+    """Decompose a named structure (Landing Pad / Haul Road / Berm / ...) at (x,y) into mass-balanced
+    cut/fill orders (structures.decompose). Returns orders the build queue can adopt."""
+    try:
+        orders = ST.decompose(req.name, req.x, req.y, **(req.params or {}))
+    except (ValueError, TypeError) as e:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+    return {"ok": True, "name": req.name, "orders": orders}
+
+
+@app.post("/sense")
+def post_sense(req: SenseRequest, _auth: None = Depends(require_auth)):
+    """Drum-fill sensing (ICE-RASSOR): true drum mass -> motor-current observable -> inferred mass +
+    offload decision. `noise_frac` toggles seeded sensor noise (0 = OFF)."""
+    cap = req.capacity_kg if req.capacity_kg is not None else float(MP.RM.REGOLITH_PER_CYCLE_KG)
+    grid = [cap * f for f in (0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0)]
+    sensor = MP.RM.DrumSensor.calibrated(grid, capacity_kg=cap, noise_frac=req.noise_frac, seed=req.seed)
+    current = sensor.current(req.true_mass_kg)
+    inferred = sensor.infer(current)
+    dec = sensor.offload(inferred)
+    return {
+        "ok": True, "true_mass_kg": req.true_mass_kg, "current_a": current, "inferred_kg": inferred,
+        "uncertainty_frac": dec.uncertainty_frac, "lower_kg": dec.lower_kg, "upper_kg": dec.upper_kg,
+        "capacity_kg": cap, "offload": dec.offload, "noise_frac": req.noise_frac,
+    }
+
+
+@app.post("/render")
+def post_render(req: RenderRequest, _auth: None = Depends(require_auth)):
+    """Crop a Haworth window at the picked (u,v), plan a flatten, render BEFORE/AFTER in Godot, and
+    return the figure URL + earthwork volumes. Slow (two Godot renders); 503 if the binary is absent."""
+    if PRP is None:
+        return JSONResponse(status_code=503,
+                            content={"ok": False, "error": "render pipeline unavailable (Godot binary absent)"})
+    _prune_reports()
+    stem = "render_" + hashlib.sha1(f"{req.u:.4f}_{req.v:.4f}_{req.pad_frac:.2f}".encode()).hexdigest()[:10]
+    try:
+        with _REPORT_LOCK:
+            r = PRP.render_map_area(_HAWORTH, req.u, req.v, os.path.join(REPORTS, stem), pad_frac=req.pad_frac)
+    except Exception as e:                              # noqa: BLE001 -- render failure -> honest 500
+        log.exception("render failed for (u=%s, v=%s)", req.u, req.v)
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"render failed: {e}"})
+    fig_name = stem + ".png"
+    shutil.copyfile(r["figure"], os.path.join(REPORTS, fig_name))
+    return {
+        "ok": True, "figure": "/reports/" + fig_name,
+        "cut_vol_m3": round(r["cut_vol_m3"], 2), "fill_vol_m3": round(r["fill_vol_m3"], 2),
+        "cut_kg": round(r["cut_kg"]), "extent_m": round(r["extent_m"], 1), "cell_m": round(r["cell_m"], 2),
+    }
+
+
+# ---- catch-all 404s (registered last) keep the {ok:false,error} envelope ------------------------
+@app.get("/{path:path}")
+def _no_get(path: str):
+    return JSONResponse(status_code=404, content={"ok": False, "error": f"no route /{path}"})
+
+
+@app.post("/{path:path}")
+def _no_post(path: str):
+    return JSONResponse(status_code=404, content={"ok": False, "error": f"no route /{path}"})
 
 
 def main():
-    ap = argparse.ArgumentParser(description="planet browser + mission planner server")
+    ap = argparse.ArgumentParser(description="planet browser + mission planner server (ASGI)")
     ap.add_argument("--port", type=int, default=8770)
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use 0.0.0.0 to reach it over the LAN/tailnet (default localhost)")
     args = ap.parse_args()
     _configure_logging()
-    srv = make_server(args.port, args.host)
-    host, port = srv.server_address
-    log.info("planet browser + planner -> http://%s:%s/   (POST /plan, /sense; Ctrl-C to stop)", host, port)
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        srv.shutdown()
+    _prune_reports()
+    log.info("planet browser + planner (ASGI) -> http://%s:%s/   (POST /plan,/sense; /healthz,/metrics; Ctrl-C)",
+             args.host, args.port)
+    uvicorn.run(app, host=args.host, port=args.port, log_config=None)
 
 
 if __name__ == "__main__":
