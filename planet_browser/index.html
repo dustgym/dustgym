@@ -106,6 +106,13 @@
     </section>
 
     <section>
+      <h3>Fleet</h3>
+      <div class="ctl"><label>Vehicle <select id="vehicle"></select></label></div>
+      <div class="ctl" id="tools">tools —</div>
+      <div id="fleetcaps">capabilities —</div>
+    </section>
+
+    <section>
       <h3>Build estimate</h3>
       <div class="ctl"><label>pad <input id="padW" type="number" value="20" step="1" />×<input id="padL" type="number" value="20" step="1" /> m</label></div>
       <div class="ctl">
@@ -469,7 +476,8 @@ qel("qplan").onclick = async () => {
   try {
     const res = await fetch("/plan", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: `${BODIES[sel.value].name} build`, body: sel.value, charger: [0, 0],
-        orders: ORDERS, algorithm: qel("qalgo").value, objective: qel("qobj").value, precedence: parsePrec() }) });
+        orders: ORDERS, algorithm: qel("qalgo").value, objective: qel("qobj").value, precedence: parsePrec(),
+        ...fleet() }) });
     const j = await res.json();
     if (!j.ok) { setQ("error: " + j.error); return; }
     const t = j.totals;
@@ -616,7 +624,7 @@ qel("qcompare").onclick = async () => {
   setQ(`comparing algorithms by ${obj}…`);
   try {
     const res = await fetch("/compare", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "compare", body: sel.value, charger: [0, 0], orders: ORDERS, objective: obj, precedence: parsePrec() }) });
+      body: JSON.stringify({ name: "compare", body: sel.value, charger: [0, 0], orders: ORDERS, objective: obj, precedence: parsePrec(), ...fleet() }) });
     const j = await res.json();
     if (!j.ok) { setQ("compare error: " + j.error); return; }
     const fmt = { time_s: v => (v / 3600).toFixed(1) + " h", energy_J: v => (v / 1e6).toFixed(1) + " MJ",
@@ -650,9 +658,40 @@ async function senseDrum() {
 }
 ["drumkg", "drumnoise"].forEach((id) => qel(id).addEventListener("input", senseDrum));
 
+// Fleet: vehicle + mounted tools (from bodies.json _vehicles/_tools, the py source). The effective
+// capabilities (base vehicle + mounted tools) gate which order kinds are offered -- e.g. sinter only
+// appears when a sinter tool is mounted (it is a separate entity, not on the IPEx excavator).
+function fleet() {
+  const tools = [...document.querySelectorAll("#tools input:checked")].map((c) => c.value);
+  return { vehicle: (qel("vehicle").value || "ipex"), tools };
+}
+function fleetCaps() {
+  const v = (PHY && PHY._vehicles) ? PHY._vehicles[qel("vehicle").value] : null;
+  const caps = new Set((v && v.capabilities) ? v.capabilities : ["drive", "excavate", "haul", "dump", "compact"]);
+  if (PHY && PHY._tools) for (const t of fleet().tools) { const td = PHY._tools[t]; if (td) caps.add(td.capability); }
+  return caps;
+}
+function syncKinds() {
+  const caps = fleetCaps(), kind = qel("qkind"), cur = kind.value;
+  const opts = [["cut", "excavate"], ["fill", "dump"], ["sinter", "sinter"]].filter(([, c]) => caps.has(c));
+  kind.innerHTML = opts.map(([k]) => `<option value="${k}">${k}</option>`).join("");
+  if (opts.some(([k]) => k === cur)) kind.value = cur;
+  qel("fleetcaps").textContent = "capabilities: " + [...caps].sort().join(", ");
+}
+function populateFleet() {
+  if (!PHY || !PHY._vehicles) return;
+  qel("vehicle").innerHTML = Object.entries(PHY._vehicles)
+    .map(([k, v]) => `<option value="${k}">${v.label}</option>`).join("");
+  qel("tools").innerHTML = "tools: " + (PHY._tools ? Object.entries(PHY._tools)
+    .map(([k, t]) => `<label><input type="checkbox" value="${k}"> ${t.label}</label>`).join(" ") : "none");
+  [...document.querySelectorAll("#tools input")].forEach((c) => c.addEventListener("change", syncKinds));
+  qel("vehicle").addEventListener("change", syncKinds);
+  syncKinds();
+}
+
 // load the py-generated terramechanics + IPEx constants (single source); graceful on file://
 fetch("bodies.json").then((r) => (r.ok ? r.json() : null)).then((d) => {
-  if (d) { PHY = d; showTerra(); estimate(); }
+  if (d) { PHY = d; showTerra(); estimate(); populateFleet(); }
 }).catch(() => {});
 senseDrum();
 

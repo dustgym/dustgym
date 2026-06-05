@@ -48,6 +48,7 @@ from terrain_authority import constants as C            # materials + the SINTER
 from terrain_authority import rassor_mass_model as RM   # ICE-RASSOR drum-fill sensing (NTRS 20210022781)
 from terrain_authority import slip as TMS               # conserved slip ladder — weight-aware leg slip
 from terrain_authority import terramechanics as TM      # TerramechanicsParams for the slip solve
+from terrain_authority import vehicles as V             # vehicle/tool capability registry (gate order kinds)
 from terrain_authority.column_state import ColumnState  # conserved authority — for I8 plan validation
 
 DRIVE_SPEED_MS  = S.DRIVE_SPEED_MS                       # 0.30 m/s
@@ -120,12 +121,17 @@ class Mission:
     #: precedence as (before_action, after_action) pairs by order action-name (I9): the trip(s) touching
     #: `after` must be sequenced after the trip(s) touching `before` (e.g. grade road before hauling on it).
     precedence: list = dataclasses.field(default_factory=list)
+    vehicle: str = "ipex"                              # the platform doing the work (vehicles.VEHICLES)
+    tools: tuple = ()                                  # tools mounted on it (vehicles.TOOLS) -> extra capabilities
     @property
     def density(self): return body_density(self.body)
 
 
 _ORDER_KINDS = ("cut", "fill", "sinter")
 _ORDER_FIELDS = ("action", "kind", "x", "y", "footprint_m2", "depth_m")
+#: order kind -> the vehicle capability it requires (vehicles.ACTIONS). The fleet (selected vehicle +
+#: mounted tools) must have it or the order is refused -- e.g. sinter needs the separate sinter Tool.
+KIND_CAPABILITY = {"cut": "excavate", "fill": "dump", "sinter": "sinter"}
 
 
 def mission_from_dict(payload):
@@ -139,6 +145,13 @@ def mission_from_dict(payload):
     body = payload.get("body")
     if body not in _bodies():
         raise ValueError(f"unknown body {body!r}; known: {sorted(_bodies())}")
+    # the fleet doing the work: a vehicle + mounted tools -> its capability set gates the order kinds.
+    veh = str(payload.get("vehicle", V.DEFAULT_VEHICLE))
+    tools = tuple(str(t) for t in (payload.get("tools") or ()))
+    try:
+        caps = V.capabilities_of(veh, tools=tools)
+    except KeyError as e:
+        raise ValueError(str(e))                       # unknown vehicle/tool -> 400, not 500
     raw = payload.get("orders")
     if not isinstance(raw, list) or not raw:
         raise ValueError("mission needs a non-empty 'orders' list")
@@ -151,13 +164,22 @@ def mission_from_dict(payload):
             raise ValueError(f"order {i} missing field(s): {missing}")
         if o["kind"] not in _ORDER_KINDS:
             raise ValueError(f"order {i} kind {o['kind']!r} not in {_ORDER_KINDS}")
+        need = KIND_CAPABILITY.get(o["kind"])
+        if need and need not in caps:                  # capability gate: does THIS fleet have the verb?
+            if o["kind"] == "sinter":
+                raise ValueError(
+                    f"order {i}: sinter is GATED OFF -- no vehicle in the fleet carries a sinter tool "
+                    f"({veh!r} is a drum excavator; sinter is a separate Tool to mount).")
+            raise ValueError(
+                f"order {i}: kind {o['kind']!r} needs the {need!r} capability, which the fleet "
+                f"({veh!r} + tools {list(tools)}) lacks.")
         orders.append(BuildOrder(action=str(o["action"]), kind=str(o["kind"]),
                                  x=float(o["x"]), y=float(o["y"]),
                                  footprint_m2=float(o["footprint_m2"]), depth_m=float(o["depth_m"]),
                                  note=str(o.get("note", ""))))
     c = payload.get("charger", (0.0, 0.0))
     kwargs = dict(name=str(payload.get("name", "Build Mission")), body=body, orders=orders,
-                  charger=(float(c[0]), float(c[1])))
+                  charger=(float(c[0]), float(c[1])), vehicle=veh, tools=tools)
     if "date" in payload:
         kwargs["date"] = str(payload["date"])
     prec = payload.get("precedence")                       # I9: [[before_action, after_action], ...]

@@ -79,8 +79,14 @@ def test_run_unique_stem_no_overwrite():
 
 # ---- sinter stays gated through the adapter ------------------------------------------------------
 def test_sinter_order_still_refused():
-    m = MP.mission_from_dict(_payload(orders=[
-        {"action": "Sinter apron", "kind": "sinter", "x": 10, "y": 10, "footprint_m2": 9, "depth_m": 0.01}]))
+    sinter_order = [{"action": "Sinter apron", "kind": "sinter", "x": 10, "y": 10,
+                     "footprint_m2": 9, "depth_m": 0.01}]
+    # capability gate: the default IPEx drum excavator has no sinter tool -> refused at mission_from_dict
+    with pytest.raises(ValueError, match="GATED OFF"):
+        MP.mission_from_dict(_payload(orders=sinter_order))
+    # numbers gate: with the separate sinter tool mounted the capability is satisfied, but plan_and_simulate
+    # still refuses while constants.SINTER_ENABLED is False ([CALIB] energy/density not sourced)
+    m = MP.mission_from_dict(_payload(orders=sinter_order) | {"tools": ["sinter"]})
     with pytest.raises(RuntimeError, match="GATED OFF"):
         MP.plan_and_simulate(m)
 
