@@ -1,3 +1,8 @@
+---
+title: "Sensor-bridge contract"
+nav_order: 8
+---
+
 # Sensor-bridge contract — Godot camera egress ↔ ROS2 fiducial/SLAM (v1.1)
 
 *Status: FROZEN seam for the M1 "basic comms" milestone (2026-05-30). This is the dev-time analogue of

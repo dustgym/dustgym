@@ -1,3 +1,8 @@
+---
+title: "Spec coverage"
+nav_order: 5
+---
+
 # Spec-coverage scorecard — `ipex-terrain-sim-spec.md` §1–§12 vs. what's built
 
 *Status: living audit (snapshot 2026-05-31, repo head `3a3aef3`). This is the honest "what does the

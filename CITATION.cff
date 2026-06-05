@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: "dustgym: a conserved-physics world model, autonomous planner, and Gymnasium suite for off-world surface construction"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - given-names: John
+    family-names: McCardle
+  - given-names: "Aaron W."
+    family-names: Storey
+repository-code: "https://github.com/dustgym/dustgym"
+url: "https://github.com/dustgym/dustgym"
+abstract: >-
+  dustgym is a mass-conserving terramechanics authority, five-layer world model,
+  autonomous construction planner, and Gymnasium environment suite for robots that
+  reshape regolith (excavate, grade, berm, fill) on airless rocky surfaces, parameterized
+  per planetary body (Moon, Mars, Ceres, Bennu, Phobos, Earth). The dynamics are conserved
+  by construction (exact, unhackable); learning is spent only on the expensive perception
+  branch. Lineage: NASA IPEx (ISRU Pilot Excavator) and the Lunar Autonomy Challenge.
+keywords:
+  - terramechanics
+  - lunar robotics
+  - regolith
+  - in-situ resource utilization
+  - reinforcement learning
+  - Gymnasium
+  - world model
+  - NASA IPEx
+  - Lunar Autonomy Challenge
+license: CC0-1.0
+version: 0.1.0

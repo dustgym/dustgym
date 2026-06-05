@@ -1,3 +1,8 @@
+---
+title: "Per-planet constants"
+nav_order: 4
+---
+
 # Per-Planet Terramechanics — Systematic Review (dustgym `Body` constants)
 
 **Scope.** Source the surface/regolith mechanical constants for the planetary bodies that are real

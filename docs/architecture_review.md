@@ -1,3 +1,8 @@
+---
+title: "Architecture review"
+nav_order: 6
+---
+
 # dustgym architectural review — production-readiness (2026-06-04)
 
 A six-agent architectural review of the single dustgym software (the conserved-physics core, the RL/Gymnasium

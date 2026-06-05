@@ -1,3 +1,8 @@
+---
+title: "World model"
+nav_order: 2
+---
+
 # World model for lunar terrain transformation
 
 For a robot that *reshapes* terrain rather than driving through it, the world model is the central

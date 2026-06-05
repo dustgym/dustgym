@@ -1,3 +1,8 @@
+---
+title: "Related work"
+nav_order: 3
+---
+
 # Related work — where dustgym lands in the field
 
 This is the shareable synthesis of a five-field systematic review (NASA planetary rover autonomy,

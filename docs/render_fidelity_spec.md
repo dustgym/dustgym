@@ -1,3 +1,8 @@
+---
+title: "Render fidelity"
+nav_order: 9
+---
+
 # Render-fidelity & variable-resolution spec — per-wheel tracks, drum teeth marks, 1 cm experiments
 
 *Status: DESIGN SPEC (not yet implemented). Written 2026-05-30. Extends [`lac_reimplementation_eval.md`](lac_reimplementation_eval.md) §8 (scaling) and the [`INTERFACE.md`](../INTERFACE.md) contract (the metadata additions land there as v1.0.2 §5.2/§5.3). Producer/consumer code is specified here, not built.*

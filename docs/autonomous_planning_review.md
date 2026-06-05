@@ -1,3 +1,8 @@
+---
+title: "Autonomous planning"
+nav_order: 7
+---
+
 # Autonomous-planning review — capabilities, limits, and the multi-vehicle design (2026-06-04)
 
 A focused four-agent review of the autonomous-planning subsystem of the single dustgym software, on the

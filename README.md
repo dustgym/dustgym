@@ -1,5 +1,10 @@
 # dustgym
 
+[![CI](https://github.com/dustgym/dustgym/actions/workflows/ci.yml/badge.svg)](https://github.com/dustgym/dustgym/actions/workflows/ci.yml)
+[![License: CC0-1.0](https://img.shields.io/badge/license-CC0--1.0-lightgrey.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Docs](https://img.shields.io/badge/docs-dustgym.github.io-informational)](https://dustgym.github.io/dustgym/)
+
 **A conserved-physics world model, autonomous planner, and Gymnasium suite for off-world surface
 construction.** A robot that *reshapes* regolith (excavate, grade, berm, fill) on an airless rocky
 surface, on a mass-conserving terramechanics authority parameterized per planetary body (Moon / Mars /
@@ -93,8 +98,8 @@ Build-planning software: place build orders on a real map, an optimizer sequence
 physics + battery + time, and you get a 2–3 page mission-control report.
 
 ```bash
-cd planet_browser && python server.py        # stdlib http.server, no framework
-# open http://localhost:8000 — CesiumJS globe (NASA Trek Moon/Mars tiles), build queue, Plan mission → PDF
+python -m planet_browser.server              # stdlib http.server, no framework (or: dustgym-serve)
+# open the printed URL; CesiumJS globe (NASA Trek Moon/Mars tiles), build queue, Plan mission -> PDF
 ```
 
 - `/plan` — POST a build queue → cut/fill-balanced orders → nearest-neighbour route →
@@ -159,7 +164,12 @@ emit a warning and are reachable via `gym.make("Dust/RoverDrive-v0", body="bennu
 | [`docs/related_work.md`](docs/related_work.md) | Where dustgym lands across NASA autonomy, lunar mining, world models, AD, SLAM |
 | [`docs/bodies_sysrev.md`](docs/bodies_sysrev.md) | Sourced per-planet terramechanics constants |
 | [`PRD.md`](PRD.md) | The layered product requirements (L0 physics → L8 3D app), every requirement → status |
-| `validation/` | Figures: planner, RL, nav, map channel, autonomy, plan→render, active perception, self-optimizing |
+| `validation/` | Figures: planner, RL, nav, map channel, autonomy, plan->render, active perception, self-optimizing |
+
+**Docs site:** <https://dustgym.github.io/dustgym/> &middot;
+**Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) &middot;
+**Security:** [SECURITY.md](SECURITY.md) &middot;
+**Cite:** [CITATION.cff](CITATION.cff)
 
 ---
 
