@@ -108,5 +108,60 @@
     "battery_j": 4795200.0,
     "dig_rate_kg_hr": 42.0,
     "sinter_enabled": false
-  }
+  },
+  "_vehicles": {
+    "ipex": {
+      "label": "ISRU Pilot Excavator (IPEx)",
+      "dry_mass_kg": 30.0,
+      "n_wheels": 4,
+      "drum_capacity_kg": 30.0,
+      "drive_power_w": 40.38,
+      "dig_energy_j_per_kg": 4151.4,
+      "capabilities": [
+        "compact",
+        "drive",
+        "dump",
+        "excavate",
+        "haul"
+      ],
+      "onboard_power": [
+        "ipex_battery"
+      ]
+    }
+  },
+  "_power": {
+    "ipex_battery": {
+      "label": "IPEx 12S/30Ah Li-ion",
+      "kind": "battery",
+      "capacity_j": 4795200.0,
+      "recharge_w": 700.0,
+      "continuous_w": 0.0
+    },
+    "lander_tower": {
+      "label": "Surface power tower / lander",
+      "kind": "tower",
+      "capacity_j": 0.0,
+      "recharge_w": 0.0,
+      "continuous_w": 700.0
+    }
+  },
+  "_tools": {
+    "sinter": {
+      "label": "Sinter head (regolith fuser)",
+      "capability": "sinter",
+      "energy_j_per_kg": 920000.0,
+      "product_density_kg_m3": 2300.0
+    }
+  },
+  "_actions": [
+    "compact",
+    "drive",
+    "dump",
+    "excavate",
+    "fill",
+    "grade",
+    "haul",
+    "process",
+    "sinter"
+  ]
 }
