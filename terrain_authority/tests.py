@@ -13,16 +13,15 @@ Prints PASS/FAIL per check; exits nonzero if any check fails.
 
 from __future__ import annotations
 
-import sys
 
 import numpy as np
 
 from . import constants as K
 from . import procgen
 from . import refinement
-from .column_state import ColumnState, StateLabel, loose_mask
+from .column_state import ColumnState, StateLabel
 from .quadtree import build_quadtree, leaves_cover_field
-from .rover import (WHEEL_GAUGE_M, build_wheel_tracks_meta, conform_pose,
+from .rover import (WHEEL_GAUGE_M, conform_pose,
                     four_wheel_pass, straight_path, wheel_contact_points, wheel_pass)
 from .sandpile import Sandpile
 
@@ -168,7 +167,6 @@ def test_sandpile_conserves_and_reposes() -> None:
 # ---------------------------------------------------------------------------
 
 def test_io_roundtrip() -> None:
-    import json
     import os
     import tempfile
 

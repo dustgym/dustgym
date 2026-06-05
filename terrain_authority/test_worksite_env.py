@@ -70,7 +70,7 @@ def test_haworth_balanced_cut_haul_fill_battery_bound():
     bundle = "samples/lunar_dem/haworth_10km_5m"
     if not os.path.isdir(bundle):
         import pytest
-        pytest.skip("Haworth DEM bundle not present (ships with roversim, not the dustgym package)")
+        pytest.skip("Haworth DEM bundle not present (in the repo's samples/, not the installed dustgym package)")
 
     def mkh(charges):
         return WorkSiteConstructEnv(bundle_dir=bundle, fine_cell_m=0.1, flat_window=True,

@@ -10,7 +10,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
-    { name = "John McCardle" },   # terrain_authority terramechanics + WorkSite (roversim, CC0)
+    { name = "John McCardle" },   # terrain_authority terramechanics + WorkSite (CC0 core)
     { name = "Aaron Storey" },    # dustgym Gymnasium suite, per-planet bodies, RL/scheduling
 ]
 keywords = ["gymnasium", "reinforcement-learning", "planetary", "lunar", "mars", "rover", "terramechanics", "regolith", "isru", "robotics"]
@@ -28,12 +28,12 @@ dependencies = [
 
 [project.optional-dependencies]
 rl = ["torch", "stable-baselines3>=2.0"]   # PPO / model-free baselines
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "ruff>=0.6"]
 
 [project.urls]
 Homepage = "https://github.com/dustgym/dustgym"
 Source = "https://github.com/dustgym/dustgym"
-"Upstream physics (roversim)" = "https://github.com/jmccardle/roversim"
+"Core physics provenance" = "https://github.com/jmccardle/roversim"
 
 # Forward-compatible Gymnasium plugin hook (for versions that auto-load entry points). Current
 # Gymnasium needs `import dustgym` (registers on import) before `gymnasium.make("Dust/...")`.
@@ -42,3 +42,23 @@ Dust = "dustgym:register_envs"
 
 [tool.setuptools]
 packages = ["terrain_authority", "dustgym"]
+
+# --- quality + test config (PRD N11) ---------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# Enforced standard: pyflakes (F) -- unused imports/vars, undefined names, f-string/format errors.
+# The broader style rules (E/W line-length etc.) are intentionally advisory, not gated.
+select = ["F"]
+
+[tool.pytest.ini_options]
+testpaths = ["terrain_authority", "planet_browser"]
+addopts = "-q"
+markers = [
+    "gpu: needs a GPU (Vulkan/CUDA)",
+    "godot: needs the Godot sidecar binary",
+    "colmap: needs pycolmap",
+    "chrono: needs pychrono",
+]
