@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import os
+import re
 import shutil
 import sys
 import threading
@@ -64,6 +66,7 @@ _HAWORTH = os.path.join(MP._REPO_ROOT, "samples", "lunar_dem", "haworth_10km_5m"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPORTS = os.path.join(HERE, "reports")
+PROFILES = os.path.join(HERE, "profiles")          # saved planning profiles (config snapshots), like reports/
 
 _CTYPE = {".html": "text/html; charset=utf-8", ".json": "application/json",
           ".pdf": "application/pdf", ".md": "text/markdown; charset=utf-8",
@@ -232,6 +235,11 @@ class RenderRequest(BaseModel):
     pad_frac: float = Field(default=0.5, gt=0.0, le=1.0)
 
 
+class ProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)      # saved under a slug of this name
+    profile: dict = Field(default_factory=dict)         # the full config snapshot (body/soil/fleet/orders/...)
+
+
 def require_auth(x_api_key: str | None = Header(default=None, alias="X-API-Key"),
                  authorization: str | None = Header(default=None)):
     """N8: API-key auth on mutating routes. Enabled only when $DUSTGYM_API_KEY is set (open in dev).
@@ -327,6 +335,41 @@ def healthz():
 @app.get("/metrics")
 def metrics():
     return {"uptime_s": round(time.monotonic() - _START, 1), **_METRICS}
+
+
+# ---- profiles: save / list / load a planning config snapshot ------------------------------------
+def _profile_slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "-", str(name).lower()).strip("-") or "profile"
+
+
+@app.post("/profile")
+def post_profile(req: ProfileRequest, _auth: None = Depends(require_auth)):
+    """Save a planning profile (the full config snapshot) under a slug of its name, to profiles/."""
+    os.makedirs(PROFILES, exist_ok=True)
+    slug = _profile_slug(req.name)
+    with open(os.path.join(PROFILES, slug + ".json"), "w") as fh:
+        json.dump({"name": req.name, "profile": req.profile}, fh, indent=2)
+    return {"ok": True, "name": slug}
+
+
+@app.get("/profiles")
+def get_profiles():
+    """List the saved profile slugs."""
+    if not os.path.isdir(PROFILES):
+        return {"ok": True, "profiles": []}
+    return {"ok": True, "profiles": sorted(os.path.splitext(f)[0]
+                                           for f in os.listdir(PROFILES) if f.endswith(".json"))}
+
+
+@app.get("/profile/{name}")
+def get_profile(name: str):
+    """Load a saved profile by slug -> {name, profile}."""
+    slug = _profile_slug(name)
+    p = os.path.join(PROFILES, slug + ".json")
+    if not os.path.isfile(p):
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"no profile {slug!r}"})
+    with open(p) as fh:
+        return json.load(fh)
 
 
 # ---- POST: the planner API (auth-gated when $DUSTGYM_API_KEY is set) -----------------------------

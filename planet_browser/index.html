@@ -184,6 +184,12 @@
         <button id="qimport" class="go">⤒ Import plan</button>
         <input id="qfile" type="file" accept=".json,application/json" style="display:none" />
       </div>
+      <div class="ctl" style="margin-top:5px">
+        <input id="profname" class="lbl" placeholder="profile name" style="max-width:11em" />
+        <button id="profsave" class="go">💾 Save</button>
+        <select id="profload"></select>
+        <button id="profloadbtn" class="go">↻ Load</button>
+      </div>
       <button id="qcompare" class="go">Compare algorithms ⇅</button>
       <div id="qstatus">queue empty</div>
       <table id="cmptable" style="display:none;width:100%;font-size:11px;border-collapse:collapse;margin-top:6px"></table>
@@ -513,9 +519,26 @@ qel("qplan").onclick = async () => {
 };
 
 // ---- import / export plans (round-trippable designer files) ------------------------------------
+// a PROFILE = the full planning config snapshot (body, soil, fleet, orders, site, optimization).
 function currentPlan() {
   return { body: sel.value, orders: ORDERS, precedence: qel("qprec").value,
-           algorithm: qel("qalgo").value, objective: qel("qobj").value };
+           algorithm: qel("qalgo").value, objective: qel("qobj").value, ...fleet(), ...site() };
+}
+function restoreProfile(p) {                                // set the WHOLE UI from a profile object
+  if (!Array.isArray(p.orders)) throw new Error("no orders[] in profile");
+  ORDERS.length = 0; p.orders.forEach((o) => ORDERS.push(o));
+  if (p.body && BODIES[p.body]) { sel.value = p.body; sel.dispatchEvent(new Event("change")); }
+  if (p.precedence != null) qel("qprec").value = p.precedence;
+  if (p.algorithm) qel("qalgo").value = p.algorithm;
+  if (p.objective) qel("qobj").value = p.objective;
+  if (p.vehicle && qel("vehicle")) qel("vehicle").value = p.vehicle;
+  if (qel("soil")) qel("soil").value = p.soil || "";
+  if (qel("lat") && p.lat != null) qel("lat").value = p.lat;
+  if (qel("lon") && p.lon != null) qel("lon").value = p.lon;
+  if (Array.isArray(p.tools))
+    document.querySelectorAll("#tools input").forEach((c) => { c.checked = p.tools.includes(c.value); });
+  if (typeof syncKinds === "function") syncKinds();
+  renderQueue();
 }
 qel("qexport").onclick = () => {
   const blob = new Blob([JSON.stringify(currentPlan(), null, 2)], { type: "application/json" });
@@ -528,18 +551,33 @@ qel("qexport").onclick = () => {
 qel("qimport").onclick = () => qel("qfile").click();
 qel("qfile").onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  try {
-    const p = JSON.parse(await f.text());
-    if (!Array.isArray(p.orders)) throw new Error("no orders[] in file");
-    ORDERS.length = 0; p.orders.forEach((o) => ORDERS.push(o));
-    if (p.body && BODIES[p.body]) { sel.value = p.body; sel.dispatchEvent(new Event("change")); }
-    if (p.precedence != null) qel("qprec").value = p.precedence;
-    if (p.algorithm) qel("qalgo").value = p.algorithm;
-    if (p.objective) qel("qobj").value = p.objective;
-    renderQueue();
-    setQ(`imported ${ORDERS.length} orders from ${f.name}`);
-  } catch (err) { setQ("import failed: " + err.message); }
+  try { restoreProfile(JSON.parse(await f.text())); setQ(`imported ${ORDERS.length} orders from ${f.name}`); }
+  catch (err) { setQ("import failed: " + err.message); }
   e.target.value = "";
+};
+// server-side profiles: save the current config, list + load saved ones
+async function refreshProfiles() {
+  try {
+    const d = await (await fetch("/profiles")).json();
+    if (d && d.ok) qel("profload").innerHTML = d.profiles.map((n) => `<option>${n}</option>`).join("");
+  } catch (err) { /* server not up */ }
+}
+qel("profsave").onclick = async () => {
+  const name = (qel("profname").value || "").trim();
+  if (!name) { setQ("name the profile first"); return; }
+  try {
+    const j = await (await fetch("/profile", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, profile: currentPlan() }) })).json();
+    if (j.ok) { setQ(`saved profile '${j.name}'`); refreshProfiles(); } else { setQ("save failed: " + j.error); }
+  } catch (err) { setQ("save failed (start the server): " + err); }
+};
+qel("profloadbtn").onclick = async () => {
+  const slug = qel("profload").value; if (!slug) { setQ("no saved profiles"); return; }
+  try {
+    const j = await (await fetch("/profile/" + encodeURIComponent(slug))).json();
+    if (j.profile) { restoreProfile(j.profile); setQ(`loaded profile '${j.name}'`); }
+    else { setQ("load failed: " + (j.error || "")); }
+  } catch (err) { setQ("load failed: " + err); }
 };
 
 // ---- P5: execute + watch — animate the planned timeline top-down with a telemetry HUD ----------
@@ -706,6 +744,7 @@ function populateFleet() {
 fetch("bodies.json").then((r) => (r.ok ? r.json() : null)).then((d) => {
   if (d) { PHY = d; showTerra(); estimate(); populateFleet(); }
 }).catch(() => {});
+refreshProfiles();                                            // populate the saved-profiles dropdown
 senseDrum();
 
 window.addEventListener("resize", () => { if (viewer) viewer.resize(); });  // globe follows window size
