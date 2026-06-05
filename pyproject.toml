@@ -40,8 +40,16 @@ Source = "https://github.com/dustgym/dustgym"
 [project.entry-points."gymnasium.envs"]
 Dust = "dustgym:register_envs"
 
+# The mission-planner product server (PRD N13): `dustgym-serve` -> the planner + mission-control report API.
+[project.scripts]
+dustgym-serve = "planet_browser.server:main"
+
 [tool.setuptools]
-packages = ["terrain_authority", "dustgym"]
+packages = ["terrain_authority", "dustgym", "planet_browser"]
+
+[tool.setuptools.package-data]
+# ship the planner's web UI + per-body config + the real-DEM ingest fixtures with the wheel
+planet_browser = ["*.html", "*.json", "fixtures/*"]
 
 # --- quality + test config (PRD N11) ---------------------------------------------------------------
 [tool.ruff]
