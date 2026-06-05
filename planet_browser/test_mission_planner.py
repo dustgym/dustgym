@@ -544,6 +544,54 @@ def test_held_karp_raises_on_cyclic_precedence():
         MP.optimize_sequence(trips, m, algorithm="held_karp", precedence=[(0, 1), (1, 0)])
 
 
+# ---- discrete keep-out obstacle layer (boulders / no-go zones) ----------------------------------
+def test_mission_from_dict_parses_and_validates_keepouts():
+    base = {"name": "k", "body": "moon", "charger": [0, 0],
+            "orders": [{"action": "c", "kind": "cut", "x": 0, "y": 0, "footprint_m2": 9, "depth_m": 0.1}]}
+    m = MP.mission_from_dict({**base, "keepouts": [{"x": 5, "y": 6, "r": 3}]})
+    assert m.keepouts == ({"x": 5.0, "y": 6.0, "r": 3.0},)
+    assert MP.mission_from_dict(base).keepouts == ()                       # optional -> empty by default
+    with pytest.raises(ValueError):
+        MP.mission_from_dict({**base, "keepouts": [{"x": 1, "y": 2}]})     # missing r
+    with pytest.raises(ValueError):
+        MP.mission_from_dict({**base, "keepouts": [{"x": 1, "y": 2, "r": 0}]})  # non-positive radius
+
+
+def test_keepout_forces_a_strict_detour_on_real_terrain():
+    # deterministic: route on a REAL Haworth-DEM crop, then drop a keep-out exactly on a cell of the
+    # optimal path -> the new optimum must avoid it and is strictly longer (or blocked). No synthetic terrain.
+    dem = MP.load_haworth_dem(); ox, oy = MP.flattest_anchor(dem)
+    Z, cell = dem
+    r0, c0 = int(oy / cell), int(ox / cell)
+    crop = Z[r0:r0 + 40, c0:c0 + 40]
+    cost, passable = MP.slope_costmap(crop, cell, max_slope_deg=25.0)
+    start, goal = (5, 5), (5, 34)
+    if not (passable[start] and passable[goal]):
+        pytest.skip("anchor crop corners not both passable")
+    path, base_m, reached = MP.route_least_cost(cost, passable, cell, start, goal)
+    assert reached and len(path) > 2
+    passable[path[len(path) // 2]] = False                                # == a keep-out on the optimal path
+    _, det_m, reached2 = MP.route_least_cost(cost, passable, cell, start, goal)
+    assert (not reached2) or det_m > base_m + 1e-9                        # blocking an optimum strictly worsens it
+
+
+def test_plan_accounts_keepouts_end_to_end():
+    dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
+    pay = {"name": "ko", "body": "moon", "charger": [0, 0],
+           "orders": [{"action": "cut", "kind": "cut", "x": 0, "y": 0, "footprint_m2": 36, "depth_m": 0.1},
+                      {"action": "fill", "kind": "fill", "x": 50, "y": 0, "footprint_m2": 36, "depth_m": 0.1}],
+           "keepouts": [{"x": 25, "y": 0, "r": 10}]}                       # straddles the cut->fill haul line
+    _, _, _, _, T = MP.plan_and_simulate(MP.mission_from_dict(pay), dem=dem, dem_origin=o)
+    assert T["n_keepouts"] == 1
+    assert T["haul_detour_frac"] > 0.0 or T["blocked_legs"] > 0           # the keep-out altered the routing
+    # an order placed INSIDE a keep-out is flagged as a conflict (you cannot build on the obstacle)
+    pay2 = {"name": "onrock", "body": "moon", "charger": [0, 0],
+            "orders": [{"action": "on_rock", "kind": "cut", "x": 25, "y": 0, "footprint_m2": 9, "depth_m": 0.1}],
+            "keepouts": [{"x": 25, "y": 0, "r": 10}]}
+    _, _, _, _, T2 = MP.plan_and_simulate(MP.mission_from_dict(pay2), dem=dem, dem_origin=o)
+    assert T2["keepout_conflicts"] == 1
+
+
 def test_compare_with_weighted_objective_marks_pareto():
     res = MP.compare_algorithms(_spread_mission(), objective="time:0.5,distance:0.5")
     vals = [r["objective_value"] for r in res["rows"] if "objective_value" in r]

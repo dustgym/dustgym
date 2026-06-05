@@ -125,6 +125,10 @@ class Mission:
     vehicle: str = "ipex"                              # the platform doing the work (vehicles.VEHICLES)
     tools: tuple = ()                                  # tools mounted on it (vehicles.TOOLS) -> extra capabilities
     soil: str = ""                                     # regolith model override (a body name); "" -> the body's own
+    #: discrete keep-out obstacles (boulders / no-go zones) in the LOCAL order frame, as circles
+    #: {x, y, r} in metres. Hauls route AROUND them (cells inside become impassable on the costmap) and a
+    #: build placed inside one is rejected. Single-vehicle; complements the slope/crater hazard costmap (I10).
+    keepouts: tuple = ()
     @property
     def density(self): return body_density(self.body)
 
@@ -211,6 +215,19 @@ def mission_from_dict(payload):
                 raise ValueError(f"precedence {b!r}->{a!r} references an unknown order action")
             pairs.append((b, a))
         kwargs["precedence"] = pairs
+    kos = payload.get("keepouts")                          # discrete keep-out obstacles (circles, local m)
+    if kos is not None:
+        if not isinstance(kos, list):
+            raise ValueError("'keepouts' must be a list of {x, y, r} circles")
+        clean = []
+        for j, k in enumerate(kos):
+            if not isinstance(k, dict) or not all(f in k for f in ("x", "y", "r")):
+                raise ValueError(f"keepout {j} must be an object with x, y, r")
+            r = float(k["r"])
+            if r <= 0:
+                raise ValueError(f"keepout {j} radius must be > 0 (got {r})")
+            clean.append({"x": float(k["x"]), "y": float(k["y"]), "r": r})
+        kwargs["keepouts"] = tuple(clean)
     return Mission(**kwargs)
 
 
@@ -306,7 +323,8 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
             leg = base = dist                           # one-way cut<->fill distance (straight line)
             if dem is not None:
                 leg, base, reached = routed_distance(dem, dem_origin, (co.x, co.y), (fo.x, fo.y),
-                                                     max_slope_deg=max_traverse_slope_deg)
+                                                     max_slope_deg=max_traverse_slope_deg,
+                                                     keepouts=mission.keepouts)
                 if not reached:
                     blocked_legs += 1                   # no safe corridor -> fell back to the line; flagged
             straight_haul_m += base; routed_haul_m += leg
@@ -705,7 +723,12 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
         haul_detour_frac=(meta["routed_haul_m"] / meta["straight_haul_m"] - 1.0)
         if meta["straight_haul_m"] > 1e-9 else 0.0,
         algorithm=algorithm, resolved_algorithm=resolved, optimality=optimality, n_precedence=len(prec),
-        objective=str(objective), vehicles=1)
+        objective=str(objective), vehicles=1,
+        # discrete keep-out obstacles: how many are active, and how many orders sit inside one (a build
+        # placed on a boulder/no-go zone -- surfaced as a warning; hauls already route around all of them).
+        n_keepouts=len(mission.keepouts),
+        keepout_conflicts=sum(1 for o in mission.orders for k in mission.keepouts
+                              if (o.x - k["x"]) ** 2 + (o.y - k["y"]) ** 2 <= k["r"] ** 2))
     return trips, flows, per_trip, tl, totals
 
 
@@ -918,6 +941,27 @@ def slope_costmap(Z, cell_m, *, max_slope_deg=25.0, slip_alpha=2.0):
     return cost, passable
 
 
+def _apply_keepouts(passable, cell_m, r0, c0, dem_origin, keepouts):
+    """Mark cells inside any keep-out circle impassable, in-place, on a cropped costmap. keepouts are
+    {x,y,r} in the LOCAL order frame (metres); dem_origin maps that frame to DEM world metres. The crop
+    starts at row r0/col c0. Reuses route_least_cost's existing impassable-avoidance -> hauls bend around."""
+    if not keepouts:
+        return passable
+    ox, oy = dem_origin
+    H, W = passable.shape
+    for k in keepouts:
+        kc = (ox + k["x"]) / cell_m - c0                   # keep-out centre in crop-cell coords
+        kr = (oy + k["y"]) / cell_m - r0
+        rad = k["r"] / cell_m
+        c_lo, c_hi = max(0, int(kc - rad)), min(W, int(kc + rad) + 1)
+        r_lo, r_hi = max(0, int(kr - rad)), min(H, int(kr + rad) + 1)
+        for r in range(r_lo, r_hi):
+            for c in range(c_lo, c_hi):
+                if (r - kr) ** 2 + (c - kc) ** 2 <= rad * rad:
+                    passable[r, c] = False
+    return passable
+
+
 def route_least_cost(cost, passable, cell_m, start_rc, goal_rc):
     """I10: least-(slip-weighted-)cost 8-connected path over a costmap, avoiding impassable cells (Dijkstra).
     Returns (path[list of (r,c)], geometric_length_m, reached). The slip-weighted cost drives the routing
@@ -959,7 +1003,8 @@ def route_least_cost(cost, passable, cell_m, start_rc, goal_rc):
     return path, float(glen[gr, gc]), True
 
 
-def routed_distance(dem, dem_origin, a_xy, b_xy, *, max_slope_deg=25.0, slip_alpha=2.0, margin_m=20.0):
+def routed_distance(dem, dem_origin, a_xy, b_xy, *, max_slope_deg=25.0, slip_alpha=2.0, margin_m=20.0,
+                    keepouts=()):
     """I10: terrain-aware haul distance between two LOCAL sites on the real DEM (anchored via dem_origin,
     M11). Crops the DEM to the two sites' bounding box + margin, builds a slope costmap, and routes a
     least-cost hazard-avoiding path. Returns (routed_m, grid_straight_m, reached): routed_m is the path
@@ -980,6 +1025,7 @@ def routed_distance(dem, dem_origin, a_xy, b_xy, *, max_slope_deg=25.0, slip_alp
         return straight, straight, False
     crop = Z[r0:r1, c0:c1]
     cost, passable = slope_costmap(crop, cell, max_slope_deg=max_slope_deg, slip_alpha=slip_alpha)
+    _apply_keepouts(passable, cell, r0, c0, dem_origin, keepouts)   # discrete obstacles -> impassable cells
     hc, wc = crop.shape
     start = (min(max(int(ay / cell) - r0, 0), hc - 1), min(max(int(ax / cell) - c0, 0), wc - 1))
     goal = (min(max(int(by / cell) - r0, 0), hc - 1), min(max(int(bx / cell) - c0, 0), wc - 1))

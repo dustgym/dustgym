@@ -197,6 +197,12 @@
           </select></label>
       </div>
       <div class="ctl"><input id="qprec" class="lbl" placeholder="precedence (e.g. Grade road &gt; Build berm, ...)" /></div>
+      <div class="ctl" title="discrete obstacles (boulders / no-go zones); hauls route around them">
+        keep-out x<input id="kox" type="number" value="25" step="1" />
+        y<input id="koy" type="number" value="0" step="1" />
+        r<input id="kor" type="number" value="8" step="1" />m
+        <button id="koadd" class="site">+ Obstacle</button></div>
+      <ol id="kolist"></ol>
       <button id="qplan" class="plan">Plan mission → open report</button>
       <button id="qexec" class="go" disabled>▶ Execute + watch</button>
       <div class="ctl" style="margin-top:7px">
@@ -546,9 +552,27 @@ $("site").onclick = () => {
 // site, the queue places orders around it in meters (no fake lat/lon->meter projection). Planning
 // needs the server (fetch /plan): run `python3 server.py` and open the printed URL.
 const ORDERS = [];
+const KEEPOUTS = [];                                          // discrete obstacles {x,y,r} (local m); hauls route around
 const qel = (id) => document.getElementById(id);
 const setQ = (m) => { qel("qstatus").textContent = m; };
 function mkbtn(t, fn) { const b = document.createElement("button"); b.textContent = t; b.onclick = fn; return b; }
+function renderKeepouts() {
+  const ol = qel("kolist"); ol.innerHTML = "";
+  KEEPOUTS.forEach((k, i) => {
+    const li = document.createElement("li");
+    const g = document.createElement("span"); g.className = "g";
+    g.textContent = `obstacle @ ${k.x},${k.y} · r ${k.r} m`;
+    li.appendChild(g);
+    li.appendChild(mkbtn("✕", () => { KEEPOUTS.splice(i, 1); renderKeepouts(); }));
+    ol.appendChild(li);
+  });
+}
+qel("koadd").onclick = () => {
+  const x = +qel("kox").value, y = +qel("koy").value, r = +qel("kor").value;
+  if (!(r > 0)) { setQ("keep-out radius must be > 0"); return; }
+  KEEPOUTS.push({ x, y, r }); renderKeepouts();
+  setQ(`${KEEPOUTS.length} keep-out obstacle(s); hauls will route around them`);
+};
 function moveOrder(i, d) {
   const j = i + d; if (j < 0 || j >= ORDERS.length) return;
   [ORDERS[i], ORDERS[j]] = [ORDERS[j], ORDERS[i]]; renderQueue();
@@ -603,7 +627,7 @@ qel("qplan").onclick = async () => {
     const res = await fetch("/plan", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: `${BODIES[sel.value].name} build`, body: sel.value, charger: [0, 0],
         orders: ORDERS, algorithm: qel("qalgo").value, objective: qel("qobj").value, precedence: parsePrec(),
-        ...fleet(), ...site() }) });
+        keepouts: KEEPOUTS, ...fleet(), ...site() }) });
     const j = await res.json();
     if (!j.ok) { setQ("error: " + j.error); return; }
     const t = j.totals;
@@ -628,10 +652,12 @@ qel("qplan").onclick = async () => {
       ? ` · est ±${pc.pose_sigma_m} m pose (${pc.map_fixes} map fixes`
         + (pc.observe_more_before_dig ? `, ${pc.observe_more_before_dig} observe-more` : "")
         + `), drum ±${pc.drum_fill_uncertainty_pct}%` : "";
+    // discrete keep-out obstacles: hauls routed around them; flag any build placed inside one
+    const ktag = t.n_keepouts ? ` · ${t.n_keepouts} keep-out${t.keepout_conflicts ? ` (⚠ ${t.keepout_conflicts} build on obstacle)` : ""}` : "";
     setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
-         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${vtag}${autag}${ptag}`);
+         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${ktag}${vtag}${autag}${ptag}`);
     LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
-    LAST_ORDERS = ORDERS.slice();
+    LAST_ORDERS = ORDERS.slice(); LAST_KEEPOUTS = KEEPOUTS.slice();
     qel("qexec").disabled = !LAST_TIMELINE;
     qel("reportframe").src = j.pdf;                        // embed the mission-control PDF in the Report pane
     qel("reportframe").classList.add("show");
@@ -644,12 +670,14 @@ qel("qplan").onclick = async () => {
 // ---- import / export plans (round-trippable designer files) ------------------------------------
 // a PROFILE = the full planning config snapshot (body, soil, fleet, orders, site, optimization).
 function currentPlan() {
-  return { body: sel.value, orders: ORDERS, precedence: qel("qprec").value,
+  return { body: sel.value, orders: ORDERS, keepouts: KEEPOUTS, precedence: qel("qprec").value,
            algorithm: qel("qalgo").value, objective: qel("qobj").value, ...fleet(), ...site() };
 }
 function restoreProfile(p) {                                // set the WHOLE UI from a profile object
   if (!Array.isArray(p.orders)) throw new Error("no orders[] in profile");
   ORDERS.length = 0; p.orders.forEach((o) => ORDERS.push(o));
+  KEEPOUTS.length = 0; if (Array.isArray(p.keepouts)) p.keepouts.forEach((k) => KEEPOUTS.push(k));
+  renderKeepouts();
   if (p.body && BODIES[p.body]) { sel.value = p.body; sel.dispatchEvent(new Event("change")); }
   if (p.precedence != null) qel("qprec").value = p.precedence;
   if (p.algorithm) qel("qalgo").value = p.algorithm;
@@ -704,7 +732,7 @@ qel("profloadbtn").onclick = async () => {
 };
 
 // ---- P5: execute + watch — animate the planned timeline top-down with a telemetry HUD ----------
-let LAST_TIMELINE = null, LAST_ORDERS = [], EXEC_RAF = 0;
+let LAST_TIMELINE = null, LAST_ORDERS = [], LAST_KEEPOUTS = [], EXEC_RAF = 0;
 const EXEC_SPEEDUP = 60;                                   // sim seconds per wall-clock second (shown in cap)
 function execExtent(tl, orders) {
   // world bounds covering the charger, every order site, and every route waypoint -> canvas transform
@@ -722,6 +750,11 @@ function execDraw(tl, orders, ext, cv, simT) {
   const X = wx => ox + (wx - ext.x0) * s, Y = wy => H - (oy + (wy - ext.y0) * s);   // y up
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = "#05060c"; ctx.fillRect(0, 0, W, H);
+  // keep-out obstacles (the route bends around these): hatched red discs in the local frame
+  LAST_KEEPOUTS.forEach(k => {
+    ctx.fillStyle = "rgba(224,86,75,.22)"; ctx.strokeStyle = "#e0564b"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(X(k.x), Y(k.y), k.r * s, 0, 7); ctx.fill(); ctx.stroke();
+  });
   // order footprints (cut = blue, fill = orange) as squares sized by area
   orders.forEach(o => {
     const half = Math.sqrt(o.footprint_m2) / 2 * s;
@@ -873,7 +906,7 @@ senseDrum();
 
 window.addEventListener("resize", () => { if (viewer) viewer.resize(); });  // globe follows window size
 
-loadBody("moon"); estimate(); renderQueue(); setView("plan");
+loadBody("moon"); estimate(); renderQueue(); renderKeepouts(); setView("plan");
 </script>
 </body>
 </html>
