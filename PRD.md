@@ -271,6 +271,67 @@ stages; "Forward plan" is the live work. Multivehicle is deferred until explicit
 > the core was upstreamed to a separate fork). They are not the current state. Current state: one repo, 296
 > tests. This history will migrate to `CHANGELOG.md` (N16).
 
+### 8.0 Optimized build sequence (the authoritative ordering)
+
+All outstanding work, sequenced so each phase **unblocks or de-risks** the next. The **critical path** to a
+production, multi-vehicle planner is marked ★; the science track runs in parallel. Each item links its area
+IDs (above) and the source review (`docs/architecture_review.md`, `docs/autonomous_planning_review.md`). The
+Shipped/Forward backlog below is the detail this sequence orders.
+
+**Phase 0 — Foundation (now; cheap; guards everything). ★**
+- ★ **N9 CI gate** + **N11 quality config** (`ci.yml`: ruff + pytest 3.10-3.12 matrix + strict env_checker;
+  commit `[tool.ruff]`/`[tool.mypy]`/`[tool.pytest]`, `py.typed`, pre-commit). Do first: every later phase
+  regression-guards through it, and it is the cheapest production win.
+- **AL2 fix** — guard the infeasible-precedence cliff (precheck the DAG; fail loud, not a silent 0-trip
+  "success"). **AL1 fix** — emit a warning/flag when `auto` degrades past the exact caps. Real correctness bugs.
+
+**Phase 1 — Package boundary (the one real structural "before-production" fix). ★**
+- ★ **Restructure step 1+2 + P11e** — make `planet_browser` a real package (`__init__.py`, relative imports),
+  **delete the dead `_ROVERSIM` resolver + the sys.path hacks**, fix sample-data paths, add `planet_browser` to
+  the wheel + a `dustgym-serve` console entry point (**N13**). Completes the roversim purge.
+- *Why now:* the ASGI server (Phase 2) and multi-vehicle (Phase 4) both live in `planet_browser`; a production
+  server on a non-package that self-mutates `sys.path` and probes a dead `roversim/` sibling fights you the
+  whole way. ~1 focused pass (see §15).
+
+**Phase 2 — Operational shell (production hardening). ★**
+- **N14** runtime invariants + input validation · **N10** structured logging + observability · **N15**
+  externalized config · **N12** dependency hygiene (lockfile + ceilings).
+- ★ **N7/N8 — ASGI server** (FastAPI/uvicorn): Pydantic request/response models (the API contract + input
+  limits), auth on mutating routes, CORS, thread-safe OO-matplotlib report generation, `reports/` TTL. Needs
+  Phase 1. The ASGI move resolves the DoS, thread-safety, observability, and contract findings at once.
+
+**Phase 3 — Planning correctness + expressiveness (the autonomous-planning gaps).**
+- **J4 / AL4-AL5** — goal-level Mission grammar (build-to-spec) + non-square footprints
+  (disk/rect/corridor/polygon) + stop silently dropping `budget`/`priority`/`keepout`; wire
+  `structures.decompose` as the goal→orders front-end (unifies the Challenge + Mission schemas).
+- **I11 / AL6** — as-built acceptance (flatness-RMSE / berm-profile / repose) on the conserved authority; gate
+  the **whole footprint** on the **real DEM**, not the center cell on a flat mantle.
+- **M11** — the lat/lon→DEM-cell projection from the globe pick; multi-site (**E2**).
+- *Why now:* makes single-vehicle planning trustworthy + expressive, and goals/acceptance are prerequisites for
+  multi-vehicle (you allocate goals; you verify builds).
+
+**Phase 4 — Multi-vehicle (headline feature; needs Phases 1-3). ★**
+- ★ **MV1 fleet API → MV2 allocation → MV7 2-rover EXACT baseline** (validate learned-vs-exact before any
+  claim) **→ MV3 deconfliction → MV4 shared-resource scheduling (fixes K8) → MV5 coordinated replan → MV6
+  heterogeneous fleet.** Allocation is the only genuinely-new algorithm; per-rover sequencing reuses the
+  existing exact-capped pipeline.
+
+**Parallel science track (mostly independent; partly host-gated) — runs alongside Phases 2-4.**
+- **P6** map-channel reward + a CI regression gate (Hapke<Lambert, real-DEM block RMSE) + tiny committed real
+  render fixtures; **F3 render throughput** (the keystone unblock for camera-in-the-loop). **P7** Chrono live
+  producer / SCM oracle (host-gated). **Autonomy: AL7 fault handling** + perception-in-loop + in-loop terrain
+  mutation (prerequisites for fleet FDIR / MV5).
+
+**Phase 5 — Release + ops.**
+- **N16** CHANGELOG + SemVer + release flow · **N17** deployment doc + container · **N18** reproducibility
+  baselines (golden-file planner totals; AprilTag/map-channel) · **M10** mission persistence.
+
+**Never this cycle:** git history rewrite (§15).
+
+> **Critical path (★):** N9 CI → package-ify `planet_browser` → ASGI server → multi-vehicle. Everything else
+> (the AL correctness fixes, the operational-shell sub-items, the J4/I11 expressiveness, the science track, the
+> src/ hygiene) rides in parallel or as incremental hygiene the test suite protects.
+
 ### Shipped
 | Stage | Deliverable | Key files | Tests at the time |
 |---|---|---|---|
@@ -440,5 +501,30 @@ legs vs greedy 28 / PPO 27. **Sinter** is a real conserved authority primitive +
 but is **GATED OFF** (`SINTER_ENABLED=False`) until its [CALIB] energy/density are IPEx-grounded.
 **P1 SHIPPED (S7):** the browser now has a persistent build-order queue and a local `server.py /plan`
 endpoint, so place → queue → optimize → report is one round-trip in the UI (TDD 13/13, lint-clean,
-driven live). **Next:** P2 (author by structure: place a Pad/Road/Berm → auto-generated mass-balanced
-orders). Multi-vehicle stays deferred.
+driven live). **Next:** the optimized build sequence (§8.0) — Phase 0 (CI + the AL correctness fixes), then Phase 1 (the
+`planet_browser` package boundary), then the operational shell, then multi-vehicle (now scoped as the MV area,
+not parked).
+
+## 15. Restructure & rebase decision (2026-06-04)
+
+**Restructure: YES, targeted, medium-urgency (not a teardown).** The repo is already half-packaged —
+`terrain_authority` (the engine) and `dustgym` (the Gym shim) are clean, declared, installable packages with
+an **acyclic** dependency tree. The one real structural defect: **`planet_browser` (the product) is not a
+package** (no `__init__.py`), is **excluded from the wheel**, imports its own siblings by bare name, and reaches
+the engine via `sys.path` + the dead `_ROVERSIM` resolver that still probes a non-existent `roversim/` sibling.
+That blocks installing/deploying the server, so fix the package boundary **before** the ASGI server and
+multi-vehicle (build-sequence Phase 1).
+- **Target:** one installable `src/dustgym/` package with `engine` (was `terrain_authority`) + `planner` (was
+  `planet_browser`) subpackages + a `dustgym-serve` console entry point. The ~65 `sys.path` hacks across 43
+  files **evaporate** once `pip install -e .` is the workflow; tests move to a top-level `tests/`.
+- **Order:** package-ify `planet_browser` + delete `_ROVERSIM` (Phase 1, blocking) → wheel + entry point →
+  *then later, incremental* the `src/` rename + `tests/` move + scripts/viz hack removal (pure hygiene, the
+  296-test suite protects it). Only the `planet_browser` package-ification is "before production."
+
+**Rebase: NO.** 39 commits, **linear PR-merge history, no roversim history folded in** (a clean
+re-origination — the first commits already say "dustgym"). The large tracked binaries (two 40 MB demo GIFs,
+the 15 MB `.rf32` real-DEM layers) are a **deliberate, `.gitignore`-documented** deliverable policy — each
+appears in exactly one commit with zero churn, so `.git` is flat, not bloated-by-rewrite. A history rewrite
+reclaims ~120 MB but rewrites every SHA on the shared `dustgym/dustgym` remote, breaking every collaborator
+clone and open PR. **Risk ≫ reward.** *Future option, not now:* move the two demo GIFs to Git LFS or
+out-of-repo hosting **going forward** (`.gitignore` + a new commit), not a history rewrite.
