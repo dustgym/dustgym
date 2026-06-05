@@ -254,6 +254,32 @@ monolithic learned latent world model. The five layers and their status:
 | **N17** | **P2** | **Deployment + ops doc** — `docs/deployment.md` + a server container image + env-var config + the Godot/`/render` optional-dependency toggle | ⬜ |
 | **N18** | **P2** | **Reproducibility baselines** — checksummed data fixtures; golden-file regression on planner totals (energy/mass/distance); AprilTag 12.7 mm + map-channel RMSE tracked as regression baselines | ⬜ |
 
+### O. Configurability — every constant, body, vehicle, and setting easily adjustable (expands N15)
+Principle: **no physical constant, per-body parameter, vehicle/rover spec, or operational setting should
+require a source edit to change** — all adjustable through one documented mechanism, with the `.py` files
+remaining the default source of truth (the "everything stays .py" decision).
+
+Current state (honest):
+- ✅ **Terramechanics moduli** are runtime-adjustable — `TerramechanicsParams` (JSON-serializable;
+  `from_constants` / `from_json` / `to_json` / `scm_oracle`; solver functions take the moduli as kwargs).
+- ✅ **Per-body params + body selection** — `bodies.params_for_body(name)` + the `Body` registry (Moon/Mars/
+  Ceres/Bennu/Phobos/Earth); add a body by adding a `Body`.
+- 🟡 **The 73 `constants.py` values, 22 `ipex_specs.py` vehicle specs, and the planner `[CALIB]` knobs**
+  (charge power, reserve, etc.) are centralized in single-source, honesty-tagged `.py` files, but changing
+  them needs a source edit (consumed as module literals; some feed import-time derived values like `J_PER_M`).
+- ❌ **No env-var / config-file overlay** (0 `os.environ`).
+
+Requirements:
+| ID | P | Requirement | Status |
+|---|---|---|---|
+| O1 | P1 | **Config overlay** — one mechanism (`DUSTGYM_CONFIG=<file.toml>` + `DUSTGYM_<KEY>` env vars) loaded at startup that overrides the `.py` defaults for constants / vehicle specs / planner knobs / body selection; the `.py` stays the default source. Derived values (e.g. `ipex_specs.J_PER_M`) must recompute from the overridden base (so the overlay applies before import-time derivation, or derivations become lazy). | ⬜ |
+| O2 | P1 | **Config reference (`CONFIG.md`)** — every adjustable key listed with its default, units, `[FIXED]/[CALIB]/[UNKNOWN]` tag, and the override name. | ⬜ |
+| O3 | P2 | **Wired into the product** — `dustgym-serve --config <file>` + the env overlay honored by the planner/server and the envs. | ⬜ |
+| O4 | P2 | **Per-vehicle config** — a vehicle/rover spec object (not global `ipex_specs` singletons) so different rovers carry different specs (ties to MV6 heterogeneous fleet). | ⬜ |
+| O5 | P2 | **Settings discoverability** — `dustgym.config.describe()` (or similar) dumps the active config (every key, value, source: default/env/file) so the running configuration is inspectable. | ⬜ |
+
+Sequencing: O1/O2 slot into build-sequence Phase 2 alongside N15 (externalized config); O4 lands with MV6.
+
 ## 7. KPIs
 Benchmark: # authored challenges/missions; agent score vs baseline; train→held-out generalization gap.
 Physics: mass drift (≤1e-9); sinkage RMS vs oracle (≤20%, post FIX-1/2). Autonomy: per-skill success;
