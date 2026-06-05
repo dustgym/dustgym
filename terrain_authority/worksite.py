@@ -216,10 +216,15 @@ class WorkSite:
     # -- controller seam (scripted now, RL policy later — identical signature) ----
 
     def drive(self, twists, *, start_rc, start_yaw=0.0, dt: float = 0.1,
-              params=None, payload_kg: float = 0.0) -> dict:
+              params=None, payload_kg: float | None = None) -> dict:
         """Drive the rover through a sequence of ``(v, omega)`` twists over the fine window,
         laying slip-deepened ruts (closed_loop_drive: conform -> slip -> step -> four_wheel_pass
-        physical). Density-only, mass-conserving. Returns the closed_loop_drive telemetry dict."""
+        physical). Density-only, mass-conserving. Returns the closed_loop_drive telemetry dict.
+
+        ``payload_kg`` defaults to the LIVE drum fill (``self.inventory_kg``) so hauling a loaded
+        drum sinks/slips more than an empty one (the path-dependent loop); pass a value to override."""
+        if payload_kg is None:
+            payload_kg = self.inventory_kg
         return D.closed_loop_drive(self._require_fine(), start_rc, start_yaw, list(twists),
                                    dt=dt, params=params, payload_kg=payload_kg)
 
@@ -261,15 +266,22 @@ class WorkSite:
                       transfer_fraction=transfer_fraction)
         return sp.relax_to_rest(max_steps=max_steps, capture=capture, capture_every=capture_every)
 
-    def compact_over(self, poses, *, physical: bool = True, params=None) -> dict:
+    def compact_over(self, poses, *, physical: bool = True, params=None,
+                     payload_kg: float | None = None) -> dict:
         """Drive the 4-wheel footprint over ``poses`` (list of ``(center_rc, heading_rad)``),
         compacting SPOIL -> COMPACTED_BERM and laying TREAD elsewhere (density-only, mass
-        conserved). NOTE (G5): with ``physical=True`` (default) the Bekker pressure-sinkage at this
-        rover's tiny static wheel load firms spoil only ~1300->~1304 kg/m^3 per pass (measured) —
-        far below the 1610 pin threshold, so the berm is LABELLED COMPACTED_BERM but does not yet
-        hold slope; a standing berm needs many passes / explicit firming. (The legacy constant path,
-        ``physical=False``, would apply a fixed *1.12 -> ~1456; the demo does not use it.) Returns wheel polylines."""
-        return R.four_wheel_pass(self._require_fine(), list(poses), physical=physical, params=params)
+        conserved). ``payload_kg`` defaults to the LIVE drum fill (``self.inventory_kg``) so a loaded
+        rover presses harder (heavier firming). NOTE (G5): with ``physical=True`` (default) the Bekker
+        pressure-sinkage at this rover's tiny EMPTY-drum static wheel load firms spoil only
+        ~1300->~1304 kg/m^3 per pass (measured) — far below the 1610 pin threshold, so the berm is
+        LABELLED COMPACTED_BERM but does not yet hold slope; a standing berm needs many passes /
+        explicit firming (a full drum presses harder, but the IPEx mass is small either way). (The
+        legacy constant path, ``physical=False``, would apply a fixed *1.12 -> ~1456; the demo does
+        not use it.) Returns wheel polylines."""
+        if payload_kg is None:
+            payload_kg = self.inventory_kg
+        return R.four_wheel_pass(self._require_fine(), list(poses), physical=physical,
+                                 params=params, payload_kg=payload_kg)
 
     def sinter(self, mask: np.ndarray, *, sintered_density: float = K.RHO_SINTERED) -> float:
         """Fuse the masked fine-window cells into a hard SINTERED crust (the lunar concrete/road

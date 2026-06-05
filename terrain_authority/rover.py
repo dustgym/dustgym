@@ -150,6 +150,7 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
                     compaction: float = 0.12,
                     physical: bool = False,
                     loads: "dict[str, float] | float | None" = None,
+                    payload_kg: float = 0.0,
                     params: "tm.TerramechanicsParams | None" = None,
                     contact_len_m: float | None = None,
                     slip: "dict[str, float] | float | None" = None) -> dict[str, list[tuple[float, float]]]:
@@ -173,7 +174,8 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
     is computed from a real Bekker pressure-sinkage solve (terramechanics.py) instead of
     the constant ``compaction`` — making the previously-decorative moduli load-bearing.
     ``loads`` gives the per-wheel normal load [N] (dict keyed LF/RF/LB/RB, a scalar for
-    all four, or None -> the sourced 30 kg-class static dry load); ``params`` selects the
+    all four, or None -> the static load for the current rover weight = dry + ``payload_kg``,
+    the live drum fill, so a loaded rover firms harder); ``params`` selects the
     TerramechanicsParams set (None -> constants.py defaults; .lunar()/.scm_oracle() also
     valid). Still a density-only edit -> mass conserved exactly. ``physical=False``
     (default) is byte-identical to the prior constant-compaction behaviour.
@@ -206,7 +208,9 @@ def four_wheel_pass(cs: ColumnState, poses: list[tuple[tuple[float, float], floa
         if physical:
             load_n = loads.get(key) if isinstance(loads, dict) else loads
             if load_n is None:
-                load_n = tm.static_wheel_load_n()
+                # no explicit per-wheel load -> the static load for the CURRENT rover weight
+                # (dry + payload_kg = the drum fill). Heavier rover -> firmer pass.
+                load_n = tm.static_wheel_load_n(payload_kg=payload_kg)
             s_wheel = slip.get(key) if isinstance(slip, dict) else slip
             f = tm.physical_compaction_field(
                 cs.density[touched], cs.mass_areal[touched], load_n,
