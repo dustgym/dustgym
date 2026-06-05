@@ -65,6 +65,26 @@ def test_loads_real_scene_into_columnstate():
     assert loose_mask(cs).all()
 
 
+def test_loose_mask_compacted_cells_hold_even_when_low_density():
+    # MAJOR (architecture review): a fresh single rut (TREAD) or berm (COMPACTED_BERM) holds its slope
+    # regardless of density; SINTERED (dense) holds; only UNPAVED sub-mid-density spoil relaxes. The OR-
+    # logic wrongly floated low-density TREAD (a fresh rut) -- and even a dense SINTERED cell -- into "loose".
+    cs = ColumnState(width=1, height=6, cell_m=0.5)
+    mid = 0.5 * (K.RHO_SURFACE + K.RHO_DEEP)
+    cs.density[:] = mid - 100.0                              # everything below mid-density (soft)
+    cs.state_label[0, 0] = StateLabel.VIRGIN
+    cs.state_label[1, 0] = StateLabel.EXCAVATED
+    cs.state_label[2, 0] = StateLabel.SPOIL
+    cs.state_label[3, 0] = StateLabel.TREAD                  # fresh rut, still low density
+    cs.state_label[4, 0] = StateLabel.COMPACTED_BERM
+    cs.density[5, 0] = K.RHO_SINTERED                        # dense, fused
+    cs.state_label[5, 0] = StateLabel.SINTERED
+    m = loose_mask(cs)
+    assert m[0, 0] and m[1, 0] and m[2, 0]                   # VIRGIN / EXCAVATED / SPOIL relax
+    assert not m[3, 0] and not m[4, 0]                       # TREAD / COMPACTED_BERM hold their slope
+    assert not m[5, 0]                                       # SINTERED (dense) holds
+
+
 def test_runs_default_dirs_for_connectivity():
     """connectivity=8 uses 8 offsets, =4 uses 4 (Moore vs von Neumann); runs match."""
     cs = _load_real("flat_compact")

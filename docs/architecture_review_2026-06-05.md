@@ -11,33 +11,47 @@ trustworthy + honestly tagged. The real findings are below, severity-ranked, wit
 
 ## Real bugs (verified)
 
+> **Resolution (2026-06-05, same day):** all five verified bugs below (2 HIGH, 2 MAJOR, 1 MED) are now
+> **FIXED** with regression tests (706 tests pass, coverage 95.7%, mypy + ruff-F clean). Each is annotated
+> ✅ FIXED inline. The MINORs and the mission-readiness gaps further down remain open.
+
 ### HIGH — the mission-control report silently mis-reports its headline numbers
 - **Cut-only missions plan ZERO dig energy/time/trips.** `mission_planner.balance()` (≈:226) emits flows
   only for *fills*; a cut with no paired fill produces no trip, so excavation is invisible to the
   sequencer/simulator. Verified: a borrow-pit + solar-pad mission reports `n_trips=0, energy=0.0 MJ,
   time=0.0 h` while `cut_kg=25.6 t`. **4 of 8 `structures.py` templates are cut-only** (borrow_pit,
-  haul_road, solar_pad, trench), so those missions under-report the *dominant* dig cost. Fix: emit a
-  dig / spoil-disposal trip for surplus (un-routed) cut mass so excavation energy/time enter the plan.
+  haul_road, solar_pad, trench), so those missions under-report the *dominant* dig cost.
+  ✅ **FIXED:** `balance` emits surplus (un-routed) cut mass as `(cut, None)` spoil-flows (symmetric to
+  import flows); `_build_trips` turns each into a `kind="dig"` trip carrying the dig energy/time. The
+  spoil-disposal haul to a dump is left as a disclosed unmodeled term (no spoil-site coordinate to
+  fabricate). Live: a borrow pit now reports 99.7 MJ / 24 t spoil (was 0). Test
+  `test_cut_only_mission_plans_the_dominant_dig_cost`.
 - **`_simulate` `distance_m` excludes the haul-shuttle distance** (≈:416). It sums only inter-site
   `drive` legs; `haul_m` feeds time/energy but not `distance_m`. Verified: a plan with `haul_m=5300 m`
   reports `distance_m=600 m` (~9× under-report) and the **`distance` objective optimizes a quantity that
-  omits the largest driving term.** Fix: add `haul_m` to `distance_m` (or tag haul chunks with haul speed).
+  omits the largest driving term.** ✅ **FIXED:** `distance_m = drive_m + Σ haul_m`. Live: a mixed pad+berm
+  mission now reports 4833 m (incl. a 2533 m shuttle). Test `test_distance_m_includes_the_haul_shuttle`.
 
 ### MAJOR
 - **`column_state.loose_mask` OR-logic** (≈:302) `not_paved | soft` flags any TREAD/COMPACTED_BERM cell
   below mid-density (1610) as LOOSE, so a *fresh single rut* slumps like virgin spoil under sandpile
   relaxation — contradicting the docstring ("TREAD/COMPACTED_BERM hold their slope"). Verified: 59% of
   TREAD cells flagged LOOSE after one pass. Masked by a thin test (`test_sandpile.py:65` only checks a
-  fresh all-virgin scene). Fix: almost certainly `not_paved & soft`; confirm intent (it changes relaxation).
+  fresh all-virgin scene). ✅ **FIXED:** `not_paved & soft` (confirmed: EXCAVATED retains ~RHO_SURFACE so
+  it stays loose; TREAD/COMPACTED_BERM hold regardless of density; dense SINTERED now also correctly holds,
+  which OR floated loose). Docstring corrected. Test `test_loose_mask_compacted_cells_hold_even_when_low_density`.
 - **`registration.ROVER_BODIES` is a hardcoded list** (:28), not derived from `BODIES` by
   `bekker_regime`. Adding a gravity-loaded body per the one-entry-extensibility promise silently creates
   no `Dust/RoverDrive-<Body>-v0` ID, and the parametrized test derives *from* `ROVER_BODIES` so it can't
-  catch it. Fix: `ROVER_BODIES = [k for k,b in BODIES.items() if b.bekker_regime == "gravity-loaded"]`.
+  catch it. ✅ **FIXED:** `ROVER_BODIES = [k for k,b in BODIES.items() if b.bekker_regime == "gravity-loaded"]`
+  (derives to moon/mars/ceres/earth; bennu/phobos excluded). Test
+  `test_rover_bodies_are_derived_from_the_registry_not_hardcoded`.
 
 ### MED
 - **`_held_karp` returns `[]` on cyclic precedence** (≈:532), dropping all trips, whereas every other
   sequencer raises `ValueError`. `plan_and_simulate` guards via `_precedence_is_feasible`, but
-  `optimize_sequence` is public (called by `autonomy.run_closed_loop`). Fix: raise on `endj == -1`.
+  `optimize_sequence` is public (called by `autonomy.run_closed_loop`). ✅ **FIXED:** raises `ValueError` on
+  `endj == -1`. Test `test_held_karp_raises_on_cyclic_precedence`.
 
 ### MINOR (selected; full list in the agent reports)
 - `slip.developed_thrust` returns a tiny negative for slip < ~2e-9 (unreachable from the solver, but

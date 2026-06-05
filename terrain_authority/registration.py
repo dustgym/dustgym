@@ -25,7 +25,11 @@ from __future__ import annotations
 # DRIVE env registered per body for the GRAVITY-LOADED bodies (Bekker model valid). Bennu/Phobos are
 # microgravity (Bekker out of regime) -> NOT pre-registered as drive IDs; reachable via
 # gym.make("Dust/RoverDrive-v0", body="bennu") which emits an out-of-regime warning. (bodies_sysrev.md)
-ROVER_BODIES = ["moon", "mars", "ceres", "earth"]
+# DERIVED from the registry so adding one gravity-loaded Body (the one-entry extensibility promise) auto-
+# creates its Dust/RoverDrive-<Body>-v0 ID; microgravity bodies are excluded by construction.
+from .bodies import BODIES  # noqa: E402
+
+ROVER_BODIES = [k for k, b in BODIES.items() if b.bekker_regime == "gravity-loaded"]
 
 ENV_IDS = (
     ["Dust/RoverDrive-v0"]

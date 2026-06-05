@@ -24,6 +24,17 @@ def test_registry_has_targets_plus_earth():
     assert "europa" not in B.BODIES and "titan" not in B.BODIES
 
 
+def test_rover_bodies_are_derived_from_the_registry_not_hardcoded():
+    # MAJOR (architecture review): the per-body DRIVE IDs must be DERIVED from BODIES by bekker_regime,
+    # so adding one gravity-loaded Body auto-creates its Dust/RoverDrive-<Body>-v0 ID. A hardcoded list
+    # silently drops new bodies, and microgravity bodies (Bekker out of regime) must be excluded.
+    from terrain_authority.registration import ROVER_BODIES   # importable without gymnasium
+    expected = [k for k, b in B.BODIES.items() if b.bekker_regime == "gravity-loaded"]
+    assert ROVER_BODIES == expected
+    assert "bennu" not in ROVER_BODIES and "phobos" not in ROVER_BODIES   # microgravity excluded
+    assert {"moon", "mars", "ceres", "earth"}.issubset(set(ROVER_BODIES))
+
+
 def test_known_gravities():
     assert B.BODIES["moon"].g == 1.62
     assert B.BODIES["mars"].g == 3.71

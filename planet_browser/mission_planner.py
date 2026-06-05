@@ -240,7 +240,11 @@ def balance(mission: Mission):
             supply[id(co)] -= take; rem -= take
         if rem > 1e-6:
             flows.append((None, fo, rem, 0.0))          # deficit: imported material (flagged)
-    surplus_kg = sum(supply[id(o)] for o, _ in cuts if supply[id(o)] > 1e-6)
+    for co, _ in cuts:                                  # un-routed cut mass: excavated spoil (dug, then piled)
+        rem = supply[id(co)]
+        if rem > 1e-6:
+            flows.append((co, None, rem, 0.0))          # surplus: (cut, None) spoil flow, symmetric to import
+    surplus_kg = sum(m for c, f, m, _ in flows if c is not None and f is None)
     return flows, surplus_kg
 
 
@@ -289,6 +293,14 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
                               mass=mass, dig_e=mass*DIG_J_PER_KG, dig_t=mass/DIG_RATE_KG_S,
                               haul_m=0.0, haul_e=0.0, lift_e=0.0, dest=(fo.x, fo.y),
                               actions=frozenset({fo.action})))
+        elif fo is None:
+            # surplus (un-routed) cut mass: it is still EXCAVATED -- the dominant dig cost (4151 J/kg) must
+            # enter the plan. Dig in place; the spoil-disposal haul to a dump is a separate unmodeled term
+            # (no spoil-site coordinate to fabricate one), so haul/lift = 0 here.
+            trips.append(dict(kind="dig", site=(co.x, co.y), label=f"Excavate spoil: {co.action}",
+                              mass=mass, dig_e=mass*DIG_J_PER_KG, dig_t=mass/DIG_RATE_KG_S,
+                              haul_m=0.0, haul_e=0.0, lift_e=0.0, dest=(co.x, co.y),
+                              actions=frozenset({co.action})))
         else:
             loads = max(1, math.ceil(mass / DRUM_KG))
             leg = base = dist                           # one-way cut<->fill distance (straight line)
@@ -413,7 +425,12 @@ def _simulate(mission, trips):
                   haul_m=tr.get("haul_m", 0.0), haul_e=tr.get("haul_e"), lift_e=tr.get("lift_e", 0.0))
         per_trip.append(dict(trip=tr, t_start=t0, t_end=t))
     drive(mission.charger)
-    distance_m = sum((p["t1"]-p["t0"])*p["speed"] for p in tl)
+    # distance_m = inter-site drive legs (timeline speed*dt) + the intra-trip haul shuttle (cut<->fill, baked
+    # into each trip as haul_m but NOT a timeline drive leg). Omitting haul_m under-reported total driving
+    # ~9x and made the `distance` objective optimize a quantity missing its largest term.
+    drive_m = sum((p["t1"]-p["t0"])*p["speed"] for p in tl)
+    haul_m = sum(tr.get("haul_m", 0.0) for tr in trips)
+    distance_m = drive_m + haul_m
     core = dict(time_s=t, mass_kg=cum_mass, energy_J=cum_energy, charges=charges, distance_m=distance_m,
                 avg_power_w=(cum_energy / t if t > 1e-9 else 0.0))
     return tl, per_trip, core
@@ -529,6 +546,8 @@ def _held_karp(trips, mission, pred):
         v = dp[full][j] + dmat[j + 1][0]
         if v < best:
             best, endj = v, j
+    if endj == -1:                                         # no complete tour honors the precedence DAG
+        raise ValueError("precedence is infeasible (cyclic / unsatisfiable): no valid trip ordering exists")
     order = []; mask, j = full, endj
     while j != -1:
         order.append(j); pj = par[mask][j]; mask ^= (1 << j); j = pj
@@ -1319,8 +1338,8 @@ def report(mission, trips, flows, per_trip, tl, totals, out_pdf, out_md, endu=No
         for i, pt in enumerate(per_trip, 1):
             s = pt["trip"]["site"]; axm.plot(s[0], s[1], "o", color=col.get(pt["trip"]["kind"], "#e07b39"), ms=11)
             axm.annotate(str(i), s, fontsize=8, fontweight="bold", ha="center", va="center", color="w")
-        for co, fo, mass, d in flows:                  # cut->fill material flows
-            if co is not None:
+        for co, fo, mass, d in flows:                  # cut->fill material flows (skip spoil dig-in-place)
+            if co is not None and fo is not None:
                 axm.annotate("", xy=(fo.x, fo.y), xytext=(co.x, co.y),
                              arrowprops=dict(arrowstyle="->", color="#cc8a33", lw=1.4, alpha=.8))
         axm.set_title("Site route + material flows (cut→fill)"); axm.set_xlabel("x (m)"); axm.set_ylabel("y (m)")

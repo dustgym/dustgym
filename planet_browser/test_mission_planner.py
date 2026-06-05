@@ -422,11 +422,13 @@ def test_unknown_algorithm_or_objective_raises():
 
 
 def _pairs_mission(sites, precedence=None):
-    # co-located cut+fill pairs -> one trip per site (a pure TSP/SOP over the sites)
+    # co-located cut+fill pairs -> one trip per site (a pure TSP/SOP over the sites). The fill is deepened
+    # by SWELL so it consumes the FULL bulked cut (mass-balanced, no surplus spoil) -> exactly one trip.
     orders = []
     for i, (x, y) in enumerate(sites):
         orders += [{"action": f"cut{i}", "kind": "cut", "x": x, "y": y, "footprint_m2": 40, "depth_m": 0.05},
-                   {"action": f"fill{i}", "kind": "fill", "x": x + 1, "y": y + 1, "footprint_m2": 40, "depth_m": 0.05}]
+                   {"action": f"fill{i}", "kind": "fill", "x": x + 1, "y": y + 1, "footprint_m2": 40,
+                    "depth_m": 0.05 * MP.SWELL}]
     p = {"name": "p", "body": "moon", "charger": [0, 0], "orders": orders}
     if precedence:
         p["precedence"] = precedence
@@ -505,6 +507,43 @@ def test_weighted_objective_parses_and_runs():
         MP.parse_objective("time:1,bogus:1")
 
 
+# ---- architecture-review bug fixes (2026-06-05) ------------------------------------------------
+def test_cut_only_mission_plans_the_dominant_dig_cost():
+    # HIGH-1: a borrow pit / trench / grade is excavation-ONLY (no paired fill). The dig cost (4151 J/kg,
+    # the dominant term) must still enter the plan -- a cut with no fill previously planned ZERO trips.
+    m = MP.mission_from_dict({"name": "pit", "body": "moon", "charger": [0, 0], "orders": [
+        {"action": "Dig borrow pit", "kind": "cut", "x": 10, "y": 10, "footprint_m2": 36, "depth_m": 0.20}]})
+    cut_kg = m.orders[0].mass_kg(m.density * MP.SWELL)
+    trips, _, _, _, totals = MP.plan_and_simulate(m)
+    assert len(trips) >= 1                                       # excavation is a real trip, not invisible
+    assert totals["surplus_kg"] == pytest.approx(cut_kg, rel=1e-6)   # all cut mass is spoil (no fill)
+    assert totals["time_s"] > 0.0 and totals["energy_J"] > 0.0
+    # the dig energy (mass * DIG_J_PER_KG) is the dominant, certain cost and must be accounted
+    assert totals["energy_J"] >= cut_kg * MP.DIG_J_PER_KG * 0.999
+
+
+def test_distance_m_includes_the_haul_shuttle():
+    # HIGH-2: charger AT the cut site -> zero inter-site drive; the only driving is the cut<->fill haul
+    # shuttle. distance_m previously summed only inter-site drive legs (haul omitted, ~9x under-report).
+    m = MP.mission_from_dict({"name": "haul", "body": "moon", "charger": [0, 0], "orders": [
+        {"action": "cut", "kind": "cut", "x": 0, "y": 0, "footprint_m2": 36, "depth_m": 0.20},
+        {"action": "fill", "kind": "fill", "x": 50, "y": 0, "footprint_m2": 36, "depth_m": 0.20}]})
+    trips, _, _, _, totals = MP.plan_and_simulate(m)
+    haul_total = sum(tr.get("haul_m", 0.0) for tr in trips)
+    assert haul_total > 0.0                                      # there IS a shuttle to count
+    assert totals["distance_m"] >= haul_total - 1e-6            # and distance_m now counts it
+
+
+def test_held_karp_raises_on_cyclic_precedence():
+    # MED: a cyclic / unsatisfiable precedence DAG used to make Held-Karp silently return a 0-trip plan;
+    # every other sequencer raises. optimize_sequence is public (autonomy.run_closed_loop calls it).
+    m = _pairs_mission([(40, 0), (-40, 3), (80, 0)])
+    trips, _, _, _ = MP._build_trips(m, None, (0.0, 0.0), 25.0)
+    assert len(trips) >= 2
+    with pytest.raises(ValueError):
+        MP.optimize_sequence(trips, m, algorithm="held_karp", precedence=[(0, 1), (1, 0)])
+
+
 def test_compare_with_weighted_objective_marks_pareto():
     res = MP.compare_algorithms(_spread_mission(), objective="time:0.5,distance:0.5")
     vals = [r["objective_value"] for r in res["rows"] if "objective_value" in r]
@@ -571,7 +610,7 @@ def test_uphill_haul_adds_exact_gravity_lift_energy():
     # exact: lift = hauled regolith mass * g * dh
     g = MP.body_gravity("moon")
     flows, _ = MP.balance(m_up)
-    hauled = sum(mass for co, fo, mass, d in flows if co is not None)
+    hauled = sum(mass for co, fo, mass, d in flows if co is not None and fo is not None)  # true cut->fill hauls
     assert t_up["lift_energy_J"] > 0.0
     assert abs(t_up["lift_energy_J"] - hauled * g * dh) < 1.0
     # downhill (swap): hauling cut(high) -> fill(low) does no positive lift

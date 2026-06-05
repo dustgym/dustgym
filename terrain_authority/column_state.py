@@ -295,13 +295,16 @@ class ColumnState:
 def loose_mask(cs: ColumnState) -> np.ndarray:
     """Cells eligible for sandpile relaxation (spec §5.3 "Disturbed flag", §7).
 
-    A cell is loose if it is not heavily compacted: VIRGIN/EXCAVATED/SPOIL or low
-    density. TREAD/COMPACTED_BERM and any CEMENTED (high-ice) cell hold their slope.
+    A cell is loose only if it is BOTH unpaved (not a compacted rut/berm) AND below the
+    mid-density: VIRGIN/EXCAVATED/SPOIL fresh spoil relaxes. TREAD/COMPACTED_BERM hold
+    their slope (compacted by construction, regardless of density), SINTERED holds (dense),
+    and any CEMENTED (high-ice) cell holds. (Using OR floated a fresh single rut and even a
+    dense sintered cell into "loose", contradicting the spec.)
     """
     label = cs.state_label
     not_paved = (label != StateLabel.TREAD) & (label != StateLabel.COMPACTED_BERM)
     soft = cs.density < (0.5 * (K.RHO_SURFACE + K.RHO_DEEP))  # below the mid-density
-    mask = not_paved | soft
+    mask = not_paved & soft
     if cs.ice is not None:
         cemented = cs.ice > 0.5 * K.W_ICE_MAX  # CEMENTED disables relaxation (spec §8)
         mask &= ~cemented
