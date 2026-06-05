@@ -16,7 +16,7 @@ from terrain_authority import constants as K  # noqa: E402
 from terrain_authority import ipex_specs as S  # noqa: E402
 from terrain_authority import vehicles as V  # noqa: E402
 
-out = {}
+out: dict = {}
 for key, b in B.BODIES.items():
     d = dataclasses.asdict(b)
     d["bekker"] = ({"k_c": b.bekker[0], "k_phi": b.bekker[1], "n": b.bekker[2]} if b.bekker else None)

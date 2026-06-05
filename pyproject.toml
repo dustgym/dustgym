@@ -31,7 +31,7 @@ dependencies = [
 rl = ["torch<3", "stable-baselines3>=2.0,<3"]          # PPO / model-free baselines
 planner = ["matplotlib", "pyproj"]                     # the mission-planner product: report figures + non-polar DEM reproject
 server = ["fastapi>=0.110,<1", "uvicorn>=0.20,<1"]     # the ASGI planner server (dustgym-serve; PRD N7/N8)
-dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.6", "matplotlib", "pyproj", "fastapi>=0.110,<1", "uvicorn>=0.20,<1", "httpx>=0.24"]   # test deps (planner + server; CI installs .[dev])
+dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.6", "mypy>=1.8", "matplotlib", "pyproj", "fastapi>=0.110,<1", "uvicorn>=0.20,<1", "httpx>=0.24"]   # test deps (planner + server; CI installs .[dev])
 
 [project.urls]
 Homepage = "https://github.com/dustgym/dustgym"
@@ -97,3 +97,29 @@ precision = 1
 # (dem_import's raw-GeoTIFF byte-parser is uncoverable here -- the source .tif is not committed, only
 #  its processed products, so fabricating one would violate the no-synthetic-data rule.)
 fail_under = 85
+
+# --- type checking (PRD N11) ----------------------------------------------------------------------
+# The mission-planning layer (planet_browser/*) + the core physics (terramechanics/slip/drive/rover/
+# bodies/vehicles/...) are type-checked. The sim scene-builder, RL envs, DEM ingest, and viz modules are
+# on a documented RATCHET (ignore_errors below) to be typed incrementally -- shrink that list over time.
+[tool.mypy]
+python_version = "3.10"
+files = ["terrain_authority", "planet_browser", "dustgym"]
+exclude = '(test_.*\.py|tests\.py)$'
+ignore_missing_imports = true          # gymnasium/torch/pyproj/fastapi/matplotlib ship no/partial stubs here
+no_implicit_optional = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+# RATCHET: modules pending full typing. NOT here (so they ARE checked): every planet_browser module +
+# terramechanics/slip/drive/rover/bodies/vehicles/material/challenge/registration/ipex_specs/constants/...
+module = [
+    "terrain_authority.scenes", "terrain_authority.active_perception_env", "terrain_authority.skill_env",
+    "terrain_authority.worksite_env", "terrain_authority.scheduler_env", "terrain_authority.dem_overlay",
+    "terrain_authority.tiles_mosaic", "terrain_authority.terrain_target_env", "terrain_authority.rover_env",
+    "terrain_authority.column_state", "terrain_authority.dem_import", "terrain_authority.procgen_csfd",
+    "terrain_authority.worksite", "terrain_authority.self_optimizing", "terrain_authority.config",
+    "terrain_authority.procgen", "terrain_authority.refinement", "terrain_authority.rassor_mass_model",
+    "terrain_authority.quadtree",
+]
+ignore_errors = true

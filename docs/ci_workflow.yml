@@ -31,5 +31,7 @@ jobs:
           pip install -e .[dev]
       - name: Lint (ruff, pyflakes gate)
         run: ruff check --select F terrain_authority planet_browser dustgym scripts viz
+      - name: Type check (mypy; mission-planner + core enforced, sim modules ratcheted in pyproject)
+        run: mypy
       - name: Test + coverage gate (numpy core + planner; gated tiers skip)
         run: pytest terrain_authority planet_browser --cov --cov-report=term-missing
