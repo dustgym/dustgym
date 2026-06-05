@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-import structures as ST
+from . import structures as ST
 
 
 def _vol(orders, kind):
@@ -86,7 +86,7 @@ def test_decompose_rejects_unknown_structure():
 def test_bulking_structure_balances_in_the_planner():
     # I7 (planner side): a bulking-correct structure must ALSO balance in mission_planner -- the planner
     # must excavate BANK density and place LOOSE density, else the bulked fill reads as a phantom deficit.
-    import mission_planner as mp
+    from . import mission_planner as mp
     m = mp.mission_from_dict({"name": "x", "body": "moon", "charger": [0, 0],
                               "orders": ST.decompose("landing_pad", 40.0, 30.0)})
     *_, t = mp.plan_and_simulate(m)
@@ -96,7 +96,7 @@ def test_bulking_structure_balances_in_the_planner():
 
 def test_orders_plan_through_mission_planner():
     # the emitted orders must be accepted by mission_planner + produce a real plan
-    import mission_planner as mp
+    from . import mission_planner as mp
     orders = ST.decompose("landing_pad", 40.0, 30.0)
     m = mp.mission_from_dict({"name": "Pad", "body": "moon", "charger": [0, 0], "orders": orders})
     assert len(m.orders) == len(orders)

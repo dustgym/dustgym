@@ -1,9 +1,9 @@
 """The self-learned slip-energy model, deployed to price a real mission (no synthetic data)."""
 from __future__ import annotations
 
-import adaptive_planner as ADP
-import autonomy as AUT
-import mission_planner as MP
+from . import adaptive_planner as ADP
+from . import autonomy as AUT
+from . import mission_planner as MP
 
 
 def _mission():

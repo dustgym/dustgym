@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-import mission_planner as MP
+from . import mission_planner as MP
 
 
 def _mission():
@@ -20,7 +20,7 @@ def _mission():
 
 
 def test_initial_belief_starts_at_charger_full_and_known():
-    import autonomy as A
+    from . import autonomy as A
     b = A.initial_belief(_mission(), tasks_total=2)
     assert (b.x, b.y) == (0.0, 0.0)
     assert math.isclose(b.soc_frac(), 1.0) and b.drum_kg == 0.0
@@ -29,7 +29,7 @@ def test_initial_belief_starts_at_charger_full_and_known():
 
 
 def test_kf_update_reduces_variance_and_weights_by_precision():
-    import autonomy as A
+    from . import autonomy as A
     mu, var = A._kf_update(10.0, 4.0, 20.0, 4.0)              # equal precision -> midpoint, variance halves
     assert math.isclose(mu, 15.0) and var < 4.0
     mu2, var2 = A._kf_update(10.0, 100.0, 20.0, 1.0)          # trust the precise measurement
@@ -38,7 +38,7 @@ def test_kf_update_reduces_variance_and_weights_by_precision():
 
 
 def test_predict_grows_uncertainty_and_moves_state():
-    import autonomy as A
+    from . import autonomy as A
     b = A.initial_belief(_mission(), 2)
     b2 = A.predict(b, moved_to=(200.0, 0.0), drive_m=200.0, energy_spent_J=0.6e6)
     assert (b2.x, b2.y) == (200.0, 0.0)
@@ -47,7 +47,7 @@ def test_predict_grows_uncertainty_and_moves_state():
 
 
 def test_drum_measurement_shrinks_uncertainty_and_brackets_truth():
-    import autonomy as A
+    from . import autonomy as A
     import numpy as np
     from terrain_authority.column_state import ColumnState
     # true drum mass from a REAL cut of real-density regolith (no fabricated value)
@@ -65,7 +65,7 @@ def test_drum_measurement_shrinks_uncertainty_and_brackets_truth():
 
 
 def test_pose_fix_shrinks_position_uncertainty():
-    import autonomy as A
+    from . import autonomy as A
     b = A.initial_belief(_mission(), 2)
     b = A.predict(b, moved_to=(300.0, 0.0), drive_m=300.0)    # pose uncertainty grew with distance
     s0 = b.pos_sigma_m
@@ -83,7 +83,7 @@ def _spread():
 
 
 def test_execute_leg_truth_is_at_least_the_nominal_plan():
-    import autonomy as A
+    from . import autonomy as A
     dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
     m = _spread()
     trips, _, _, _ = MP._build_trips(m, dem, o, 25.0)
@@ -97,7 +97,7 @@ def test_execute_leg_truth_is_at_least_the_nominal_plan():
 
 
 def test_closed_loop_completes_and_manages_the_battery():
-    import autonomy as A
+    from . import autonomy as A
     dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
     r = A.run_closed_loop(_spread(), dem=dem, dem_origin=o, algorithm="nearest", objective="time")
     assert r["completed"] is True
@@ -110,7 +110,7 @@ def test_closed_loop_completes_and_manages_the_battery():
 def test_true_drain_never_below_nominal_and_uncertainty_grows():
     # AutoNav model-vs-truth: the slip-adjusted truth is never cheaper than the flat nominal plan, and the
     # estimate carries growing uncertainty (the loop replans against the estimate, not assumed-perfect state).
-    import autonomy as A
+    from . import autonomy as A
     dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
     r = A.run_closed_loop(_spread(), dem=dem, dem_origin=o)
     tot_true = sum(L["true_J"] for L in r["legs"])
@@ -125,7 +125,7 @@ def test_true_drain_never_below_nominal_and_uncertainty_grows():
 def test_perception_in_the_loop_bounds_pose_uncertainty():
     # with a per-leg map/landmark pose fix, the dead-reckoning drift is BOUNDED (vs growing without it),
     # and the result stays below the dig-ready gate. Perception is now folded into the loop.
-    import autonomy as A
+    from . import autonomy as A
     dem = MP.load_haworth_dem()
     o = MP.flattest_anchor(dem)
     off = A.run_closed_loop(_spread(), dem=dem, dem_origin=o)                      # perception OFF (dead-reckoning)
