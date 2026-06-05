@@ -632,7 +632,10 @@ qel("qplan").onclick = async () => {
     if (!j.ok) { setQ("error: " + j.error); return; }
     const t = j.totals;
     const v = j.validation || {};
-    const vtag = v.feasible ? " · ✓ authority-validated" : (v.mass_conserved !== undefined ? " · ⚠ infeasible" : "");
+    const vtag = (v.feasible ? " · ✓ authority-validated" : (v.mass_conserved !== undefined ? " · ⚠ infeasible" : ""))
+      // P0 as-built acceptance: flatness of the executed surface measured on the REAL terrain (not a flat mantle)
+      + (v.as_built_on_real_dem ? ` · as-built ${(v.as_built_flatness_rmse_m * 100).toFixed(1)} cm `
+          + `${v.as_built_pass ? "✓" : `✗ (>${(v.as_built_tol_m * 100).toFixed(0)} cm)`}` : "");
     // I10: hauls routed around real-DEM hazards — show detour over straight lines + any blocked legs
     const rtag = t.routed_haul ? ` · haul +${(t.haul_detour_frac * 100).toFixed(1)}% around hazards`
                  + (t.blocked_legs ? ` (⚠ ${t.blocked_legs} blocked)` : "") : "";

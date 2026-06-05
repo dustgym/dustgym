@@ -605,6 +605,31 @@ def test_survival_power_default_off_then_folds_in_when_set(monkeypatch):
     assert T1["avg_power_w"] == pytest.approx(T1["energy_J"] / T1["time_s"])
 
 
+# ---- P0 as-built acceptance: verify the level pad on the REAL terrain, not a flat mantle --------
+def test_as_built_acceptance_on_real_terrain():
+    import numpy as np
+    dem = MP.load_haworth_dem(); Z, cell = dem
+    # a 50 m pad (spans several 5 m DEM cells so the terrain's real relief shows in the as-built surface)
+    pay = {"name": "pad", "body": "moon", "charger": [0, 0],
+           "orders": [{"action": "Level pad", "kind": "cut", "x": 0, "y": 0, "footprint_m2": 2500.0, "depth_m": 0.05}]}
+    m = MP.mission_from_dict(pay)
+    # flat mantle (no DEM): the executed surface is trivially flat -> passes, but the flag says it's NOT real
+    v_flat = MP.validate_plan(m)
+    assert v_flat["as_built_on_real_dem"] is False
+    assert v_flat["as_built_flatness_rmse_m"] < 1e-6 and v_flat["as_built_pass"] is True
+    # real DEM, flattest anchor vs a steep site: a uniform-depth cut leaves the slope, so the steep site is
+    # rougher and fails the +/-2 cm acceptance (the check the flat-mantle path structurally could not give).
+    v_flatsite = MP.validate_plan(m, dem=dem, dem_origin=MP.flattest_anchor(dem))
+    assert v_flatsite["as_built_on_real_dem"] is True
+    smap = MP.slope_deg_map(Z, cell)
+    interior = smap[200:-200, 200:-200]
+    sr, sc = np.unravel_index(int(np.argmax(interior)), interior.shape)
+    o_steep = ((sc + 200) * cell, (sr + 200) * cell)
+    v_steep = MP.validate_plan(m, dem=dem, dem_origin=o_steep)
+    assert v_steep["as_built_flatness_rmse_m"] > v_flatsite["as_built_flatness_rmse_m"]   # slope shows up
+    assert v_steep["as_built_pass"] is False                                              # not flat to +/-2 cm
+
+
 def test_compare_with_weighted_objective_marks_pareto():
     res = MP.compare_algorithms(_spread_mission(), objective="time:0.5,distance:0.5")
     vals = [r["objective_value"] for r in res["rows"] if "objective_value" in r]

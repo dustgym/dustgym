@@ -1218,7 +1218,7 @@ def slip_alpha_to_slip(slope_deg, payload_kg=0.0, g=None, params=None):
 
 
 def validate_plan(mission, *, cell_m=0.5, regolith_depth_m=10.0, max_cells=500, dem=None,
-                  dem_origin=(0.0, 0.0), max_slope_deg=15.0):
+                  dem_origin=(0.0, 0.0), max_slope_deg=15.0, accept_flatness_tol_m=0.02):
     """I8: validate the plan on the CONSERVED authority. Rasterize each order's footprint onto a
     `ColumnState`, execute the cuts (into the drum) then the fills (from the drum), and report mass
     conservation + per-order feasibility + the executed (mass-exact) cut/fill vs the planner's abstract
@@ -1239,6 +1239,17 @@ def validate_plan(mission, *, cell_m=0.5, regolith_depth_m=10.0, max_cells=500, 
     H = max(1, int(math.ceil((y1 - y0) / cell_m)))
     cs = ColumnState(width=W, height=H, cell_m=cell_m,
                      mass_areal=np.full((H, W), rho_bank * regolith_depth_m, dtype=np.float64))
+    # P0 as-built acceptance: when a DEM is given, start the surface at the REAL terrain (datum = terrain
+    # - mantle so derive_height == terrain), not a flat mantle. A uniform-depth cut/fill on a sloped surface
+    # then leaves a sloped surface -- so the as-built flatness check below actually reveals whether the plan
+    # achieves a level pad (it can't on a flat mantle, where everything is trivially flat).
+    on_real_dem = dem is not None
+    if on_real_dem:
+        Z, _dem_cell = dem
+        ox, oy = dem_origin
+        ci = np.clip(((x0 + (np.arange(W) + 0.5) * cell_m + ox) / _dem_cell).astype(int), 0, Z.shape[1] - 1)
+        ri = np.clip(((y0 + (np.arange(H) + 0.5) * cell_m + oy) / _dem_cell).astype(int), 0, Z.shape[0] - 1)
+        cs.datum = Z[np.ix_(ri, ci)] - regolith_depth_m
     m0 = cs.total_mass()
     rr, cc = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
 
@@ -1277,6 +1288,20 @@ def validate_plan(mission, *, cell_m=0.5, regolith_depth_m=10.0, max_cells=500, 
         feasible = False
     drift = abs(cs.total_mass() - m0)
     mass_conserved = drift <= 1e-6 * max(1.0, m0)
+    # P0 as-built acceptance: measure the FLATNESS of the executed surface over each worked footprint
+    # (RMSE of as-built height about the footprint mean) -- the "did we build a level pad to +/-tol" check
+    # the flat-mantle path could never give. Reported per-order (worst + mean); on a flat mantle it is ~0.
+    # NOT folded into `feasible` (a uniform-depth excavation of a slope is feasible but legitimately not flat).
+    as_built = cs.derive_height()
+    flat_rmses = []
+    for o in mission.orders:
+        mask = _mask(o)
+        if int(mask.sum()) < 2:
+            continue
+        h = as_built[mask]
+        flat_rmses.append(float(np.sqrt(np.mean((h - h.mean()) ** 2))))
+    as_built_worst = max(flat_rmses) if flat_rmses else 0.0
+    as_built_mean = (sum(flat_rmses) / len(flat_rmses)) if flat_rmses else 0.0
     # I6 + I11: terrain-aware siting against the real DEM. A pad on a crater wall fails even when material
     # is available. dem = (heightmap, cell_m). M11: the order's LOCAL x,y is anchored to a real DEM site via
     # dem_origin (DEM meters where local (0,0) sits). I11: gate the WHOLE footprint, not just the center cell
@@ -1314,6 +1339,12 @@ def validate_plan(mission, *, cell_m=0.5, regolith_depth_m=10.0, max_cells=500, 
         "drum_remaining_kg": float(cs.drum_inventory),
         "executed_dig_J": float(exec_cut * DIG_J_PER_KG),
         "grid": {"rows": H, "cols": W, "cell_m": cell_m},
+        # P0 as-built acceptance (level-surface check on the executed surface):
+        "as_built_on_real_dem": bool(on_real_dem),         # False -> measured on a flat mantle (trivially flat)
+        "as_built_flatness_rmse_m": float(as_built_worst),  # worst footprint flatness RMSE
+        "as_built_flatness_mean_m": float(as_built_mean),
+        "as_built_tol_m": float(accept_flatness_tol_m),
+        "as_built_pass": bool(as_built_worst <= accept_flatness_tol_m),
     }
 
 
