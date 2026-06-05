@@ -27,8 +27,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-rl = ["torch", "stable-baselines3>=2.0"]   # PPO / model-free baselines
-dev = ["pytest>=7", "ruff>=0.6"]
+rl = ["torch", "stable-baselines3>=2.0"]               # PPO / model-free baselines
+planner = ["matplotlib", "pyproj"]                     # the mission-planner product: report figures + non-polar DEM reproject
+dev = ["pytest>=7", "ruff>=0.6", "matplotlib", "pyproj"]   # test deps (incl. the planner deps; CI installs .[dev])
 
 [project.urls]
 Homepage = "https://github.com/dustgym/dustgym"
