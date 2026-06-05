@@ -49,8 +49,8 @@ RECHARGE_POWER_W = 900.0
 DUSTGYM_CONFIG=my_site.toml python -m planet_browser.server
 ```
 
-(TOML parsing uses the stdlib `tomllib` on Python ≥ 3.11; on 3.10 install `tomli`, which ships in the
-`dev` extra. If `DUSTGYM_CONFIG` is set with no parser available, it raises rather than silently skip.)
+(TOML parsing uses the stdlib `tomllib` on Python ≥ 3.11; on 3.10 `tomli` is installed automatically as
+a declared dependency. If `DUSTGYM_CONFIG` is set with no parser available, it raises rather than silently skip.)
 
 ### Derived values recompute
 

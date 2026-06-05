@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,13 +25,25 @@ from . import autonomy as AUT
 from . import mission_planner as MP
 from . import structures as ST
 
+# PRD N10: structured logging + observability. The logger is used for access logs (every request +
+# status), startup, and the previously-silent additive-failure paths. Level via $DUSTGYM_LOG_LEVEL.
+log = logging.getLogger("planet_browser.server")
+
+
+def _configure_logging(level: str | None = None) -> None:
+    """Configure logging for the server (PRD N10): level from arg, else $DUSTGYM_LOG_LEVEL, else INFO."""
+    lvl = (level or os.environ.get("DUSTGYM_LOG_LEVEL", "INFO")).upper()
+    logging.basicConfig(level=getattr(logging, lvl, logging.INFO),
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
+
 # plan_render_pipeline lives in scripts/ (it drives the Godot sidecar); MP already put the repo root on the
 # path. Importing it is optional -- /render degrades to a 503 if the binary is absent.
 sys.path.insert(0, os.path.join(MP._REPO_ROOT, "scripts"))
 try:
     import plan_render_pipeline as PRP
-except Exception:   # noqa: BLE001 -- /render just becomes unavailable
+except Exception as _prp_exc:   # noqa: BLE001 -- /render just becomes unavailable
     PRP = None
+    log.info("render pipeline unavailable (Godot sidecar import failed: %r); /render -> 503", _prp_exc)
 _HAWORTH = os.path.join(MP._REPO_ROOT, "samples", "lunar_dem", "haworth_10km_5m")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,7 +69,8 @@ def _moon_dem():
         try:
             dem = MP.load_haworth_dem()
             _MOON_DEM = (dem, MP.flattest_anchor(dem))
-        except Exception:
+        except Exception as e:   # noqa: BLE001 -- degrade to flat-check, but surface it
+            log.warning("Haworth DEM unavailable; Moon plans fall back to flat slope-check: %r", e)
             _MOON_DEM = (None, (0.0, 0.0))
     return _MOON_DEM
 
@@ -72,7 +86,8 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
     try:                                               # perception-in-the-loop ON: a SLAM/map pose fix per leg
         cl = AUT.run_closed_loop(mission, dem=dem, dem_origin=origin, algorithm=algorithm,
                                  objective=objective, perception_sigma_m=0.10)
-    except Exception:                                  # noqa: BLE001 -- autonomy is additive, never break /plan
+    except Exception as e:                             # noqa: BLE001 -- autonomy is additive, never break /plan
+        log.warning("autonomy/perception block folded out (additive; /plan still served): %r", e)
         return None, None
     b, legs = cl["belief"], cl["legs"]
     nominal = sum(leg["nominal_J"] for leg in legs)
@@ -215,6 +230,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             r = PRP.render_map_area(_HAWORTH, u, v, os.path.join(REPORTS, stem), pad_frac=pad_frac)
         except Exception as e:                             # noqa: BLE001 -- render failure -> honest 500
+            log.exception("render failed for (u=%s, v=%s)", payload.get("u"), payload.get("v"))
             return self._send_json(500, {"ok": False, "error": f"render failed: {e}"})
         fig_name = stem + ".png"
         shutil.copyfile(r["figure"], os.path.join(REPORTS, fig_name))
@@ -274,8 +290,8 @@ class Handler(BaseHTTPRequestHandler):
             "capacity_kg": cap, "offload": dec.offload, "noise_frac": noise,
         })
 
-    def log_message(self, *args):                          # quiet (no per-request stderr spam)
-        pass
+    def log_message(self, fmt, *args):                     # PRD N10: route access logs through the logger
+        log.info("%s %s", self.address_string(), fmt % args)
 
 
 def make_server(port=0, host="127.0.0.1"):
@@ -290,10 +306,10 @@ def main():
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use 0.0.0.0 to reach it over the LAN/tailnet (default localhost)")
     args = ap.parse_args()
+    _configure_logging()
     srv = make_server(args.port, args.host)
     host, port = srv.server_address
-    print(f"planet browser + planner -> http://{host}:{port}/   (POST /plan, /sense; Ctrl-C to stop)",
-          flush=True)
+    log.info("planet browser + planner -> http://%s:%s/   (POST /plan, /sense; Ctrl-C to stop)", host, port)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

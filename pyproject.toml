@@ -21,13 +21,14 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-    "numpy>=1.21",
-    "scipy>=1.7",
-    "gymnasium>=0.29",
+    "numpy>=1.21,<3",
+    "scipy>=1.7,<2",
+    "gymnasium>=0.29,<2",
+    "tomli>=1.1.0; python_version < '3.11'",   # DUSTGYM_CONFIG TOML overlay (stdlib tomllib on >=3.11)
 ]
 
 [project.optional-dependencies]
-rl = ["torch", "stable-baselines3>=2.0"]               # PPO / model-free baselines
+rl = ["torch<3", "stable-baselines3>=2.0,<3"]          # PPO / model-free baselines
 planner = ["matplotlib", "pyproj"]                     # the mission-planner product: report figures + non-polar DEM reproject
 dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.6", "matplotlib", "pyproj"]   # test deps (incl. the planner deps; CI installs .[dev])
 

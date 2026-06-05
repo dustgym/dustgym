@@ -61,7 +61,7 @@ def _load_toml() -> dict:
         except ModuleNotFoundError as e:  # honest failure, not a silent skip
             raise ModuleNotFoundError(
                 f"{_CONFIG_ENV}={path!r} is set but no TOML parser is available; "
-                "install 'tomli' on Python < 3.11 (it ships in the dev extra)."
+                "'tomli' is a declared dependency on Python < 3.11 -- reinstall the package."
             ) from e
     with open(path, "rb") as fh:
         data = _toml.load(fh)
