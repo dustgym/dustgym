@@ -29,7 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 rl = ["torch", "stable-baselines3>=2.0"]               # PPO / model-free baselines
 planner = ["matplotlib", "pyproj"]                     # the mission-planner product: report figures + non-polar DEM reproject
-dev = ["pytest>=7", "ruff>=0.6", "matplotlib", "pyproj"]   # test deps (incl. the planner deps; CI installs .[dev])
+dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.6", "matplotlib", "pyproj"]   # test deps (incl. the planner deps; CI installs .[dev])
 
 [project.urls]
 Homepage = "https://github.com/dustgym/dustgym"
@@ -71,3 +71,27 @@ markers = [
     "colmap: needs pycolmap",
     "chrono: needs pychrono",
 ]
+
+# --- coverage (PRD N11): measure SOURCE only (test files excluded), CLI mains excluded ------------
+[tool.coverage.run]
+source = ["terrain_authority", "planet_browser"]
+omit = [
+    "*/test_*.py",
+    "*/tests.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@(abc\\.)?abstractmethod",
+]
+show_missing = true
+precision = 1
+# Gate (PRD N11): the suite covers ~94% of source; 85 leaves headroom while blocking regressions.
+# (dem_import's raw-GeoTIFF byte-parser is uncoverable here -- the source .tif is not committed, only
+#  its processed products, so fabricating one would violate the no-synthetic-data rule.)
+fail_under = 85
