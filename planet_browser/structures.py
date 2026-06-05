@@ -17,10 +17,10 @@ import math
 import os
 import sys
 
-# single source for the regolith densities (terrain_authority); planet_browser is standalone, so add roversim
-_ROVERSIM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "roversim")
-if _ROVERSIM not in sys.path:
-    sys.path.insert(0, _ROVERSIM)
+# single source for the regolith densities (terrain_authority at the monorepo root, planet_browser's parent)
+_REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 from terrain_authority import constants as _K  # noqa: E402
 
 # Bulking/swell (I7): excavation removes BANK (in-situ) material and places it as LOOSE spoil, which

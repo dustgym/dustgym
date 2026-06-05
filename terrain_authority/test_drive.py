@@ -13,7 +13,6 @@ import tempfile
 
 import numpy as np
 
-from . import constants as K
 from . import drive
 from . import rover
 from .column_state import ColumnState

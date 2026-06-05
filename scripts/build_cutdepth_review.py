@@ -28,7 +28,6 @@ then render ON vs OFF (the cut_depth_enabled gate follows the regolith_model met
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 

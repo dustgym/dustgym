@@ -100,7 +100,7 @@ def main() -> None:
     rc = H // 2
     pad = _rect(H, W, rc - 50, rc + 50, 50, 150)          # 5 x 5 m excavation pad
     berm = _rect(H, W, rc - 50, rc + 50, 270, 310)         # 2 m wide berm line, 5 m long
-    drive_c0, drive_c1 = 30, 290                           # haul corridor along +col
+    drive_c0, _ = 30, 290                                 # haul corridor along +col
 
     # 1) DIG the pad toward (mean - dig_depth) -> spoil into the GLOBAL ledger. The fine window
     # only carries the loose mantle (~Z_T) above a firm DEM datum, so this STRIPS the mantle to
@@ -130,8 +130,8 @@ def main() -> None:
     # 3) DUMP the whole ledger as a SPOIL berm line.
     placed = site.dump(berm)
     print(f"  dump: placed {placed:.1f} kg of SPOIL on the berm line  (ledger now {site.inventory_kg:.1f} kg)")
-    print(f"       NOTE bulking NOT exercised: RHO_SPOIL==RHO_SURFACE==1300 and this patch is uniform "
-          f"1300 kg/m^3, so the dump is iso-density (berm height = pure mass relocation, not swell)")
+    print("       NOTE bulking NOT exercised: RHO_SPOIL==RHO_SURFACE==1300 and this patch is uniform "
+          "1300 kg/m^3, so the dump is iso-density (berm height = pure mass relocation, not swell)")
     snaps["dumped"] = site.snapshot()
     stages.append(_check(site, "dump_berm", baseline))
 
@@ -178,7 +178,7 @@ def main() -> None:
 
     # --- save the renderable fine bundle + telemetry ------------------------------------
     bundle_dir = os.path.join(args.out, "fine_scene")
-    meta = site.save_fine_bundle(bundle_dir, scene_name="worksite_slice")
+    site.save_fine_bundle(bundle_dir, scene_name="worksite_slice")
     with open(os.path.join(args.out, "telemetry.json"), "w") as fh:
         json.dump({"stages": stages, "worst_rel_residual": worst, "conservation_pass": ok,
                    "peak_inventory_kg": site.peak_inventory_kg, "over_payload": site.over_payload,

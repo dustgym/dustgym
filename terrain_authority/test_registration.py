@@ -12,7 +12,7 @@ import pytest
 gym = pytest.importorskip("gymnasium")
 
 import dustgym  # noqa: E402,F401  -- importing the suite registers Dust/* on import
-from terrain_authority.bodies import BODIES, params_for_body  # noqa: E402
+from terrain_authority.bodies import BODIES  # noqa: E402
 from terrain_authority.registration import ENV_IDS  # noqa: E402
 
 

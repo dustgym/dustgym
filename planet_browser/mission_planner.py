@@ -25,6 +25,7 @@ import itertools
 import json
 import math
 import os
+import warnings
 
 import matplotlib
 matplotlib.use("Agg")
@@ -34,16 +35,13 @@ from matplotlib.backends.backend_pdf import PdfPages
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ---- grounded constants: imported from the .py source of truth (terrain_authority), not duplicated.
-# planet_browser/ ships two ways: standalone (terrain_authority/samples/scripts live in a sibling
-# roversim/) and inside the dustgym monorepo (they live at the monorepo root, planet_browser's parent).
-# Pick whichever actually holds terrain_authority/ so both work; _ROVERSIM then anchors samples/scripts.
+# The monorepo root (planet_browser's parent) holds terrain_authority/, samples/, scripts/; ensure it is
+# importable. _REPO_ROOT also anchors the sample/script paths. (When dustgym is pip-installed,
+# terrain_authority imports directly; this insert is the run-from-source fallback.)
 import sys
-_PARENT = os.path.dirname(HERE)
-_ROVERSIM = next((p for p in (os.path.join(_PARENT, "roversim"), _PARENT)
-                  if os.path.isdir(os.path.join(p, "terrain_authority"))),
-                 os.path.join(_PARENT, "roversim"))
-if _ROVERSIM not in sys.path:
-    sys.path.insert(0, _ROVERSIM)
+_REPO_ROOT = os.path.dirname(HERE)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 import numpy as np                                      # for validate_plan (executes orders on the authority)
 from terrain_authority import ipex_specs as S          # IPEx energy/battery (NTRS 20240008162) + planner knobs
 from terrain_authority import constants as C            # materials + the SINTER_ENABLED gate
@@ -289,6 +287,27 @@ def trip_precedence(trips, mission):
                     if i != j and after in tj["actions"]:
                         pairs.append((i, j))
     return sorted(set(pairs))
+
+
+def _precedence_is_feasible(n, pairs):
+    """AL2 guard: do the (i, j) 'trip i before trip j' constraints admit ANY valid ordering, or do they
+    form a cycle (no build sequence can satisfy them)? Kahn topological sort over all n trips -- feasible
+    iff every trip can be emitted. Returns True (acyclic / satisfiable) or False (cyclic / unsatisfiable)."""
+    indeg = [0] * n
+    succ = [[] for _ in range(n)]
+    for i, j in pairs:
+        succ[i].append(j)
+        indeg[j] += 1
+    queue = [k for k in range(n) if indeg[k] == 0]
+    emitted = 0
+    while queue:
+        u = queue.pop()
+        emitted += 1
+        for v in succ[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                queue.append(v)
+    return emitted == n
 
 
 def _simulate(mission, trips):
@@ -582,6 +601,10 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
             "designed but unbuilt -- see PRD area MV / docs/autonomous_planning_review.md.")
     trips, flows, surplus_kg, meta = _build_trips(mission, dem, dem_origin, max_traverse_slope_deg)
     prec = trip_precedence(trips, mission)                  # I9: order-level precedence -> trip constraints
+    if not _precedence_is_feasible(len(trips), prec):       # AL2: fail loud, never a silent 0-trip "success"
+        raise RuntimeError(
+            "infeasible precedence: the mission's precedence constraints form a cycle, so no build "
+            "sequence can satisfy them. Check `mission.precedence` for a loop (e.g. A->B and B->A).")
     order = optimize_sequence(trips, mission, algorithm=algorithm, objective=objective, precedence=prec)
     trips = [trips[i] for i in order]
     tl, per_trip, core = _simulate(mission, trips)
@@ -589,6 +612,16 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
     if algorithm == "auto":
         resolved = "brute" if len(trips) <= BRUTE_MAX_TRIPS else (
             "held_karp_lk" if len(trips) <= HELD_KARP_MAX_TRIPS else "lk")
+    # AL1: be explicit about optimality. brute = exact on the objective; held_karp(_lk) = exact on driving
+    # distance then polished; anything else (lk past HELD_KARP_MAX_TRIPS) is unbounded local search -- warn.
+    optimality = ("exact" if resolved == "brute"
+                  else "distance-exact+polish" if resolved in ("held_karp", "held_karp_lk")
+                  else "heuristic")
+    if optimality == "heuristic" and len(trips) > HELD_KARP_MAX_TRIPS:
+        warnings.warn(
+            f"plan visit order is heuristic: {len(trips)} trips exceed the exact cap "
+            f"(HELD_KARP_MAX_TRIPS={HELD_KARP_MAX_TRIPS}); algorithm '{resolved}' has no optimality bound.",
+            stacklevel=2)
     totals = dict(core)
     totals.update(
         cut_kg=sum(o.mass_kg(mission.density * SWELL) for o in mission.orders if o.kind == "cut"),
@@ -603,7 +636,7 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
         routed_haul=meta["routed"], blocked_legs=meta["blocked_legs"], traverse_cap_deg=meta["traverse_cap_deg"],
         haul_detour_frac=(meta["routed_haul_m"] / meta["straight_haul_m"] - 1.0)
         if meta["straight_haul_m"] > 1e-9 else 0.0,
-        algorithm=algorithm, resolved_algorithm=resolved, n_precedence=len(prec),
+        algorithm=algorithm, resolved_algorithm=resolved, optimality=optimality, n_precedence=len(prec),
         objective=str(objective), vehicles=1)
     return trips, flows, per_trip, tl, totals
 
@@ -685,7 +718,7 @@ def build_timeline(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_tra
 
 
 def _haworth_bundle(bundle_dir=None):
-    return bundle_dir or os.path.join(_ROVERSIM, "samples", "lunar_dem", "haworth_10km_5m")
+    return bundle_dir or os.path.join(_REPO_ROOT, "samples", "lunar_dem", "haworth_10km_5m")
 
 
 def load_haworth_dem():
