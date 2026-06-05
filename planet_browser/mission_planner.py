@@ -46,6 +46,8 @@ import numpy as np                                      # for validate_plan (exe
 from terrain_authority import ipex_specs as S          # IPEx energy/battery (NTRS 20240008162) + planner knobs
 from terrain_authority import constants as C            # materials + the SINTER_ENABLED gate
 from terrain_authority import rassor_mass_model as RM   # ICE-RASSOR drum-fill sensing (NTRS 20210022781)
+from terrain_authority import slip as TMS               # conserved slip ladder — weight-aware leg slip
+from terrain_authority import terramechanics as TM      # TerramechanicsParams for the slip solve
 from terrain_authority.column_state import ColumnState  # conserved authority — for I8 plan validation
 
 DRIVE_SPEED_MS  = S.DRIVE_SPEED_MS                       # 0.30 m/s
@@ -60,7 +62,8 @@ CHARGE_W        = S.RECHARGE_POWER_W                     # 700 W [CALIB]
 RESERVE_FRAC    = S.BATTERY_RESERVE_FRAC                 # 0.10
 ROVER_MASS_KG   = S.ROVER_MASS_CLASS_KG                  # 30 kg-class (for gravity-climb drive energy)
 DRIVE_POWER_W   = S.drive_power_w()                      # ~40 W (Table 3 driving cases)
-SLIP_ALPHA      = 2.0                                    # [CALIB] slip energy multiplier vs tan(slope) (I10)
+SLIP_ALPHA      = 2.0                                    # [CALIB] slip energy multiplier vs tan(slope) (I10 costmap)
+_TM_PARAMS      = TM.TerramechanicsParams.from_constants()   # lunar defaults for the weight-aware leg-slip solve
 
 # Per-body OPERATING TIMESCALE (astronomical solar-day lengths; Earth-hours) — so the endurance/report
 # prints the correct day/night + sunlit work-window scale for the selected body. solar_day_h = synodic
@@ -260,7 +263,13 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
             # #1 slip-loss: the wheel travels 1/(1-slip) per metre of ground on a slope, so the haul costs
             # more than flat 135 J/m. slip from the cut<->fill slope; no DEM/flat -> slip 0 -> haul_e = flat.
             slope_haul = math.degrees(math.atan2(abs(dh), leg)) if leg > 1e-9 else 0.0
-            haul_e = haul_m * DRIVE_J_PER_M / (1.0 - slip_alpha_to_slip(slope_haul))
+            # weight-coupled: the loaded outbound leg (carrying ~DRUM_KG) slips more than the empty
+            # return; each pays 1/(1-slip) per ground metre. (haul_m = out + back = 2*leg*loads.)
+            out_m = back_m = leg * loads
+            slip_loaded = slip_alpha_to_slip(slope_haul, payload_kg=DRUM_KG, g=g)
+            slip_empty = slip_alpha_to_slip(slope_haul, payload_kg=0.0, g=g)
+            haul_e = (out_m * DRIVE_J_PER_M / (1.0 - slip_loaded)
+                      + back_m * DRIVE_J_PER_M / (1.0 - slip_empty))
             trips.append(dict(kind="cutfill", site=(co.x, co.y), label=f"{co.action} → {fo.action}",
                               mass=mass, dig_e=mass*DIG_J_PER_KG, dig_t=mass/DIG_RATE_KG_S,
                               haul_m=haul_m, haul_e=haul_e, lift_e=mass * g * max(0.0, dh), dest=(fo.x, fo.y),
@@ -1056,10 +1065,18 @@ def endurance(mission, *, dem=None, dem_origin=(0.0, 0.0), power_site="psr_tower
     return out
 
 
-def slip_alpha_to_slip(slope_deg):
-    """Representative wheel slip from terrain slope (the I10 slip ladder, compactly): ~0 on the flat,
-    rising with tan(slope); [CALIB] shape consistent with slip rising past ~0.3 near 30 deg."""
-    return max(0.0, min(0.95, SLIP_ALPHA * 0.18 * math.tan(math.radians(max(0.0, slope_deg)))))
+def slip_alpha_to_slip(slope_deg, payload_kg=0.0, g=None):
+    """Wheel slip from terrain slope AND the rover's laden weight, via the CONSERVED slip ladder
+    (slip.slip_sinkage_equilibrium): a steeper grade OR a heavier rover (full drum) -> more slip,
+    entrapping near ~45 deg. ``payload_kg`` is the regolith in the drum on this leg (0 = empty); ``g``
+    defaults to lunar. This replaces the old slope-only [CALIB] curve so the planner's per-leg slip (and
+    the 1/(1-slip) drive-energy inflation) is weight-coupled, consistent with the simulator authority.
+    (The per-cell routing costmap keeps the cheap SLIP_ALPHA*tan(slope) ranking heuristic.)"""
+    gg = C.g if g is None else float(g)
+    weight_n = (ROVER_MASS_KG + max(0.0, payload_kg)) * gg
+    eq = TMS.slip_sinkage_equilibrium(weight_n, math.radians(max(0.0, slope_deg)),
+                                      params=_TM_PARAMS, contact_len_m=0.10, contact_width_m=0.18)
+    return max(0.0, min(0.95, float(eq["slip"])))
 
 
 def validate_plan(mission, *, cell_m=0.5, regolith_depth_m=10.0, max_cells=500, dem=None,

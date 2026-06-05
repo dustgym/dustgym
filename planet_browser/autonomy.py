@@ -123,10 +123,10 @@ def execute_leg(belief, leg, *, dem=None, dem_origin=(0.0, 0.0), g=None, body="m
     drive_m = MP._d(pose, site)
     dh = MP.haul_elevation_gain_m(dem, dem_origin, pose, site) if dem is not None else 0.0
     slope_deg = math.degrees(math.atan2(abs(dh), drive_m)) if drive_m > 1e-9 else 0.0
-    slip = MP.slip_alpha_to_slip(slope_deg)
-    # gravity climb charges the rover AND the regolith it hauls on this leg (leg["mass"]): hauling a
-    # full drum up a grade costs the LOAD's m*g*h, not just the dry rover's (weight-coupled energy).
+    # the regolith in the drum on this leg drives BOTH the slip (heavier -> more slip) and the gravity
+    # climb (the load's m*g*h): hauling a full drum up a grade costs more than the dry rover (weight-coupled).
     haul_mass_kg = max(0.0, float(leg.get("mass", 0.0)))
+    slip = MP.slip_alpha_to_slip(slope_deg, payload_kg=haul_mass_kg, g=g)
     true_drive_J = (drive_m * MP.DRIVE_J_PER_M / (1.0 - slip)
                     + (MP.ROVER_MASS_KG + haul_mass_kg) * g * max(0.0, dh))
     haul_e = leg.get("haul_e", leg.get("haul_m", 0.0) * MP.DRIVE_J_PER_M)   # #1 slip-aware haul (the plan's)

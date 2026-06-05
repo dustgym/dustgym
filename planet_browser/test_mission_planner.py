@@ -524,13 +524,16 @@ def test_haul_energy_is_slip_adjusted_when_the_haul_climbs():
     assert cf["haul_e"] > cf["haul_m"] * MP.DRIVE_J_PER_M     # slip raises the haul energy above flat
 
 
-def test_no_dem_haul_energy_is_flat_135():
+def test_no_dem_haul_energy_is_near_flat_135():
     m = MP.mission_from_dict({"name": "f", "body": "moon", "charger": [0, 0], "orders": [
         {"action": "cut", "kind": "cut", "x": 40, "y": 30, "footprint_m2": 36, "depth_m": 0.04},
         {"action": "fill", "kind": "fill", "x": 44, "y": 44, "footprint_m2": 14, "depth_m": 0.10}]})
-    trips, _, _, _ = MP._build_trips(m, None, (0.0, 0.0), 25.0)          # no DEM -> no slope -> flat
+    trips, _, _, _ = MP._build_trips(m, None, (0.0, 0.0), 25.0)          # no DEM -> no slope (flat)
     cf = next(t for t in trips if t["kind"] == "cutfill")
-    assert math.isclose(cf["haul_e"], cf["haul_m"] * MP.DRIVE_J_PER_M)
+    # no slope -> ~flat 135/m, apart from the small baseline wheel slip the conserved ladder reports
+    # even on level ground (a few tenths of a percent); no large slope/gravity inflation.
+    assert cf["haul_e"] >= cf["haul_m"] * MP.DRIVE_J_PER_M
+    assert math.isclose(cf["haul_e"], cf["haul_m"] * MP.DRIVE_J_PER_M, rel_tol=0.02)
 
 
 def test_dem_plan_energy_at_least_the_flat_plan():
