@@ -13,8 +13,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  gate:
+    name: Quality gate (lint + type + test/coverage) — must pass before publishing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (core + dev)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Lint (ruff, pyflakes gate)
+        run: ruff check --select F terrain_authority planet_browser dustgym scripts viz
+      - name: Type check (mypy)
+        run: mypy
+      - name: Test + coverage gate
+        run: pytest terrain_authority planet_browser --cov --cov-report=term-missing
+
   build:
     name: Build sdist + wheel
+    needs: gate                    # never publish a release that fails lint / types / tests / coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
