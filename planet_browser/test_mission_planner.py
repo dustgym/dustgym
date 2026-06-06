@@ -402,14 +402,13 @@ def test_compare_algorithms_sorts_by_objective():
     assert any(r.get("pareto") for r in res["rows"] if "error" not in r)   # a frontier is marked
 
 
-def test_multivehicle_is_gated_off_by_default():
+def test_multivehicle_is_enabled_and_single_is_the_default():
+    # MV: vehicles>1 now plans a fleet (was gated off); vehicles=1 stays the single-vehicle default.
     m = _spread_mission()
-    try:
-        MP.plan_and_simulate(m, vehicles=2)
-    except RuntimeError as e:
-        assert "multi-vehicle" in str(e)
-    else:
-        raise AssertionError("vehicles > 1 must raise the multi-vehicle gate (single-vehicle default)")
+    _, _, _, _, T1 = MP.plan_and_simulate(m)
+    assert T1["vehicles"] == 1
+    _, _, _, _, T2 = MP.plan_and_simulate(m, vehicles=2)
+    assert T2["vehicles"] == 2 and T2["makespan_s"] <= T1["time_s"] + 1e-6
 
 
 def test_unknown_algorithm_or_objective_raises():
@@ -628,6 +627,37 @@ def test_as_built_acceptance_on_real_terrain():
     v_steep = MP.validate_plan(m, dem=dem, dem_origin=o_steep)
     assert v_steep["as_built_flatness_rmse_m"] > v_flatsite["as_built_flatness_rmse_m"]   # slope shows up
     assert v_steep["as_built_pass"] is False                                              # not flat to +/-2 cm
+
+
+# ---- MV1-7: multi-vehicle fleet planning (allocation + parallel makespan + deconfliction) -------
+def test_multi_vehicle_parallelises_and_deconflicts():
+    sites = [(40, 0), (-40, 5), (80, 0), (-80, 5), (0, 90), (0, -90)]      # 6 distinct sites
+    m = _pairs_mission(sites)
+    _, _, _, _, T1 = MP.plan_and_simulate(m, vehicles=1)
+    _, _, pt2, _, T2 = MP.plan_and_simulate(m, vehicles=2)
+    assert T2["vehicles"] == 2 and len(T2["vehicles_detail"]) == 2
+    assert T2["vehicle_conflicts"] == 0                       # site-exclusive allocation -> no co-occupation
+    assert T2["makespan_s"] < T1["time_s"]                    # two rovers finish sooner than one (parallel)
+    assert T2["mass_kg"] == pytest.approx(T1["mass_kg"], rel=1e-6)   # same total work, split across the fleet
+    # allocation IS site-exclusive: every site's trips belong to exactly ONE vehicle
+    by_site = {}
+    for pt in pt2:
+        s = tuple(pt["trip"]["site"]); by_site.setdefault(s, set()).add(pt["trip"]["vehicle"])
+    assert by_site and all(len(vs) == 1 for vs in by_site.values())
+    # each vehicle's detail is a real share of the work
+    assert sum(d["n_trips"] for d in T2["vehicles_detail"]) == len(pt2)
+
+
+def test_multi_vehicle_refuses_precedence_v1():
+    m = _pairs_mission([(40, 0), (-40, 5), (80, 0)], precedence=[["fill0", "fill1"]])
+    with pytest.raises(RuntimeError, match="precedence"):
+        MP.plan_and_simulate(m, vehicles=2)
+
+
+def test_single_vehicle_still_has_uniform_fleet_schema():
+    _, _, _, _, T = MP.plan_and_simulate(MP.mission_from_dict(_payload()))
+    assert T["vehicles"] == 1 and T["vehicle_conflicts"] == 0
+    assert T["makespan_s"] == pytest.approx(T["time_s"]) and T["vehicles_detail"] == []
 
 
 def test_compare_with_weighted_objective_marks_pareto():

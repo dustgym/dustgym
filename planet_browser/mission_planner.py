@@ -673,19 +673,140 @@ def optimize_sequence(trips, mission, *, algorithm="auto", objective="time", pre
 
 
 # ---- sequence + simulate (battery-aware, sinter, haul shuttles) --------------------------------
+def _mission_totals(mission, trips, flows, surplus_kg, meta, core):
+    """The mission / material / routing / keep-out totals shared by the single- and multi-vehicle planners.
+    `core` carries the simulated time/energy/distance/charges/mass; the caller applies survival + algorithm
+    + vehicle fields. Kept DRY so the multi-vehicle aggregate reports the same fields as single-vehicle."""
+    return dict(
+        core,
+        cut_kg=sum(o.mass_kg(mission.density * SWELL) for o in mission.orders if o.kind == "cut"),
+        fill_kg=sum(o.mass_kg(mission.density) for o in mission.orders if o.kind == "fill"),
+        sinter_kg=sum(o.mass_kg(mission.density) for o in mission.orders if o.kind == "sinter"),
+        surplus_kg=surplus_kg,
+        deficit_kg=sum(m for c, f, m, d in flows if c is None),
+        drum_cycles=sum(max(1, math.ceil(tr["mass"] / DRUM_KG)) for tr in trips if tr["kind"] == "cutfill"),
+        lift_energy_J=float(sum(tr.get("lift_e", 0.0) for tr in trips)),
+        routed_haul=meta["routed"], blocked_legs=meta["blocked_legs"], traverse_cap_deg=meta["traverse_cap_deg"],
+        haul_detour_frac=(meta["routed_haul_m"] / meta["straight_haul_m"] - 1.0)
+        if meta["straight_haul_m"] > 1e-9 else 0.0,
+        n_keepouts=len(mission.keepouts),
+        keepout_conflicts=sum(1 for o in mission.orders for k in mission.keepouts
+                              if (o.x - k["x"]) ** 2 + (o.y - k["y"]) ** 2 <= k["r"] ** 2))
+
+
+def _trip_work_e(tr):
+    """A trip's work energy (dig + sinter + haul) -- the load used to balance the fleet allocation."""
+    return tr.get("dig_e", 0.0) + tr.get("sinter_e", 0.0) + tr.get("haul_e", 0.0)
+
+
+def _allocate_trips(trips, vehicles):
+    """MV2: SITE-EXCLUSIVE, load-balanced (LPT) allocation of trips to V vehicles. Trips are grouped by
+    site so no two vehicles ever work the SAME site (zero co-occupation by construction); whole site-groups
+    are then assigned greedily to the least-loaded vehicle by work energy (longest-processing-time first).
+    Returns a list of V index-lists (some may be empty if V exceeds the number of sites)."""
+    groups: dict = {}
+    for idx, tr in enumerate(trips):
+        groups.setdefault(tuple(tr["site"]), []).append(idx)
+
+    def gcost(idxs):
+        return sum(_trip_work_e(trips[i]) for i in idxs)
+
+    loads = [0.0] * vehicles
+    alloc: list = [[] for _ in range(vehicles)]
+    for idxs in sorted(groups.values(), key=gcost, reverse=True):   # biggest site-group first (LPT)
+        v = min(range(vehicles), key=lambda k: loads[k])
+        alloc[v].extend(idxs)
+        loads[v] += gcost(idxs)
+    return alloc
+
+
+def _vehicle_conflicts(per_vehicle):
+    """MV5: count space-time conflicts -- two DIFFERENT vehicles whose per-trip time windows overlap at the
+    SAME site. Site-exclusive allocation makes this 0 by construction; the detector verifies it (and would
+    catch a future allocation that lets vehicles share a site). Continuous haul-PATH crossing avoidance is
+    not modelled here (future MV work) -- this is site-level deconfliction."""
+    spans = [(v, tuple(pt["trip"]["site"]), pt["t_start"], pt["t_end"])
+             for v, pv in enumerate(per_vehicle) for pt in pv["per_trip"]]
+    conflicts = 0
+    for a in range(len(spans)):
+        va, sa, s0, s1 = spans[a]
+        for b in range(a + 1, len(spans)):
+            vb, sb, t0, t1 = spans[b]
+            if va != vb and sa == sb and s0 < t1 and t0 < s1:     # same site, overlapping windows
+                conflicts += 1
+    return conflicts
+
+
+def plan_multi(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
+               algorithm="nearest", objective="time", vehicles=2):
+    """MV1-7: plan a multi-vehicle build mission. Build trips once, allocate them site-exclusively across V
+    vehicles (load-balanced), sequence + battery-simulate EACH vehicle independently (they work in parallel
+    from the shared charger), and aggregate: makespan = max per-vehicle time (the wall-clock the fleet
+    finishes in), energy/distance/charges = fleet sums. Returns the same (trips, flows, per_trip, tl, totals)
+    shape as the single-vehicle planner, with per-trip `vehicle` tags + a vehicles_detail breakdown.
+
+    v1 scope + honest gaps: site-exclusive allocation guarantees no two rovers co-occupy a site (verified by
+    a space-time conflict detector); the SHARED CHARGER is not contention-modelled (each vehicle recharges
+    independently -- a stated simplification); continuous haul-PATH collision avoidance and cross-vehicle
+    PRECEDENCE are future MV work (precedence + vehicles>1 is refused, not silently mis-ordered)."""
+    if vehicles < 1:
+        raise ValueError(f"vehicles must be >= 1 (got {vehicles})")
+    if mission.precedence:
+        raise RuntimeError(
+            "multi-vehicle + precedence is not yet coordinated (v1): cross-vehicle precedence ordering is "
+            "future MV work. Plan single-vehicle, or remove the precedence constraints.")
+    trips, flows, surplus_kg, meta = _build_trips(mission, dem, dem_origin, max_traverse_slope_deg)
+    alloc = _allocate_trips(trips, vehicles)
+    per_vehicle = []
+    for v, idxs in enumerate(alloc):
+        vtrips = [trips[i] for i in idxs]
+        if vtrips:
+            order = optimize_sequence(vtrips, mission, algorithm=algorithm, objective=objective)
+            vtrips = [vtrips[k] for k in order]
+        for tr in vtrips:
+            tr["vehicle"] = v
+        tl, per_trip, core = _simulate(mission, vtrips)
+        per_vehicle.append({"vehicle": v, "trips": vtrips, "tl": tl, "per_trip": per_trip, "core": core})
+    conflicts = _vehicle_conflicts(per_vehicle)
+    makespan = max((pv["core"]["time_s"] for pv in per_vehicle), default=0.0)
+    agg = dict(
+        time_s=float(makespan),
+        mass_kg=sum(pv["core"]["mass_kg"] for pv in per_vehicle),
+        energy_J=sum(pv["core"]["energy_J"] for pv in per_vehicle),
+        charges=sum(pv["core"]["charges"] for pv in per_vehicle),
+        distance_m=sum(pv["core"]["distance_m"] for pv in per_vehicle),
+        avg_power_w=0.0)
+    agg["avg_power_w"] = agg["energy_J"] / makespan if makespan > 1e-9 else 0.0
+    survival_J = IDLE_POWER_W * sum(pv["core"]["time_s"] for pv in per_vehicle)   # idle per vehicle * its time
+    all_trips = [tr for pv in per_vehicle for tr in pv["trips"]]
+    all_per_trip = [pt for pv in per_vehicle for pt in pv["per_trip"]]
+    all_tl = [seg for pv in per_vehicle for seg in pv["tl"]]
+    totals = _mission_totals(mission, all_trips, flows, surplus_kg, meta, agg)
+    if survival_J > 0.0:
+        totals["energy_J"] = agg["energy_J"] + survival_J
+        totals["avg_power_w"] = totals["energy_J"] / makespan if makespan > 1e-9 else 0.0
+    detail = [{"vehicle": pv["vehicle"], "n_trips": len(pv["trips"]), "time_s": pv["core"]["time_s"],
+               "energy_J": pv["core"]["energy_J"], "distance_m": pv["core"]["distance_m"],
+               "charges": pv["core"]["charges"]} for pv in per_vehicle]
+    totals.update(survival_energy_J=float(survival_J), idle_power_w=float(IDLE_POWER_W),
+                  algorithm=algorithm, resolved_algorithm=algorithm, optimality="heuristic",
+                  n_precedence=0, objective=str(objective), vehicles=int(vehicles),
+                  makespan_s=float(makespan), vehicle_conflicts=int(conflicts), vehicles_detail=detail)
+    return all_trips, flows, all_per_trip, all_tl, totals
+
+
 def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
                       algorithm="nearest", objective="time", vehicles=1):
     """Plan a single-vehicle build mission: build trips, choose a visit order (pluggable `algorithm` x
     `objective`), simulate it battery-aware, and return (trips, flows, per_trip, tl, totals).
 
-    Multi-vehicle is OFF by default and gated (vehicles must be 1): the single-vehicle product planner is
-    the default. Multi-vehicle planning (fleet allocation + deconfliction + shared-resource scheduling) is
-    designed but not built (see PRD area MV / docs/autonomous_planning_review.md)."""
+    `vehicles` > 1 dispatches to the multi-vehicle planner (`plan_multi`: site-exclusive fleet allocation
+    + per-vehicle battery sim + parallel makespan + space-time deconfliction). vehicles=1 is the default
+    single-vehicle product planner."""
     if vehicles != 1:
-        raise RuntimeError(
-            f"multi-vehicle planning ({vehicles} vehicles) is not enabled (single-vehicle by default, by "
-            "design). Multi-vehicle (fleet allocation, deconfliction, shared-resource scheduling) is "
-            "designed but unbuilt -- see PRD area MV / docs/autonomous_planning_review.md.")
+        return plan_multi(mission, dem=dem, dem_origin=dem_origin,
+                          max_traverse_slope_deg=max_traverse_slope_deg,
+                          algorithm=algorithm, objective=objective, vehicles=vehicles)
     trips, flows, surplus_kg, meta = _build_trips(mission, dem, dem_origin, max_traverse_slope_deg)
     prec = trip_precedence(trips, mission)                  # I9: order-level precedence -> trip constraints
     if not _precedence_is_feasible(len(trips), prec):       # AL2: fail loud, never a silent 0-trip "success"
@@ -709,36 +830,19 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
             f"plan visit order is heuristic: {len(trips)} trips exceed the exact cap "
             f"(HELD_KARP_MAX_TRIPS={HELD_KARP_MAX_TRIPS}); algorithm '{resolved}' has no optimality bound.",
             stacklevel=2)
-    totals = dict(core)
     # K11c: continuous idle/heater/survival draw over the WHOLE mission duration -- the likely-dominant
     # multi-day term the active-leg ledger omits. [ASSUMPTION] (IDLE_POWER_W, default 0 = not modelled);
-    # surfaced as its own line and folded into the headline energy/avg-power only when set, so a default
-    # plan is never silently inflated. Not coupled into the recharge schedule (a stated simplification).
+    # folded into the headline energy/avg-power only when set, so a default plan is never silently inflated.
     survival_J = IDLE_POWER_W * core["time_s"]
+    totals = _mission_totals(mission, trips, flows, surplus_kg, meta, core)
     if survival_J > 0.0:
         totals["energy_J"] = core["energy_J"] + survival_J
         totals["avg_power_w"] = totals["energy_J"] / core["time_s"] if core["time_s"] > 1e-9 else 0.0
     totals.update(
         survival_energy_J=float(survival_J), idle_power_w=float(IDLE_POWER_W),
-        cut_kg=sum(o.mass_kg(mission.density * SWELL) for o in mission.orders if o.kind == "cut"),
-        fill_kg=sum(o.mass_kg(mission.density) for o in mission.orders if o.kind == "fill"),
-        sinter_kg=sum(o.mass_kg(mission.density) for o in mission.orders if o.kind == "sinter"),
-        surplus_kg=surplus_kg,
-        deficit_kg=sum(m for c, f, m, d in flows if c is None),
-        # drum cycles = offload events: each cut->fill haul is ceil(mass / drum capacity) loads; drum fill
-        # is SENSED from motor current (no load cell, ICE-RASSOR), offload at the upper confidence bound.
-        drum_cycles=sum(max(1, math.ceil(tr["mass"] / DRUM_KG)) for tr in trips if tr["kind"] == "cutfill"),
-        lift_energy_J=float(sum(tr.get("lift_e", 0.0) for tr in trips)),   # exact uphill gravity work
-        routed_haul=meta["routed"], blocked_legs=meta["blocked_legs"], traverse_cap_deg=meta["traverse_cap_deg"],
-        haul_detour_frac=(meta["routed_haul_m"] / meta["straight_haul_m"] - 1.0)
-        if meta["straight_haul_m"] > 1e-9 else 0.0,
         algorithm=algorithm, resolved_algorithm=resolved, optimality=optimality, n_precedence=len(prec),
         objective=str(objective), vehicles=1,
-        # discrete keep-out obstacles: how many are active, and how many orders sit inside one (a build
-        # placed on a boulder/no-go zone -- surfaced as a warning; hauls already route around all of them).
-        n_keepouts=len(mission.keepouts),
-        keepout_conflicts=sum(1 for o in mission.orders for k in mission.keepouts
-                              if (o.x - k["x"]) ** 2 + (o.y - k["y"]) ** 2 <= k["r"] ** 2))
+        makespan_s=float(core["time_s"]), vehicle_conflicts=0, vehicles_detail=[])   # uniform fleet schema
     return trips, flows, per_trip, tl, totals
 
 
@@ -1540,14 +1644,15 @@ def demo_mission():
 
 
 def run(mission: Mission, stem=None, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
-        algorithm="nearest", objective="time"):
+        algorithm="nearest", objective="time", vehicles=1):
     """Plan + simulate + render the report. ``stem`` names the output files (default = the date); the
     server passes a unique per-mission stem so concurrent plans don't overwrite each other. When ``dem``
     is supplied (server passes the real Haworth DEM for Moon), hauls are I10-routed around hazards.
-    ``algorithm`` x ``objective`` select the pluggable sequencer + optimization metric."""
+    ``algorithm`` x ``objective`` select the pluggable sequencer + optimization metric. ``vehicles`` > 1
+    plans a multi-vehicle fleet (plan_multi)."""
     trips, flows, per_trip, tl, totals = plan_and_simulate(
         mission, dem=dem, dem_origin=dem_origin, max_traverse_slope_deg=max_traverse_slope_deg,
-        algorithm=algorithm, objective=objective)
+        algorithm=algorithm, objective=objective, vehicles=vehicles)
     os.makedirs(os.path.join(HERE, "reports"), exist_ok=True)
     stem = stem or f"{mission.date}_mission_plan"
     pdf = os.path.join(HERE, "reports", f"{stem}.pdf")

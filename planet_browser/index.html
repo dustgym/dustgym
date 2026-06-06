@@ -129,6 +129,7 @@
       <h3>Fleet</h3>
       <div class="ctl"><label>Vehicle <select id="vehicle"></select></label>
         <label title="regolith model — defaults to the body's own; override to e.g. run Earth soil on a lunar map">Soil <select id="soil"></select></label></div>
+      <div class="ctl"><label title="fleet size — >1 plans a multi-vehicle mission (site-exclusive allocation, parallel makespan, deconfliction)">Rovers <input id="vehcount" type="number" value="1" min="1" max="16" step="1" /></label></div>
       <div class="ctl" id="tools">tools —</div>
       <div id="fleetcaps">capabilities —</div>
     </section>
@@ -663,8 +664,11 @@ qel("qplan").onclick = async () => {
     const ktag = t.n_keepouts ? ` · ${t.n_keepouts} keep-out${t.keepout_conflicts ? ` (⚠ ${t.keepout_conflicts} build on obstacle)` : ""}` : "";
     // K11c: continuous survival/idle power (an [ASSUMPTION] term) when modelled
     const stag = t.survival_energy_J > 0 ? ` · +${(t.survival_energy_J / 1e6).toFixed(1)} MJ survival [assumption]` : "";
+    // MV: multi-vehicle fleet -> parallel makespan + space-time deconfliction
+    const ftag = t.vehicles > 1
+      ? ` · ${t.vehicles} rovers, makespan ${(t.makespan_s / 3600).toFixed(1)} h, ${t.vehicle_conflicts} conflicts` : "";
     setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
-         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${etag}${atag}${rtag}${ktag}${stag}${vtag}${autag}${ptag}${mtag}`);
+         + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${ftag}${etag}${atag}${rtag}${ktag}${stag}${vtag}${autag}${ptag}${mtag}`);
     LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
     LAST_ORDERS = ORDERS.slice(); LAST_KEEPOUTS = KEEPOUTS.slice();
     qel("qexec").disabled = !LAST_TIMELINE;
@@ -692,6 +696,7 @@ function restoreProfile(p) {                                // set the WHOLE UI 
   if (p.algorithm) qel("qalgo").value = p.algorithm;
   if (p.objective) qel("qobj").value = p.objective;
   if (p.vehicle && qel("vehicle")) qel("vehicle").value = p.vehicle;
+  if (qel("vehcount") && p.vehicles) qel("vehcount").value = p.vehicles;
   if (qel("soil")) qel("soil").value = p.soil || "";
   if (qel("lat") && p.lat != null) qel("lat").value = p.lat;
   if (qel("lon") && p.lon != null) qel("lon").value = p.lon;
@@ -869,7 +874,8 @@ async function senseDrum() {
 function fleet() {
   const tools = [...document.querySelectorAll("#tools input:checked")].map((c) => c.value);
   const soil = qel("soil") ? qel("soil").value : "";        // "" -> the body's own regolith
-  return { vehicle: (qel("vehicle").value || "ipex"), tools, ...(soil ? { soil } : {}) };
+  const vehicles = Math.max(1, parseInt(qel("vehcount").value, 10) || 1);   // MV: fleet size (>1 = multi)
+  return { vehicle: (qel("vehicle").value || "ipex"), tools, vehicles, ...(soil ? { soil } : {}) };
 }
 // M11: when a site lat/lon is set (typed or picked), send it so the plan anchors there (else the
 // planner uses the auto flattest site). Only Moon's Haworth DEM is georeferenced for this today.

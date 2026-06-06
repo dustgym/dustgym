@@ -103,10 +103,11 @@ def _prune_reports(ttl_s: float | None = None) -> int:
 
 
 def _totals_json(totals):
-    """JSON-safe totals: numbers -> float, but pass bools and strings (e.g. algorithm/objective) through."""
+    """JSON-safe totals: numbers -> float, but pass through bools/strings (algorithm/objective) and already
+    JSON-safe containers (e.g. vehicles_detail = a list of per-vehicle dicts) + None unchanged."""
     out = {}
     for k, v in totals.items():
-        out[k] = v if isinstance(v, (bool, str)) else float(v)
+        out[k] = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
     return out
 
 
@@ -213,6 +214,7 @@ class PlanRequest(BaseModel):
     objective: str = Field(default="time", max_length=40)
     lat: float | None = Field(default=None, ge=-90.0, le=90.0)   # M11: globe site-pick -> order-frame anchor
     lon: float | None = Field(default=None, ge=-360.0, le=360.0)
+    vehicles: int = Field(default=1, ge=1, le=16)               # MV: fleet size (>1 -> multi-vehicle plan)
 
 
 class CompareRequest(BaseModel):
@@ -460,7 +462,7 @@ def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
         # I10: hauls routed around hazards on the real DEM; I8 + I6/M11 slope-feasible siting.
         with _REPORT_LOCK:                              # serialize the thread-unsafe matplotlib report path
             pdf, md, totals = MP.run(mission, stem=_plan_stem(payload), dem=dem, dem_origin=origin,
-                                     algorithm=req.algorithm, objective=req.objective)
+                                     algorithm=req.algorithm, objective=req.objective, vehicles=req.vehicles)
         validation = MP.validate_plan(mission, dem=dem, dem_origin=origin)
         timeline = MP.build_timeline(mission, dem=dem, dem_origin=origin,
                                      algorithm=req.algorithm, objective=req.objective)
