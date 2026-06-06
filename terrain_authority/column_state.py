@@ -75,6 +75,11 @@ class ColumnState:
     datum: np.ndarray = field(default=None)         # (height, width) m
 
     drum_inventory: float = 0.0  # kg held in drums (not on the grid)
+    # Physical-domain validation runs at construction by default (RB-01/CT-02). The ONE documented
+    # exception is an internal transient that reuses mass_areal as a SIGNED height residual
+    # (datum=0, density=1 -> derive_height()==mass_areal); such a scratch column passes _validate=False.
+    # No public/authority-state construction may disable it.
+    _validate: bool = field(default=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0:                                  # N14: validate public ctor
@@ -95,7 +100,8 @@ class ColumnState:
             self.disturbance = np.zeros(shape, dtype=np.float64)
         if self.datum is None:
             self.datum = np.zeros(shape, dtype=np.float64)
-        self._validate_fields()                                                 # RB-01/CT-02: reject bad arrays at construction
+        if self._validate:                                                      # RB-01/CT-02: reject bad arrays at construction
+            self._validate_fields()
 
     def _validate_fields(self) -> None:
         """CT-02: every field has the (height, width) shape, the right dtype kind, and a valid physical

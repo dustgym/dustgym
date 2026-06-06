@@ -99,6 +99,18 @@ def test_construction_rejects_negative_ice():
         ColumnState(width=4, height=3, cell_m=0.02, ice=ice)
 
 
+def test_validate_false_allows_signed_scratch_column_only_when_opted_in():
+    # the ONE documented exception: a signed height-residual scratch (datum=0, density=1) the
+    # crater overlay uses; mass_areal may be < 0 there. _validate=False permits it; the default rejects.
+    resid = np.array([[0.1, -0.2], [0.3, -0.05]])
+    cs = ColumnState(width=2, height=2, cell_m=0.02, mass_areal=resid,
+                     density=np.ones((2, 2)), datum=np.zeros((2, 2)), _validate=False)
+    assert np.any(cs.mass_areal < 0)                          # signed scratch allowed when opted in
+    with pytest.raises(V.DomainError, match="mass_areal"):    # default boundary still strict
+        ColumnState(width=2, height=2, cell_m=0.02, mass_areal=resid,
+                    density=np.ones((2, 2)), datum=np.zeros((2, 2)))
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

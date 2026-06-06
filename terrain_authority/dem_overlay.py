@@ -439,7 +439,8 @@ def make_crater_feature_fn(*, dem_effres_m: float, d_min_m: float = 1.0,
         cs = ColumnState(width=W, height=H, cell_m=float(cell_m),
                          mass_areal=residual_h.copy(),
                          density=np.ones((H, W), dtype=np.float64),
-                         datum=np.zeros((H, W), dtype=np.float64))
+                         datum=np.zeros((H, W), dtype=np.float64),
+                         _validate=False)   # signed height-residual scratch (mass_areal may be <0); not authority state
 
         # Per-TILE seed: a pure function of this tile's GLOBAL origin (not render order), so
         # exploring or re-visiting the same world tile yields byte-identical craters (§3).
