@@ -102,12 +102,20 @@ python -m planet_browser.server              # FastAPI/uvicorn ASGI (or: dustgym
 # open the printed URL; CesiumJS globe (NASA Trek Moon/Mars tiles), build queue, Plan mission -> PDF
 ```
 
-- `/plan` — POST a build queue → cut/fill-balanced orders → nearest-neighbour route →
-  battery-aware mid-task recharge → PDF + markdown report, plus an **autonomy** block (closed-loop
-  pose/energy estimate with per-leg map/landmark fixes) and a **perception** block.
+A **tabbed view-pane switcher** runs the cockpit: **Plan** (globe + build queue), **Perception** (Godot
+render frame), **Metrics** (top-down execution playback + telemetry HUD), **Report** (the mission-control
+PDF embedded), plus read-only **Validation** (the `validation/` figures), **API** (Swagger `/docs`),
+**Server** (`/healthz` + `/metrics`), and **Config** (`/config` overlay + docs) panes for engineers/devs.
+
+- `/plan` — POST a build queue → cut/fill-balanced orders (cut-only excavation included) → hazard- and
+  **keep-out**-routed haul → battery-aware mid-task recharge → PDF + markdown report, plus an **autonomy**
+  block (closed-loop pose/energy estimate), a **perception** block (the in-loop map-channel coverage), and
+  an **as-built acceptance** check (level-pad flatness on the real terrain). `vehicles` > 1 plans a
+  **multi-vehicle fleet** (site-exclusive allocation, parallel makespan, space-time deconfliction).
 - `/render` — crop a Haworth window, plan a flatten, render BEFORE/AFTER in Godot, return the earthwork.
 - `/sense` — the ICE-RASSOR drum-mass inference observable (motor-current → inferred fill → offload
   trigger), with a toggleable seeded noise model grounded in the published 2.56%/7.40% accuracy.
+- `/figures` · `/figure/{key}` · `/config` — engineer/dev pane data (validation figures, runtime config).
 
 The energy model is grounded in real IPEx data (Schuler et al., *IPEx TRL-5 Design Overview*, ASCEND
 2024; 12S / ~44 V / 30 Ah pack: drive 135 J/m, dig 4151 J/kg, pack 4.79 MJ) — all provenance-tagged,
