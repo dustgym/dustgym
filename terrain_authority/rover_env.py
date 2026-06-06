@@ -30,6 +30,7 @@ import numpy as np
 from . import constants as K
 from . import drive
 from . import rover
+from . import stability as ST
 from . import terramechanics as tm
 from .column_state import ColumnState
 
@@ -104,8 +105,13 @@ class RoverSimEnv(_BASE):
         self.randomize = bool(randomize)
         self.slope_max_deg = float(slope_max_deg)
         self.patch = int(patch) | 1            # force odd
-        self.obs_dim = self.patch * self.patch + 7
+        self.obs_dim = self.patch * self.patch + 8   # +1: tip-over stability margin (the "don't tip" signal)
         self.action_dim = 2
+        # tip-over geometry: modeled rover gauge/wheelbase + the [ASSUMPTION] CG height (stability.py)
+        self._geo = dict(gauge_m=rover.WHEEL_GAUGE_M, wheelbase_m=rover.WHEEL_BASE_M, cg_height_m=K.CG_HEIGHT_M)
+        self._pitch_rad = 0.0
+        self._roll_rad = 0.0
+        self._stab = {"margin_deg": 0.0, "risk": "ok"}
 
         # runtime state (set in reset)
         self.params = self.params_base
@@ -137,6 +143,15 @@ class RoverSimEnv(_BASE):
     def _goal_dist_cells(self) -> float:
         return max(0.0, self.goal_col - self.rc[1])
 
+    def _update_attitude(self) -> None:
+        """Recompute the rover's terrain attitude (pitch/roll via conform_pose) + the tip-over stability
+        (margin + risk). Called once per reset/step; _obs + the tip terminal read the stored result."""
+        h = self.cs.derive_height()
+        cf = rover.conform_pose(h, self.rc, self.yaw, cell_m=self.cell_m, payload_kg=self.payload_kg)
+        self._pitch_rad = float(cf["pitch_rad"])
+        self._roll_rad = float(cf["roll_rad"])
+        self._stab = ST.stability(np.degrees(self._pitch_rad), np.degrees(self._roll_rad), **self._geo)
+
     def _obs(self) -> np.ndarray:
         h = self.cs.derive_height()
         r0 = int(round(self.rc[0]))
@@ -147,13 +162,12 @@ class RoverSimEnv(_BASE):
         patch = h[np.ix_(rows, cols)]
         center = h[np.clip(r0, 0, self.grid - 1), np.clip(c0, 0, self.grid - 1)]
         rel = (patch - center).ravel()
-        cf = rover.conform_pose(h, self.rc, self.yaw, cell_m=self.cell_m,
-                                payload_kg=self.payload_kg)
         scal = np.array([
             np.sin(self.yaw), np.cos(self.yaw),
-            cf["pitch_rad"], cf["roll_rad"],
+            self._pitch_rad, self._roll_rad,
             self._last_slip, self._last_sinkage,
             self._goal_dist_cells() / self.grid,
+            self._stab["margin_deg"] / 90.0,           # tip-over margin (deg-to-tip), normalized: <=0 => tipping
         ], dtype=np.float64)
         return np.concatenate([rel, scal]).astype(np.float32)
 
@@ -174,6 +188,7 @@ class RoverSimEnv(_BASE):
         self._steps = 0
         self._last_slip = 0.0
         self._last_sinkage = 0.0
+        self._update_attitude()
         return self._obs(), {"slope_deg": slope_deg}
 
     def step(self, action):
@@ -188,17 +203,26 @@ class RoverSimEnv(_BASE):
         self._last_slip = telem["slip"]
         self._last_sinkage = telem["sinkage_m"]
         self._steps += 1
+        self._update_attitude()                               # post-move attitude + tip-over stability
 
         dist_new = self._goal_dist_cells()
         progress = dist_prev - dist_new                       # cells advanced toward goal
         reward = progress - 0.1 * telem["slip"] - 0.001       # progress - slip penalty - time
         terminated = False
-        if telem["entrapped"]:
+        # DON'T-TIP: terrain tilt past the static stability angle is a tip-over (terminal); the warn band
+        # (approaching the SSA) gets a small shaping penalty so the policy learns to steer away BEFORE it tips.
+        if self._stab["risk"] == "tip":
             reward -= 1.0
             terminated = True
-        elif dist_new <= self.goal_radius:
+        elif self._stab["risk"] == "warn":
+            reward -= 0.05
+        if telem["entrapped"]:                                # DON'T-ENTRAP: slip runaway (Spirit-mode)
+            reward -= 1.0
+            terminated = True
+        elif not terminated and dist_new <= self.goal_radius:
             reward += 1.0
             terminated = True
         truncated = self._steps >= self.max_steps
-        info = {"telem": telem, "dist_cells": dist_new, "reached_goal": dist_new <= self.goal_radius}
+        info = {"telem": telem, "dist_cells": dist_new, "reached_goal": dist_new <= self.goal_radius,
+                "tip_risk": self._stab["risk"], "stability_margin_deg": self._stab["margin_deg"]}
         return self._obs(), float(reward), terminated, truncated, info

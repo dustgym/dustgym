@@ -59,6 +59,25 @@ def test_steep_slope_entrapment_terminal():
     assert r < 0.0                       # entrapment penalty dominates
 
 
+def test_tip_over_terminal_on_a_grade_past_the_stability_angle():
+    # DON'T-TIP: a grade past the static stability angle (~33.7 deg pitch on the modeled geometry) but below
+    # the ~55 deg entrapment regime terminates as a TIP-OVER (terrain-driven; the RASSOR dig adds no tip
+    # moment). The obs exposes the stability margin so a policy can learn to avoid it.
+    env = RoverSimEnv(slope_deg=40.0, start_col=16, goal_col=80, max_steps=50)
+    obs, _ = env.reset(seed=0)
+    assert obs.shape == (env.obs_dim,)                          # +1 scalar (the margin) included
+    _, r, terminated, _, info = env.step([1.0, 0.0])
+    assert terminated and info["tip_risk"] == "tip"            # tipped, not (only) entrapped
+    assert info["stability_margin_deg"] < 0.0 and r < 0.0      # past the SSA, penalized
+
+
+def test_flat_drive_has_positive_stability_margin():
+    env = RoverSimEnv(slope_deg=0.0, start_col=16, goal_col=80, max_steps=50)
+    env.reset(seed=0)
+    _, _, terminated, _, info = env.step([1.0, 0.0])
+    assert info["tip_risk"] == "ok" and info["stability_margin_deg"] > 0.0 and not terminated
+
+
 def test_determinism_same_seed_and_actions():
     actions = [[1.0, 0.1]] * 10
 

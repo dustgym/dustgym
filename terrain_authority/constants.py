@@ -128,6 +128,12 @@ SLIP_C2 = 0.3
 #: Rover dry mass [kg]. [CALIB] (ascend24 TRL-5, "30 kg-class").
 ROVER_MASS_DRY_KG = 30.0
 
+#: Centre-of-mass height [m] above the wheel-contact plane. [ASSUMPTION] — the exact RASSOR/IPEx CG is not
+#: in the public spec; this is a documented, env-overridable assumption used ONLY by the tip-over stability
+#: model (stability.py). With the modeled gauge 0.57 / wheelbase 0.40 m this gives SSA ~33.7 deg pitch /
+#: ~43.5 deg roll (pitch binds: the rover is wider than long).
+CG_HEIGHT_M = 0.30
+
 #: Max drum payload per excavation cycle [kg]. [CALIB] (ascend24: up to 30 kg/cycle,
 #: 15 kg minimum success threshold). Laden weight-on-wheels rises with payload — a
 #: path-dependent dynamic (excavating loads the drums -> more sinkage -> more slip).
