@@ -67,6 +67,7 @@ class RoverSimEnv(_BASE):
                  v_max: float = 0.3, omega_max: float = 1.0, dt: float = 0.1,
                  max_steps: int = 200, payload_kg: float = 0.0,
                  params: "tm.TerramechanicsParams | None" = None, body=None, soil=None,
+                 vehicle=None,
                  randomize: bool = False, slope_max_deg: float = 40.0, patch: int = 5):
         super().__init__()
         self.grid = int(grid)
@@ -107,8 +108,16 @@ class RoverSimEnv(_BASE):
         self.patch = int(patch) | 1            # force odd
         self.obs_dim = self.patch * self.patch + 8   # +1: tip-over stability margin (the "don't tip" signal)
         self.action_dim = 2
-        # tip-over geometry: modeled rover gauge/wheelbase + the [ASSUMPTION] CG height (stability.py)
-        self._geo = dict(gauge_m=rover.WHEEL_GAUGE_M, wheelbase_m=rover.WHEEL_BASE_M, cg_height_m=K.CG_HEIGHT_M)
+        # tip-over geometry: per-vehicle gauge/wheelbase + CG (stability.py). vehicle=None keeps the
+        # rover.py globals (the EZ-RASSOR URDF stance, byte-identical default); pass vehicle="ipex" (etc.)
+        # to select that body's physics model end to end.
+        if vehicle is not None:
+            from . import vehicles as _vehicles
+            self.vehicle = _vehicles.get_vehicle(vehicle).name
+            self._geo = _vehicles.geometry_of(vehicle)
+        else:
+            self.vehicle = None
+            self._geo = dict(gauge_m=rover.WHEEL_GAUGE_M, wheelbase_m=rover.WHEEL_BASE_M, cg_height_m=K.CG_HEIGHT_M)
         self._pitch_rad = 0.0
         self._roll_rad = 0.0
         self._stab = {"margin_deg": 0.0, "risk": "ok"}

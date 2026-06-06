@@ -25,6 +25,21 @@ def test_reset_obs_shape_and_dtype():
     assert "slope_deg" in info
 
 
+def test_vehicle_selects_the_geometry_physics_model():
+    from . import vehicles as V
+    # default (no vehicle) keeps the EZ-RASSOR globals byte-identical
+    default = RoverSimEnv()
+    assert default.vehicle is None
+    assert default._geo == V.geometry_of("ez_rassor")
+    # selecting a vehicle swaps in THAT body's tip-over geometry, end to end
+    ipex = RoverSimEnv(vehicle="ipex")
+    assert ipex.vehicle == "ipex"
+    assert ipex._geo == V.geometry_of("ipex")
+    assert ipex._geo != default._geo                       # distinct physics model
+    ez = RoverSimEnv(vehicle="ez_rassor")
+    assert ez._geo == default._geo                          # ez_rassor == the default globals
+
+
 def test_step_returns_gym_5tuple():
     env = RoverSimEnv()
     env.reset(seed=0)

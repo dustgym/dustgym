@@ -164,6 +164,12 @@ var _lander_yaw_deg := 0.0      # yaw the tag face off-square for oblique fiduci
 var _rover_sink := 0.0          # drop the rover this many metres into the terrain (--rover-sink)
 var _cam_pitch_deg := 0.0       # downward pitch of the stereo pair so the ground fills frame (--cam-pitch)
 var _drums_up := false          # raise BOTH drum arms clear of the camera module (--drums-up; auto in --cameras)
+# selectable rover body (per-vehicle, terrain_authority/vehicles.py). Defaults = the EZ-RASSOR URDF stance,
+# byte-identical to the WHEEL_ORIGINS/ARM consts below. assets/ipex + IPEx gauge/wheelbase render the CC0
+# IPEx body (scripts/gen_ipex_mesh.py). The geometry numbers come from bodies.json _vehicles[name].
+var _rover_assets := "res://assets"   # rover part-glb base dir (--rover-assets)
+var _rover_gauge := 0.57              # lateral track [m] (--rover-gauge)
+var _rover_wheelbase := 0.40          # fore/aft wheelbase [m] (--rover-wheelbase)
 
 # Lander placement ahead of the rover along its forward (+X yawed) direction, so
 # BOTH front cameras see the rover-facing tag face (contract §1/§5). [CALIB].
@@ -554,6 +560,12 @@ func _parse_args() -> void:
 					_rover_rc_override = Vector2i(int(rc[0]), int(rc[1]))
 			"--rover-sink":
 				i += 1; _rover_sink = float(args[i])
+			"--rover-assets":
+				i += 1; _rover_assets = String(args[i])
+			"--rover-gauge":
+				i += 1; _rover_gauge = float(args[i])
+			"--rover-wheelbase":
+				i += 1; _rover_wheelbase = float(args[i])
 			"--cam-pitch":
 				i += 1; _cam_pitch_deg = float(args[i])
 			_:
@@ -1012,12 +1024,23 @@ func _tilt_to_up(yaw_basis: Basis, up: Vector3) -> Basis:
 	return Basis(axis.normalized(), ang) * yaw_basis
 
 
+func _wheel_origins() -> Dictionary:
+	# 4 wheel-pivot origins (Y-up m) from the selected body's track/wheelbase. Default 0.57/0.40
+	# reproduces the EZ-RASSOR WHEEL_ORIGINS const exactly (X = +-wheelbase/2, Z = +-gauge/2).
+	var hg := _rover_gauge * 0.5
+	var hb := _rover_wheelbase * 0.5
+	return {
+		"LF": Vector3(hb, 0.0, -hg), "RF": Vector3(hb, 0.0, hg),
+		"LB": Vector3(-hb, 0.0, -hg), "RB": Vector3(-hb, 0.0, hg),
+	}
+
+
 func _build_rover() -> void:
-	var body_path := "res://assets/rover_body.glb"
+	var body_path := _rover_assets + "/rover_body.glb"
 	var have_parts := FileAccess.file_exists(body_path) \
-		and FileAccess.file_exists("res://assets/wheel.glb") \
-		and FileAccess.file_exists("res://assets/drum.glb") \
-		and FileAccess.file_exists("res://assets/drum_arm.glb")
+		and FileAccess.file_exists(_rover_assets + "/wheel.glb") \
+		and FileAccess.file_exists(_rover_assets + "/drum.glb") \
+		and FileAccess.file_exists(_rover_assets + "/drum_arm.glb")
 	if not have_parts:
 		_build_rover_chassis_only()
 		return
@@ -1038,10 +1061,12 @@ func _build_rover() -> void:
 	body.name = "body"
 	root.add_child(body)
 
-	# 4 wheels — pivot Node3D at the joint origin, spin about local axis, mesh child.
-	for key in WHEEL_ORIGINS.keys():
-		var w := _make_joint("wheel_" + String(key), "res://assets/wheel.glb",
-			WHEEL_ORIGINS[key], Basis.IDENTITY, WHEEL_SPIN, Basis.IDENTITY)
+	# 4 wheels — pivot Node3D at the joint origin, spin about local axis, mesh child. Origins computed
+	# from the selected body's gauge/wheelbase (default 0.57/0.40 reproduces WHEEL_ORIGINS exactly).
+	var origins := _wheel_origins()
+	for key in origins.keys():
+		var w := _make_joint("wheel_" + String(key), _rover_assets + "/wheel.glb",
+			origins[key], Basis.IDENTITY, WHEEL_SPIN, Basis.IDENTITY)
 		if w != null:
 			root.add_child(w)
 
@@ -1059,22 +1084,24 @@ func _build_rover() -> void:
 	# rpy bakes into the mesh-child basis (so the arm mesh points the right way).
 	#   front: origin rpy(pi,0,0) -> pivot rest Rx(pi); visual identity.
 	#   back : origin rpy(0,0,0)  -> pivot rest identity; visual rpy(pi,0,pi) -> Rz(pi)*Rx(pi).
-	var arm_front := _make_joint("arm_front", "res://assets/drum_arm.glb",
-		ARM_FRONT_ORIGIN, Basis(Vector3.RIGHT, PI), arm_front_pitch, Basis.IDENTITY)
-	var arm_back := _make_joint("arm_back", "res://assets/drum_arm.glb",
-		ARM_BACK_ORIGIN, Basis.IDENTITY, arm_back_pitch, Basis(Vector3(0, 0, 1), PI) * Basis(Vector3.RIGHT, PI))
+	var arm_front_origin := Vector3(_rover_wheelbase * 0.5, 0.0, 0.0)
+	var arm_back_origin := Vector3(-_rover_wheelbase * 0.5, 0.0, 0.0)
+	var arm_front := _make_joint("arm_front", _rover_assets + "/drum_arm.glb",
+		arm_front_origin, Basis(Vector3.RIGHT, PI), arm_front_pitch, Basis.IDENTITY)
+	var arm_back := _make_joint("arm_back", _rover_assets + "/drum_arm.glb",
+		arm_back_origin, Basis.IDENTITY, arm_back_pitch, Basis(Vector3(0, 0, 1), PI) * Basis(Vector3.RIGHT, PI))
 
 	# 2 drums — children of their arm pivot, at the arm-relative joint origin.
 	#   front drum: rel basis Rx(pi); visual identity.
 	#   back  drum: rel basis Rx(pi); visual rpy(pi,0,pi) -> Rz(pi)*Rx(pi).
 	if arm_front != null:
-		var drum_front := _make_joint("drum_front", "res://assets/drum.glb",
+		var drum_front := _make_joint("drum_front", _rover_assets + "/drum.glb",
 			DRUM_FRONT_REL, Basis(Vector3.RIGHT, PI), DRUM_FRONT_SPIN, Basis.IDENTITY)
 		if drum_front != null:
 			arm_front.add_child(drum_front)
 		root.add_child(arm_front)
 	if arm_back != null:
-		var drum_back := _make_joint("drum_back", "res://assets/drum.glb",
+		var drum_back := _make_joint("drum_back", _rover_assets + "/drum.glb",
 			DRUM_BACK_REL, Basis(Vector3.RIGHT, PI), DRUM_BACK_SPIN, Basis(Vector3(0, 0, 1), PI) * Basis(Vector3.RIGHT, PI))
 		if drum_back != null:
 			arm_back.add_child(drum_back)
@@ -1117,7 +1144,8 @@ func _build_rover() -> void:
 	var drop := surf_y - aabb.position.y      # lift so min.y == surf_y
 	root.position.y += drop
 	root.position.y -= _rover_sink            # then drop INTO the terrain (--rover-sink; crater scenarios)
-	print("sidecar: assembled articulated EZ-RASSOR (MIT) at (%.2f,%.2f,%.2f); " % [rx, root.position.y, rz],
+	var _body_label := "IPEx (CC0)" if _rover_assets.ends_with("/ipex") else "EZ-RASSOR (MIT)"
+	print("sidecar: assembled articulated %s at (%.2f,%.2f,%.2f); " % [_body_label, rx, root.position.y, rz],
 		"AABB size=(%.2f,%.2f,%.2f) lowest_y=%.3f snapped_to=%.3f" % [
 			aabb.size.x, aabb.size.y, aabb.size.z, aabb.position.y, surf_y])
 

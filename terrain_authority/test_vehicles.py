@@ -10,8 +10,52 @@ import math
 
 import pytest
 
+from terrain_authority import constants as K
 from terrain_authority import ipex_specs as S
+from terrain_authority import rover
 from terrain_authority import vehicles as V
+
+
+def test_both_bodies_registered_with_geometry():
+    # both selectable vehicles exist, each carrying its own geometry (gauge/wheelbase/wheel/CG)
+    assert "ipex" in V.VEHICLES and "ez_rassor" in V.VEHICLES
+    for name in ("ipex", "ez_rassor"):
+        v = V.get_vehicle(name)
+        for f in ("gauge_m", "wheelbase_m", "wheel_radius_m", "cg_height_m", "render_assets"):
+            assert hasattr(v, f), (name, f)
+
+
+def test_ez_rassor_geometry_equals_the_render_globals():
+    # ez_rassor IS the EZ-RASSOR URDF the render + the rover.py globals describe (byte-identical default)
+    v = V.get_vehicle("ez_rassor")
+    assert math.isclose(v.gauge_m, rover.WHEEL_GAUGE_M)
+    assert math.isclose(v.wheelbase_m, rover.WHEEL_BASE_M)
+    assert math.isclose(v.wheel_radius_m, rover.WHEEL_RADIUS_M)
+    assert math.isclose(v.cg_height_m, K.CG_HEIGHT_M)
+    assert v.render_assets == ""                                    # "" -> the default godot_sidecar/assets/
+
+
+def test_ipex_geometry_is_flight_scale():
+    v = V.get_vehicle("ipex")
+    assert math.isclose(v.wheel_radius_m, S.WHEEL_RADIUS_M)         # 0.1524 m, sourced (30.5 cm dia)
+    assert math.isclose(v.gauge_m, round(0.7 * S.SKID_STEER_TRACK_M, 4))   # 0.7 x RASSOR-2 track
+    # the flight IPEx body is narrower + shorter than the EZ-RASSOR demo robot
+    ez = V.get_vehicle("ez_rassor")
+    assert v.gauge_m < ez.gauge_m and v.wheelbase_m < ez.wheelbase_m and v.wheel_radius_m < ez.wheel_radius_m
+    assert v.render_assets == "ipex"                               # the CC0 self-authored parts
+
+
+def test_geometry_of_returns_stability_kwargs_and_differs_per_vehicle():
+    from terrain_authority import stability as ST
+    g_ipex = V.geometry_of("ipex")
+    g_ez = V.geometry_of("ez_rassor")
+    assert set(g_ipex) >= {"gauge_m", "wheelbase_m", "cg_height_m"}
+    # the dict drops straight into stability.stability(); the two bodies give different tip limits
+    lim_ipex = ST.tip_tilt_limit_deg(gauge_m=g_ipex["gauge_m"], wheelbase_m=g_ipex["wheelbase_m"],
+                                     cg_height_m=g_ipex["cg_height_m"])
+    lim_ez = ST.tip_tilt_limit_deg(gauge_m=g_ez["gauge_m"], wheelbase_m=g_ez["wheelbase_m"],
+                                   cg_height_m=g_ez["cg_height_m"])
+    assert lim_ipex != lim_ez                                       # distinct physics models, selectable
 
 
 def test_ipex_vehicle_matches_the_ipex_specs_globals():

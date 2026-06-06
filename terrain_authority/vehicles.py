@@ -69,6 +69,14 @@ class Vehicle:
     drive_power_w: float
     dig_energy_j_per_kg: float         # 0 if it cannot dig
     capabilities: frozenset
+    # geometry — selectable per vehicle (the "physics model" the stability + render stages use). gauge =
+    # lateral track, wheelbase = fore/aft spacing, cg_height feeds the static-stability angle (stability.py).
+    # render_assets = the godot_sidecar/assets subdir for this body's part-glbs ("" -> the default assets/).
+    gauge_m: float = 0.0
+    wheelbase_m: float = 0.0
+    wheel_radius_m: float = 0.0
+    cg_height_m: float = 0.0
+    render_assets: str = ""
     onboard_power: tuple = ()          # default PowerSource name(s) carried onboard
     provenance: str = ""
 
@@ -100,16 +108,44 @@ VEHICLES = {
     "ipex": Vehicle(
         "ipex", "ISRU Pilot Excavator (IPEx)",
         dry_mass_kg=S.ROVER_MASS_CLASS_KG, n_wheels=S.N_WHEELS,
-        wheel_width_m=0.18, contact_len_m=0.10,             # the values the drive chain uses today
+        wheel_width_m=0.18, contact_len_m=0.10,             # drive-chain values (unchanged)
         drum_capacity_kg=S.REGOLITH_PER_CYCLE_KG,
         drive_power_w=S.drive_power_w(), dig_energy_j_per_kg=S.dig_energy_per_kg(),
         capabilities=frozenset({"drive", "excavate", "haul", "dump", "compact"}),   # NO sinter
+        # flight-IPEx geometry: wheel r 0.1524 m + drum sourced; track = 0.7 x RASSOR-2 (0.5207); wheelbase
+        # + CG are [CALIB] (no published IPEx number). Render = the CC0 self-authored body (assets/ipex/).
+        gauge_m=round(0.7 * S.SKID_STEER_TRACK_M, 4), wheelbase_m=0.30,
+        wheel_radius_m=S.WHEEL_RADIUS_M, cg_height_m=0.21, render_assets="ipex",
         onboard_power=("ipex_battery",),
         provenance="ipex_specs.py (Schuler et al., IPEx TRL-5, NTRS 20240008162); a RASSOR-lineage drum "
-                   "excavator -> no sinter tool on the baseline platform."),
+                   "excavator -> no sinter tool on the baseline platform. Geometry: wheel r + drum sourced; "
+                   "track = 0.7 x RASSOR-2 0.5207 m; wheelbase/CG [CALIB]. Render body = CC0 self-authored "
+                   "(scripts/gen_ipex_mesh.py)."),
+    "ez_rassor": Vehicle(
+        "ez_rassor", "EZ-RASSOR-geometry rover (render body)",
+        dry_mass_kg=S.ROVER_MASS_CLASS_KG, n_wheels=S.N_WHEELS,
+        wheel_width_m=0.18, contact_len_m=0.10,
+        drum_capacity_kg=S.REGOLITH_PER_CYCLE_KG,
+        drive_power_w=S.drive_power_w(), dig_energy_j_per_kg=S.dig_energy_per_kg(),
+        capabilities=frozenset({"drive", "excavate", "haul", "dump", "compact"}),
+        # EZ-RASSOR URDF stance (the rover.py globals + the default rendered mesh): the historical default.
+        gauge_m=0.57, wheelbase_m=0.40, wheel_radius_m=0.18, cg_height_m=C.CG_HEIGHT_M, render_assets="",
+        onboard_power=("ipex_battery",),
+        provenance="Geometry = the MIT EZ-RASSOR URDF (FlaSpaceInst/UCF; docs/ezrassor_assets.md), the body "
+                   "the default Godot mesh + the rover.py globals describe. Energy/drum REUSE the "
+                   "IPEx-grounded model -- EZ-RASSOR's own mass/power are not separately sourced and are NOT "
+                   "fabricated here. Mirrors rover.WHEEL_GAUGE_M/WHEEL_BASE_M/WHEEL_RADIUS_M + CG_HEIGHT_M."),
 }
 
 DEFAULT_VEHICLE = "ipex"
+
+
+def geometry_of(vehicle) -> dict:
+    """The stability/tip-over geometry for a vehicle, as the exact kwargs ``stability.stability`` takes
+    (gauge_m / wheelbase_m / cg_height_m). The render/RL/stability stages read this so the chosen body's
+    physics model is used end to end. ``wheel_radius_m`` is read via the Vehicle directly (climb limit)."""
+    v = get_vehicle(vehicle)
+    return {"gauge_m": v.gauge_m, "wheelbase_m": v.wheelbase_m, "cg_height_m": v.cg_height_m}
 
 
 # ---- lookups (KeyError on unknown, like bodies.get_body) -----------------------------------------

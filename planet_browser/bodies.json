@@ -126,7 +126,35 @@
       ],
       "onboard_power": [
         "ipex_battery"
-      ]
+      ],
+      "gauge_m": 0.3645,
+      "wheelbase_m": 0.3,
+      "wheel_radius_m": 0.1525,
+      "cg_height_m": 0.21,
+      "render_assets": "ipex"
+    },
+    "ez_rassor": {
+      "label": "EZ-RASSOR-geometry rover (render body)",
+      "dry_mass_kg": 30.0,
+      "n_wheels": 4,
+      "drum_capacity_kg": 30.0,
+      "drive_power_w": 40.38,
+      "dig_energy_j_per_kg": 4151.4,
+      "capabilities": [
+        "compact",
+        "drive",
+        "dump",
+        "excavate",
+        "haul"
+      ],
+      "onboard_power": [
+        "ipex_battery"
+      ],
+      "gauge_m": 0.57,
+      "wheelbase_m": 0.4,
+      "wheel_radius_m": 0.18,
+      "cg_height_m": 0.3,
+      "render_assets": ""
     }
   },
   "_power": {

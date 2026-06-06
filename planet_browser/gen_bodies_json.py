@@ -44,6 +44,9 @@ out["_vehicles"] = {
         "drum_capacity_kg": v.drum_capacity_kg, "drive_power_w": round(v.drive_power_w, 2),
         "dig_energy_j_per_kg": round(v.dig_energy_j_per_kg, 1),
         "capabilities": sorted(v.capabilities), "onboard_power": list(v.onboard_power),
+        # geometry + render body so the UI/Godot can select the per-vehicle physics + mesh (both bodies)
+        "gauge_m": v.gauge_m, "wheelbase_m": v.wheelbase_m, "wheel_radius_m": v.wheel_radius_m,
+        "cg_height_m": v.cg_height_m, "render_assets": v.render_assets,
     }
     for name, v in V.VEHICLES.items()
 }

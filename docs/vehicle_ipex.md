@@ -104,14 +104,34 @@ with IPEx-sized 30.5 cm wheels, in the KSC Regolith Test Bed (120 t of BP-1, 8×
   (sheared/avalanched). The planner's `max_traverse_slope_deg` default (25°) sits
   between the IPEx **nominal** 15° (`NOMINAL_SLOPE_DEG`) and that ~30° failure.
 
-**Sim geometry vs flight IPEx.** The sim rover's render/track geometry lives in
-`rover.py` (from John's Godot sidecar `WHEEL_ORIGINS`): gauge 0.57 m, wheelbase
-0.40 m, wheel radius 0.18 m — a **30 kg-class, IPEx-class** rover, used by the
-wheel-track stamping and the `stability.py` tip-over model. The published flight
-IPEx values (wheel r = 0.1524 m, skid-steer track z = 0.5207 m) are held
-separately in `ipex_specs.py` (`WHEEL_RADIUS_M`, `SKID_STEER_TRACK_M`) as sourced
-reference, deliberately **not** overwriting John's render model. They agree to
-within ~10% on track (0.57 vs 0.52) and bracket the same vehicle class.
+**Two selectable bodies (both physics models, at every stage).** The rover body is a
+choice in the `vehicles.py` registry, each entry carrying its own geometry
+(gauge / wheelbase / wheel-radius / CG) and render assets:
+
+- **`ez_rassor`** (the default geometry): gauge 0.57 m, wheelbase 0.40 m, wheel r
+  0.18 m — the **MIT EZ-RASSOR URDF** stance (`rover.py` globals + the default
+  rendered mesh). This is what the wheel-track stamping and `stability.py` use when
+  no vehicle is selected, so the default is **byte-identical** to before.
+- **`ipex`**: wheel r 0.1524 m (sourced), skid-steer track 0.365 m (= 0.7 × the
+  RASSOR-2 0.5207 m), wheelbase + CG `[CALIB]` — the flight-scale body. Its render
+  mesh is the **CC0 self-authored primitive** (`scripts/gen_ipex_mesh.py` →
+  `godot_sidecar/assets/ipex/`), since no public IPEx CAD exists.
+
+The selection threads through every stage: `RoverSimEnv(vehicle=…)` (RL + tip-over
+physics), `vehicles.geometry_of(name)` (the exact `stability.stability` kwargs),
+`bodies.json` `_vehicles[name]` (the browser pickers), and the Godot sidecar
+(`--rover-assets` / `--rover-gauge` / `--rover-wheelbase`, defaulting to the
+EZ-RASSOR stance). Energy / drum / terramechanics are shared (IPEx-grounded); the
+two bodies differ in **geometry → tip-over physics + render mesh**. The flight-IPEx
+geometry is the principled fix to the original "is the render geometry wrong?"
+question: the EZ-RASSOR stance is correct *for the EZ-RASSOR mesh*; `ipex` is the
+genuine flight-scale body, authored rather than mislabeled.
+
+Both bodies are **headless-render-verified** (Godot 4.6.3 + xvfb + Vulkan): the
+default assembles the EZ-RASSOR mesh (AABB 1.83×0.66×1.70 m), and `--rover-assets
+res://assets/ipex --rover-gauge 0.3645 --rover-wheelbase 0.30` assembles the CC0
+IPEx primitive at its smaller flight scale (AABB 1.26×0.58×0.99 m). Evidence:
+`godot_sidecar/out/body_ez_rassor.png`, `body_ipex_cc0.png`.
 
 ## BP-1 is the terrestrial test simulant, not the lunar surface
 

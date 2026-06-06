@@ -44,37 +44,34 @@ CHASSIS_H_M = 0.18                           # [CALIB] body height
 ARM_LENGTH_M = 0.30                          # [CALIB] drum-arm reach from its shoulder pivot
 ARM_THICK_M = 0.06                           # [CALIB] arm link cross-section
 
-# neutral metallic palette so the render is not default white (cosmetic only)
-_GRAY = [120, 124, 130, 255]
-_DARK = [60, 62, 66, 255]
-_STEEL = [150, 152, 158, 255]
-
-
-def _color(mesh: trimesh.Trimesh, rgba) -> trimesh.Trimesh:
-    mesh.visual.face_colors = rgba
+def _finish(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Consistent outward normals so the part lights correctly (no normals -> the mesh renders black);
+    no baked material -- the sidecar applies its own grey rover material, exactly as for the EZ-RASSOR glbs."""
+    mesh.fix_normals()
+    _ = mesh.vertex_normals          # force normals to exist so the glTF export writes a NORMAL accessor
     return mesh
 
 
 def _wheel() -> trimesh.Trimesh:
     """Cylinder of the sourced flight radius, axis along Z (circular in the spin plane, centered)."""
-    return _color(trimesh.creation.cylinder(radius=WHEEL_RADIUS_M, height=WHEEL_WIDTH_M, sections=40), _DARK)
+    return _finish(trimesh.creation.cylinder(radius=WHEEL_RADIUS_M, height=WHEEL_WIDTH_M, sections=40))
 
 
 def _drum() -> trimesh.Trimesh:
     """IPEx medium bucket drum as a cylinder (sourced dia/width), centered at its spin axis."""
-    return _color(trimesh.creation.cylinder(radius=DRUM_DIAMETER_M / 2.0, height=DRUM_WIDTH_M, sections=40), _STEEL)
+    return _finish(trimesh.creation.cylinder(radius=DRUM_DIAMETER_M / 2.0, height=DRUM_WIDTH_M, sections=40))
 
 
 def _chassis() -> trimesh.Trimesh:
     """Box body at base_link (centered)."""
-    return _color(trimesh.creation.box(extents=[CHASSIS_L_M, CHASSIS_W_M, CHASSIS_H_M]), _GRAY)
+    return _finish(trimesh.creation.box(extents=[CHASSIS_L_M, CHASSIS_W_M, CHASSIS_H_M]))
 
 
 def _arm() -> trimesh.Trimesh:
     """Box arm link whose pivot end sits at the origin and which extends +X by ARM_LENGTH_M."""
     m = trimesh.creation.box(extents=[ARM_LENGTH_M, ARM_THICK_M, ARM_THICK_M])
     m.apply_translation([ARM_LENGTH_M / 2.0, 0.0, 0.0])     # pivot at origin (matches convert_part convention)
-    return _color(m, _GRAY)
+    return _finish(m)
 
 
 def build_parts() -> dict[str, trimesh.Trimesh]:
