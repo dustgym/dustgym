@@ -460,17 +460,22 @@ def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
                     return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
         else:
             dem, origin = None, (0.0, 0.0)
+        # RB-03: compute the plan ONCE; report/timeline/IR are views of this single result (no recompute).
+        result = MP.plan(mission, dem=dem, dem_origin=origin,
+                         algorithm=req.algorithm, objective=req.objective, vehicles=req.vehicles)
         # I10: hauls routed around hazards on the real DEM; I8 + I6/M11 slope-feasible siting.
         with _REPORT_LOCK:                              # serialize the thread-unsafe matplotlib report path
             pdf, md, totals = MP.run(mission, stem=_plan_stem(payload), dem=dem, dem_origin=origin,
-                                     algorithm=req.algorithm, objective=req.objective, vehicles=req.vehicles)
+                                     algorithm=req.algorithm, objective=req.objective,
+                                     vehicles=req.vehicles, result=result)
         validation = MP.validate_plan(mission, dem=dem, dem_origin=origin)
         timeline = MP.build_timeline(mission, dem=dem, dem_origin=origin,
-                                     algorithm=req.algorithm, objective=req.objective)
+                                     algorithm=req.algorithm, objective=req.objective, result=result)
         endurance = MP.endurance(mission, dem=dem, dem_origin=origin)
         autonomy, perception = _autonomy_perception(mission, dem, origin, req.algorithm, req.objective)
         plan_ir = MP.plan_ir(mission, dem=dem, dem_origin=origin,                # the machine-executable plan
-                             algorithm=req.algorithm, objective=req.objective, vehicles=req.vehicles)
+                             algorithm=req.algorithm, objective=req.objective,
+                             vehicles=req.vehicles, result=result)
     except (ValueError, RuntimeError) as e:             # bad input / sinter-gated -> honest 400
         return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
     return {
@@ -484,6 +489,7 @@ def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
         "autonomy": autonomy,
         "perception": perception,
         "plan_ir": plan_ir,                             # versioned typed-action plan a rover/ROS executive runs
+        "provenance": result.provenance,                # RB-03/CT-07: schema, mode, config, input hash of THE plan
     }
 
 

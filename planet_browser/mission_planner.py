@@ -847,6 +847,58 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
     return trips, flows, per_trip, tl, totals
 
 
+# ---- RB-03: ONE immutable plan artifact that every output is a view of -----------------------------
+PLAN_RESULT_VERSION = "1.0"
+
+
+@dataclasses.dataclass(frozen=True)
+class PlanResult:
+    """The single source-of-truth plan (RB-03). Produced ONCE by ``plan()``; totals, report, Plan IR,
+    timeline, and the browser are VIEWS over it, never independent recomputations of the planner.
+    Frozen prevents field reassignment; the contained list/dicts are read-only by convention."""
+    mission: "Mission"
+    dem_origin: tuple
+    trips: list
+    flows: dict
+    per_trip: list
+    tl: list
+    totals: dict
+    provenance: dict
+
+    def as_tuple(self):
+        """The legacy (trips, flows, per_trip, tl, totals) shape older call sites consume."""
+        return self.trips, self.flows, self.per_trip, self.tl, self.totals
+
+
+def _plan_provenance(mission, *, algorithm, objective, vehicles, dem_origin):
+    """CT-07: provenance for a PlanResult -- schema version, mode, the planning config, and a DETERMINISTIC
+    content hash of the mission + origin + config, so a result is tied to exactly the inputs that made it."""
+    canon = json.dumps({
+        "mission": dataclasses.asdict(mission), "dem_origin": list(dem_origin),
+        "algorithm": str(algorithm), "objective": str(objective), "vehicles": int(vehicles),
+    }, sort_keys=True, default=str)
+    return {
+        "schema_version": PLAN_RESULT_VERSION, "mode": "PLAN",
+        "config": {"algorithm": str(algorithm), "objective": str(objective), "vehicles": int(vehicles)},
+        "input_sha256": hashlib.sha256(canon.encode()).hexdigest(),
+    }
+
+
+def plan(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
+         algorithm="nearest", objective="time", vehicles=1) -> PlanResult:
+    """RB-03 keystone: compute the canonical plan ONCE and package it as an immutable PlanResult. Pass the
+    result to ``run`` / ``build_timeline`` / ``plan_ir`` so they do NOT each re-run the planner (the server
+    does this), guaranteeing totals/report/timeline/IR/playback describe one and the same plan. Wraps
+    plan_and_simulate (single-vehicle or, for vehicles>1, the fleet planner)."""
+    trips, flows, per_trip, tl, totals = plan_and_simulate(
+        mission, dem=dem, dem_origin=dem_origin, max_traverse_slope_deg=max_traverse_slope_deg,
+        algorithm=algorithm, objective=objective, vehicles=vehicles)
+    prov = _plan_provenance(mission, algorithm=algorithm, objective=objective,
+                            vehicles=vehicles, dem_origin=dem_origin)
+    return PlanResult(mission=mission, dem_origin=tuple(dem_origin), trips=trips, flows=flows,
+                      per_trip=per_trip, tl=tl, totals=totals, provenance=prov)
+
+
 # ---- executable Plan IR: the machine-consumable plan a rover / ROS executive runs (vs the human PDF) ----
 PLAN_IR_VERSION = "1.0"
 _IR_OP = {"cutfill": "CutHaulFill", "dig": "Excavate", "import": "Import", "sinter": "Sinter"}
@@ -855,7 +907,7 @@ _IR_MODEL_ERR_FRAC = 0.12   # per-action energy/time tolerance band (the plan's 
 
 
 def plan_ir(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
-            algorithm="nearest", objective="time", vehicles=1, plan_id=None):
+            algorithm="nearest", objective="time", vehicles=1, plan_id=None, result=None):
     """Emit a versioned, machine-EXECUTABLE plan IR -- the artifact a rover / ROS executive consumes, as
     opposed to the human PDF. An ordered list of typed actions (GoTo / Excavate / CutHaulFill / Import /
     Sinter), each with expected duration/energy/distance, a model-error tolerance band, and preconditions
@@ -864,9 +916,11 @@ def plan_ir(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_s
     not positional actions -- they are precondition-driven (an executive recharges when `battery_J_min` is
     violated), so the IR stays valid under the real battery draw. Built by lowering the simulated plan."""
     from .map_channel import COVERAGE_DIG_GATE
-    trips, _flows, _per_trip, _tl, totals = plan_and_simulate(
-        mission, dem=dem, dem_origin=dem_origin, max_traverse_slope_deg=max_traverse_slope_deg,
-        algorithm=algorithm, objective=objective, vehicles=vehicles)
+    if result is None:                                  # RB-03: reuse the shared plan if given (no recompute)
+        result = plan(mission, dem=dem, dem_origin=dem_origin,
+                      max_traverse_slope_deg=max_traverse_slope_deg,
+                      algorithm=algorithm, objective=objective, vehicles=vehicles)
+    trips, _flows, _per_trip, _tl, totals = result.as_tuple()
     reserve_J = round(RESERVE_FRAC * BATTERY_J, 1)
     actions = []
     trip_work_aid = {}                                 # trip index -> its work-action id (precedence lowering)
@@ -980,15 +1034,17 @@ def compare_algorithms(mission: Mission, *, objective="time", algorithms=None, d
 
 
 def build_timeline(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
-                   algorithm="nearest", objective="time"):
+                   algorithm="nearest", objective="time", result=None):
     """P5 (execute + watch): turn the battery-aware simulation into a compact, animatable timeline. Each
     frame is a time-bounded segment carrying the rover's start/end position, battery fraction, phase, and
     cumulative mass moved; the browser interpolates the rover marker + telemetry HUD along it. Positions
     come from the actual sim moves (drive/charge/work), not a reconstruction. Honors the chosen sequencer
     so the animation matches the planned order."""
-    _, _, _, tl, totals = plan_and_simulate(mission, dem=dem, dem_origin=dem_origin,
-                                            max_traverse_slope_deg=max_traverse_slope_deg,
-                                            algorithm=algorithm, objective=objective)
+    if result is None:                                  # RB-03: reuse the shared plan if given (no recompute)
+        result = plan(mission, dem=dem, dem_origin=dem_origin,
+                      max_traverse_slope_deg=max_traverse_slope_deg,
+                      algorithm=algorithm, objective=objective)
+    _, _, _, tl, totals = result.as_tuple()
     frames = []
     cum = 0.0
     for s in tl:
@@ -1747,15 +1803,17 @@ def demo_mission():
 
 
 def run(mission: Mission, stem=None, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
-        algorithm="nearest", objective="time", vehicles=1):
+        algorithm="nearest", objective="time", vehicles=1, result=None):
     """Plan + simulate + render the report. ``stem`` names the output files (default = the date); the
     server passes a unique per-mission stem so concurrent plans don't overwrite each other. When ``dem``
     is supplied (server passes the real Haworth DEM for Moon), hauls are I10-routed around hazards.
     ``algorithm`` x ``objective`` select the pluggable sequencer + optimization metric. ``vehicles`` > 1
-    plans a multi-vehicle fleet (plan_multi)."""
-    trips, flows, per_trip, tl, totals = plan_and_simulate(
-        mission, dem=dem, dem_origin=dem_origin, max_traverse_slope_deg=max_traverse_slope_deg,
-        algorithm=algorithm, objective=objective, vehicles=vehicles)
+    plans a multi-vehicle fleet (plan_multi). ``result`` reuses a shared PlanResult (RB-03; no recompute)."""
+    if result is None:
+        result = plan(mission, dem=dem, dem_origin=dem_origin,
+                      max_traverse_slope_deg=max_traverse_slope_deg,
+                      algorithm=algorithm, objective=objective, vehicles=vehicles)
+    trips, flows, per_trip, tl, totals = result.as_tuple()
     os.makedirs(os.path.join(HERE, "reports"), exist_ok=True)
     stem = stem or f"{mission.date}_mission_plan"
     pdf = os.path.join(HERE, "reports", f"{stem}.pdf")
