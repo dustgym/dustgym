@@ -28,5 +28,5 @@ jobs:
         run: ruff check --select F terrain_authority planet_browser dustgym scripts viz
       - name: Type check (mypy; mission-planner + core enforced, sim modules ratcheted in pyproject)
         run: mypy
-      - name: Test + coverage gate (numpy core + planner; gated tiers skip)
-        run: pytest terrain_authority planet_browser --cov --cov-report=term-missing
+      - name: Test + coverage gate (the CONFIGURED suite; testpaths = core + planner + scripts; gated tiers skip)
+        run: pytest --cov --cov-report=term-missing
