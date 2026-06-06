@@ -232,6 +232,7 @@ monolithic learned latent world model. The five layers and their status:
 | ID | P | Requirement | Status |
 |---|---|---|---|
 | M1 | P0 | Render primitives exist (Godot 3D + top-down DEM) | ✅ Godot renders + matplotlib top-down |
+| M1b | P1 | **Tabbed cockpit + live UI eval** (Plan/Perception/Metrics/Report + Validation/API/Server/Config panes) | ✅ the view-pane switcher; `scripts/ui_eval.py` drives it in a real headless browser, screenshots all 8 panes + a planned berm mission, asserts each renders with no JS errors. **EVAL PASSED 2026-06-06** (8/8 panes, globe + PDF + figures + live metrics all real; as-built correctly fails at 3.1 cm; map survey-first fired). `docs/ui_eval_2026-06-06.md` |
 | M2 | P1 | **Interactive viewer** (load a map, pan/zoom/tilt) | 🟡 `planet_browser/index.html` (CesiumJS + NASA Trek WMTS; body dropdown Moon/Mars; pan/zoom/tilt; coord entry+load); sim-coupled 3D camera ⬜ |
 | M3 | P1 | **Map-load UI** (pick real tile by body+coord → into the planner) | 🟡 real-tile select via Trek + coord-load ✅; procedural-seed + push-into-sim ⬜ |
 | M4 | P1 | **Build-order authoring UI** (place footprints on the map = a Mission) | ✅ build-order panel (live mass·weight·energy·drum·dig-hr estimate via body g + bodies.json) + persistent **queue** (add/list/reorder/delete + from-pad/berm) wired to the planner (P1/S7) |
