@@ -29,8 +29,8 @@ requirements:
     V: P
     Q: NA
     owner: active
-    source: terrain_authority/validation.py (planned), terrain_authority/column_state.py
-    acceptance: scripts/../terrain_authority/test_validation.py (planned)
+    source: terrain_authority/validation.py, terrain_authority/column_state.py
+    acceptance: terrain_authority/test_validation.py
     evidence: ""
     blocked_by: [RB-02]
     last_verified: 2026-06-06
@@ -114,8 +114,8 @@ requirements:
     V: P
     Q: NA
     owner: active
-    source: terrain_authority/validation.py (planned)
-    acceptance: terrain_authority/test_validation.py (planned)
+    source: terrain_authority/validation.py
+    acceptance: terrain_authority/test_validation.py
     evidence: ""
     blocked_by: []
     last_verified: 2026-06-06
@@ -128,7 +128,7 @@ requirements:
     Q: NA
     owner: active
     source: terrain_authority/column_state.py
-    acceptance: terrain_authority/test_column_state.py
+    acceptance: terrain_authority/test_column_state_invariants.py
     evidence: ""
     blocked_by: []
     last_verified: 2026-06-06
@@ -141,7 +141,7 @@ requirements:
     Q: NA
     owner: unassigned
     source: terrain_authority/column_state.py
-    acceptance: terrain_authority/test_column_state.py
+    acceptance: terrain_authority/test_column_state_invariants.py
     evidence: ""
     blocked_by: []
     last_verified: 2026-06-06
@@ -179,7 +179,7 @@ requirements:
     V: N
     Q: NA
     owner: active
-    source: terrain_authority/validation.py (planned)
+    source: terrain_authority/validation.py
     acceptance: ""
     evidence: ""
     blocked_by: [RB-01]

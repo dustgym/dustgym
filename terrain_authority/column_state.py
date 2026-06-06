@@ -27,6 +27,7 @@ from enum import IntEnum
 import numpy as np
 
 from . import constants as K
+from . import validation as V
 
 
 class StateLabel(IntEnum):
@@ -94,6 +95,22 @@ class ColumnState:
             self.disturbance = np.zeros(shape, dtype=np.float64)
         if self.datum is None:
             self.datum = np.zeros(shape, dtype=np.float64)
+        self._validate_fields()                                                 # RB-01/CT-02: reject bad arrays at construction
+
+    def _validate_fields(self) -> None:
+        """CT-02: every field has the (height, width) shape, the right dtype kind, and a valid physical
+        domain — checked at construction so a caller cannot inject NaN/Inf/negative state. Raises
+        ``validation.DomainError`` (a ``ValueError``)."""
+        shape = (self.height, self.width)
+        V.ensure_positive_scalar(self.cell_m, "cell_m")
+        V.ensure_nonneg(V.ensure_kind(V.ensure_shape(self.mass_areal, shape, "mass_areal"), "f", "mass_areal"), "mass_areal")
+        V.ensure_positive(V.ensure_kind(V.ensure_shape(self.density, shape, "density"), "f", "density"), "density")
+        V.ensure_nonneg(V.ensure_kind(V.ensure_shape(self.disturbance, shape, "disturbance"), "f", "disturbance"), "disturbance")
+        V.ensure_finite(V.ensure_kind(V.ensure_shape(self.datum, shape, "datum"), "f", "datum"), "datum")   # datum may be negative (elevation)
+        V.ensure_kind(V.ensure_shape(self.state_label, shape, "state_label"), "iu", "state_label")
+        if self.ice is not None:
+            V.ensure_nonneg(V.ensure_kind(V.ensure_shape(self.ice, shape, "ice"), "f", "ice"), "ice")
+        V.ensure_nonneg_scalar(self.drum_inventory, "drum_inventory")
 
     # -- geometry ----------------------------------------------------------
 
@@ -125,19 +142,14 @@ class ColumnState:
         return self.grid_mass() + self.drum_inventory
 
     def check_invariants(self) -> None:
-        """N14: runtime guard for the conserved-state invariants (spec §10), raising on violation. Unlike
-        the test-only assertions, this is callable in production / CI: mass finite and non-negative, density
-        positive (so height is well-defined), derived height finite, drum inventory non-negative."""
-        if not np.all(np.isfinite(self.mass_areal)):
-            raise ValueError("ColumnState invariant violated: mass_areal has non-finite values")
-        if np.any(self.mass_areal < 0.0):
-            raise ValueError("ColumnState invariant violated: negative mass_areal")
-        if np.any(self.density <= 0.0):
-            raise ValueError("ColumnState invariant violated: non-positive density (height undefined)")
-        if not np.all(np.isfinite(self.derive_height())):
-            raise ValueError("ColumnState invariant violated: derived height is non-finite")
-        if self.drum_inventory < 0.0:
-            raise ValueError("ColumnState invariant violated: negative drum_inventory")
+        """CT-03/N14: runtime guard for the conserved-state invariants (spec §10), raising on violation.
+        Callable in production / CI (not a removable assert, CT-06): mass finite and non-negative, density
+        positive (so height is well-defined), derived height finite, drum inventory non-negative. Shares the
+        ``validation`` helpers with construction so a mutation cannot leave a state the constructor would reject."""
+        V.ensure_nonneg(self.mass_areal, "mass_areal")              # finite + >= 0
+        V.ensure_positive(self.density, "density")                  # finite + > 0 (height defined)
+        V.ensure_finite(self.derive_height(), "derived height")
+        V.ensure_nonneg_scalar(self.drum_inventory, "drum_inventory")
 
     @contextlib.contextmanager
     def conserves_mass(self, *, rtol: float = 1e-9):

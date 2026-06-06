@@ -15,9 +15,12 @@ from __future__ import annotations
 import os
 
 import numpy as np
+import pytest
 
-import obs_map_producer as omp
-from score_map import score_map
+pytest.importorskip("cv2")   # T4 ROS-bridge: obs_map_producer needs OpenCV (container-only) -> skip on the bare CI runner
+
+import obs_map_producer as omp  # noqa: E402
+from score_map import score_map  # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.normpath(os.path.join(_HERE, "..", ".."))
