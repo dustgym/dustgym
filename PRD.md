@@ -5,8 +5,9 @@ there is one software, the **dustgym** monorepo (flat layout: `terrain_authority
 + `planet_browser/` product, all at the repo root); the former `roversim` dev tree is deprecated and folded
 in. The conserved Tier-2 terramechanics core originates with **John McCardle** (CC0 provenance); dustgym is
 the single CC0 software going forward. **Related:** `docs/architecture_review.md` (the production-readiness
-review this version answers), `docs/world_model.md`, `building_taxonomy.md`, `planet_browser/mission_planner.py`
-(planner + report), `planet_browser/server.py` (the API). **Legend:** ✅ done · 🟡 partial · ⬜ to build · ⛔
+review this version answers), `docs/world_model.md`, `docs/vehicle_ipex.md` (the modelled vehicle — IPEx,
+RASSOR-precursor — grounded in the 6 NASA IPEx papers), `building_taxonomy.md`,
+`planet_browser/mission_planner.py` (planner + report), `planet_browser/server.py` (the API). **Legend:** ✅ done · 🟡 partial · ⬜ to build · ⛔
 gated (render throughput / external oracle). **Priority:** P0 core-now · P1 next · P2 later · P3 research-bet.
 
 **This version's intent (new):** make dustgym a **production-grade system**, not a research artifact. The
@@ -392,9 +393,13 @@ Shipped/Forward backlog below is the detail this sequence orders.
 
 **Parallel science track (mostly independent; partly host-gated) — runs alongside Phases 2-4.**
 - **P6** map-channel reward + a CI regression gate (Hapke<Lambert, real-DEM block RMSE) + tiny committed real
-  render fixtures; **F3 render throughput** (the keystone unblock for camera-in-the-loop). **P7** Chrono live
-  producer / SCM oracle (host-gated). **Autonomy: AL7 fault handling** + perception-in-loop + in-loop terrain
-  mutation (prerequisites for fleet FDIR / MV5).
+  render fixtures; **F3 render throughput** (the keystone unblock for camera-in-the-loop). The P6 objective is
+  now **anchored to the official Lunar Autonomy Challenge spec** (Mueller/Schuler/Caterpillar, MaGIC 2024):
+  *"map a simulated lunar surface… develop terrain height maps and identify rocks given power and data
+  budgets"* (see `docs/vehicle_ipex.md`). **P7** Chrono live producer / SCM oracle (host-gated) — the official
+  IPEx digital twin uses **Chrono SCM** for deformation, which "supports bulldozing but **not excavation**";
+  dustgym's mass-exact excavation terramechanics is exactly that gap. **Autonomy: AL7 fault handling** +
+  perception-in-loop + in-loop terrain mutation (prerequisites for fleet FDIR / MV5).
 
 **Phase 5 — Release + ops.**
 - **N16** CHANGELOG + SemVer + release flow · **N17** deployment doc + container · **N18** reproducibility

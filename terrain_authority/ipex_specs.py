@@ -8,6 +8,18 @@ coefficients. Every constant carries its provenance. Primary source:
               NTRS 20240008162.  IPEx mass/speed/size/power were estimated by recreating the
               ConOps with the RASSOR 2 proof-of-concept, recording battery + actuator current
               draw, and applying a ~0.7 one-dimensional scaling factor (RASSOR 2 -> IPEx).
+              IPEx IS the modelled vehicle; RASSOR (Mueller 2013, the TRL-4 counter-rotating
+              bucket-drum proof of concept) is its PRECURSOR/pilot, not the flight system.
+  [WHEELTEST] L. Zhang, J. Schuler, et al., "ISRU Pilot Excavator Wheel Testing in Lunar
+              Regolith Simulant", ASCE Earth & Space 2024.  IPEx flight wheel = 30.5 cm dia
+              (r = 0.1524 m); skid-steer kinematic track z = 0.5207 m (Eq.1); ConOps 70 km @
+              <=30 cm/s; 20 deg slope test; BP-1 simulant @ ~1.75 g/cm^3; "full slip = wheels
+              dig themselves deeper" (the slip-entrapment failure mode).
+  [BDSCALE]   J. Schuler, A. Nick, et al., "ISRU Pilot Excavator: Bucket Drum Scaling
+              Experimental Results", ASCE Earth & Space 2022.  Avg regolith collected per drum
+              (small 3.80 / medium 7.30 / large 24.98 kg); drum tangential velocity 8.5x linear
+              cut speed; cut depth <=50% of scoop opening; BP-1 shear-vane 27-32 kPa,
+              penetrometer 206-226 kPa.
   [BATTERY]   Current flight build: 12S Li-ion pack, ~30 Ah (per project lead, 2026-06-02).
               Test-rig bus was swept at 47.6 / 53.2 / 58.8 V (a 14S range, 58.8 = 14*4.2);
               the 12S/30Ah figure here is the current pack, not the dynamometer rig.
@@ -43,6 +55,41 @@ N_WHEELS = 4
 
 # Table 7 note: "18.5 Nm is predicted excavation load on the moon" (arm actuator).
 ARM_EXCAVATION_LOAD_NM = 18.5
+
+# ---- Flight-IPEx geometry [WHEELTEST][SCHULER24] ------------------------------------------
+# These are the FLIGHT-IPEx published dimensions. The sim rover's render geometry (rover.py
+# WHEEL_GAUGE_M/WHEEL_BASE_M/WHEEL_RADIUS_M, from John's Godot sidecar) is an IPEx-CLASS rover
+# of the same 30 kg class; it is NOT overwritten here -- see docs/vehicle_ipex.md for the
+# sim-geometry-vs-flight-IPEx reconciliation.
+WHEEL_DIAMETER_M = 0.305           # "IPEx-sized wheels, which were 30.5 cm in diameter" [WHEELTEST]
+WHEEL_RADIUS_M = WHEEL_DIAMETER_M / 2.0   # r = 0.1524 m, the value used in the skid-steer Eq.1
+SKID_STEER_TRACK_M = 0.5207        # Eq.1 kinematic track z on the RASSOR 2 test platform [WHEELTEST]
+SKID_STEER = True                  # 4-wheel skid-steer, no steering actuators, no suspension [SCHULER24]
+
+# ---- Mobility envelope (ConOps) [SCHULER24][WHEELTEST] ------------------------------------
+OBSTACLE_HEIGHT_M = 0.075          # "traversing rock obstacles up to 7.5 cm in height" [SCHULER24]
+NOMINAL_SLOPE_DEG = 15.0           # "inclinations up to 15 deg" (mobility ConOps) [SCHULER24]
+SLOPE_TEST_DEG = 20.0             # wheel slope-driving test ran a 20 deg incline [WHEELTEST]
+# (RASSOR Gen-1 climbed a 20 deg slope and FAILED a 30 deg loose mound -> slip avalanche; the
+# planner's max_traverse_slope_deg default sits between NOMINAL_SLOPE_DEG and that ~30 deg limit.)
+
+# ---- Bucket-drum capacity [BDSCALE] -------------------------------------------------------
+# Avg total regolith collected per drum, by drum scale (Schuler 2022 Table 3). IPEx uses the
+# small..medium range; the large drum is the RASSOR 2.0 drum. Headline REGOLITH_PER_CYCLE_KG
+# (30 kg/cycle) and REGOLITH_MIN_THRESHOLD_KG (15 kg) are the RDS spec [SCHULER24].
+DRUM_CAPACITY_KG = {"small": 3.80, "medium": 7.30, "large": 24.98}
+REGOLITH_MIN_THRESHOLD_KG = 15.0   # RDS minimum success threshold per cycle [SCHULER24]
+TANGENTIAL_TO_CUT_RATIO = 8.5      # drum tangential velocity / linear cut speed [BDSCALE]
+MAX_CUT_DEPTH_FRAC = 0.50          # cut depth limited to <=50% of scoop opening (anti-bridging) [BDSCALE]
+
+# ---- BP-1 terrestrial test simulant [BDSCALE][WHEELTEST] ----------------------------------
+# REFERENCE values for the GMRO Regolith Test Bed (Earth-g, compacted BP-1), the bin IPEx/RASSOR 2
+# are tested in. NOT the lunar surface the terramechanics core models (that is the Lunar Sourcebook
+# RHO_SURFACE..RHO_DEEP profile in constants.py). Kept here as sourced provenance; not wired into the
+# lunar physics, and a BP-1 Bekker k_c/k_phi profile is deliberately NOT fabricated.
+BP1_BULK_DENSITY_KG_M3 = 1750.0    # "~1.75 g/cm^3 after compaction" [WHEELTEST]
+BP1_SHEAR_STRENGTH_KPA = (27.0, 32.0)   # Humboldt pocket shear-vane range [BDSCALE]
+BP1_PENETRATION_KPA = (206.0, 226.0)    # Humboldt soil penetrometer range [BDSCALE]
 
 # ---- Battery [BATTERY] --------------------------------------------------------------------
 BATTERY_SERIES_CELLS = 12         # 12S -> ~44 V pack
@@ -142,7 +189,33 @@ def spec_record() -> dict:
     """JSON-dumpable provenance record of every real input + derived quantity."""
     return {
         "source": "Schuler et al., IPEx TRL-5 Design Overview, ASCEND 2024 (NTRS 20240008162)",
+        "sources": [
+            "Schuler et al., IPEx TRL-5 Design Overview, ASCEND 2024 (NTRS 20240008162)",
+            "Zhang, Schuler et al., IPEx Wheel Testing in Lunar Regolith Simulant, ASCE E&S 2024",
+            "Schuler, Nick et al., IPEx Bucket Drum Scaling Experimental Results, ASCE E&S 2022",
+            "Mueller et al., RASSOR (precursor), IEEE Aerospace 2013",
+        ],
+        "vehicle": "IPEx (ISRU Pilot Excavator); RASSOR is the TRL-4 precursor/pilot",
         "battery_source": "project lead 2026-06-02: 12S Li-ion, ~30 Ah",
+        "geometry": {
+            "wheel_diameter_m": WHEEL_DIAMETER_M, "wheel_radius_m": WHEEL_RADIUS_M,
+            "skid_steer_track_m": SKID_STEER_TRACK_M, "skid_steer": SKID_STEER,
+        },
+        "mobility": {
+            "obstacle_height_m": OBSTACLE_HEIGHT_M, "nominal_slope_deg": NOMINAL_SLOPE_DEG,
+            "slope_test_deg": SLOPE_TEST_DEG,
+        },
+        "drum_capacity_kg": dict(DRUM_CAPACITY_KG),
+        "drum_ops": {
+            "regolith_min_threshold_kg": REGOLITH_MIN_THRESHOLD_KG,
+            "tangential_to_cut_ratio": TANGENTIAL_TO_CUT_RATIO, "max_cut_depth_frac": MAX_CUT_DEPTH_FRAC,
+        },
+        "bp1_test_simulant": {
+            "bulk_density_kg_m3": BP1_BULK_DENSITY_KG_M3,
+            "shear_strength_kpa": list(BP1_SHEAR_STRENGTH_KPA),
+            "penetration_kpa": list(BP1_PENETRATION_KPA),
+            "note": "terrestrial GMRO test bed (Earth-g); NOT the lunar terramechanics core",
+        },
         "published": {
             "mass_class_kg": ROVER_MASS_CLASS_KG, "drive_speed_ms": DRIVE_SPEED_MS,
             "drum_speed_rpm": DRUM_SPEED_RPM, "regolith_per_cycle_kg": REGOLITH_PER_CYCLE_KG,

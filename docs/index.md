@@ -48,6 +48,7 @@ PYTHONPATH=. python -m planet_browser.server      # the SimCity-style mission pl
 
 | Doc | What it is |
 |---|---|
+| [The modelled vehicle — IPEx]({{ site.baseurl }}/vehicle_ipex) | The ISRU Pilot Excavator (RASSOR is the precursor), grounded in the six NASA IPEx papers; the digital-twin architecture and the excavation gap dustgym fills |
 | [The five-layer world model]({{ site.baseurl }}/world_model) | Geometry / Material / Physics / Task / Uncertainty, and the conserved-vs-learned design decision |
 | [Related work]({{ site.baseurl }}/related_work) | Where dustgym lands across NASA autonomy, lunar mining, world models, autonomous driving, SLAM |
 | [Per-planet constants (systematic review)]({{ site.baseurl }}/bodies_sysrev) | Literature-sourced terramechanics per body, every value tagged MEASURED / ESTIMATED / UNKNOWN |
