@@ -90,6 +90,8 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 | B1 | P0 | Diff-drive integrator `step_pose` | ✅ |
 | B2 | P0 | Closed loop w/ slip feedback (cmd_vel) | ✅ `drive.py` + `poll_cmd_vel` |
 | B3 | P1 | Clast ride-over in loop | ✅ |
+| B4 | P0 | **Tip-over stability** (static stability angle; don't tip) | ✅ `stability.py` (SSA per axis; pitch binds on the modeled geometry); attitude from `conform_pose`. RASSOR's counter-rotating drums add no dig tip-moment (KSC-TOPS-7) |
+| B5 | P1 | **Negative-obstacle (drop-off / hole) detection + avoidance** | ✅ `negative_obstacle_mask` → impassable in `slope_costmap`/routing (don't fall in a hole); enclosed-sink + sensor = P16/P17 |
 
 ### C. Procedural map generation (L1)
 | C1 | P0 | Craters/boulders/fbm calibrated to real stats | ✅ `procgen*` |
@@ -123,6 +125,7 @@ RL/autonomy researcher · benchmark/mission author · HITL operator-training use
 | G2 | P0 | Goal-conditioned construction env (`H_target`) | ✅ `terrain_target_env.py` (drive + drum cut/dump) |
 | G3 | P0 | Honest control reward + domain randomization | ✅ |
 | G4 | P0 | Trainable (real RL converges) | ✅ PPO 0→100%; CEM 60→100% |
+| G4b | P0 | **Hazard-avoidance training signals** (don't tip / don't entrap / don't fall in a hole) | ✅ `RoverSimEnv`: tip-over terminal + warn-band penalty + stability-margin obs (B4); slip-entrapment terminal; negative-obstacle layer (B5) for routing. The RL learns to avoid tipping / entrapment from true state |
 | G5 | P1 | **Active-perception env** (next-best-view: drive to reduce per-cell map uncertainty per joule) | ✅ `active_perception_env.py` (`Dust/ActivePerception-v0`, tested). Honest finding: submodular → greedy NBV ties multi-step beam (1−1/e); learning's value is the expensive-observation regime |
 | G6 | P1 | **Self-optimizing slip-energy loop** (observe model-vs-truth gap → fit `inflation(slope)` online → re-price routes) | ✅ `self_optimizing.py` (online regression, held-out error ~20%→<1%) + `adaptive_planner.py` (re-prices routes, wired into `/plan`); only the inflation regression is learned, dynamics stay conserved (tested) |
 
@@ -261,8 +264,9 @@ drive forward stages P13-P19. Manipulation/humanoid-specific topics are a differ
 | R3 | P0 | Global path planning over a costmap | ✅ `route_least_cost` 8-conn Dijkstra (I10) |
 | R4 | P1 | **Sampling-based + continuous motion planning** (RRT/PRM, A*, GCS) | ⬜ grid-Dijkstra + discrete TSP only → **P14** |
 | R5 | P1 | **Time-optimal trajectory + path-tracking control** (pure-pursuit / MPC) | ⬜ fixed-speed timeline; cmd_vel integrator, no tracker → **P14** |
-| R6 | P0 | **Recursive localization + SLAM** (EKF/UKF, MCL, graph-SLAM) | 🟡 scalar Kalman belief (`autonomy`); AprilTag ⛔; no SLAM → **P15** |
-| R7 | P1 | **Reactive / local obstacle avoidance** (VFH / DWA / potential fields) | 🟡 global static keep-out costmap only → **P16** |
+| R6 | P0 | **Recursive localization + SLAM** (EKF/UKF, MCL, graph-SLAM) | 🟡 scalar Kalman belief (`autonomy`); AprilTag ⛔; no SLAM → **P15** (pipeline scoped `docs/slam_pipeline_analysis.md`: scan-to-DEM ICP/NDT overlay + SE(3) ESKF — map-relative, we have LOLA) |
+| R7 | P1 | **Reactive / local obstacle avoidance** (VFH / DWA / potential fields) | 🟡 static keep-out + **negative-obstacle (drop-off/cliff) routing avoidance** ✅ (`negative_obstacle_mask`); reactive/dynamic + sensor layer → **P16/P17** |
+| R15 | P1 | **Vehicle tip-over stability** (don't tip) — SSA / support-polygon | ✅ `stability.py` (SSA per axis from gauge/wheelbase + [ASSUMPTION] CG); RL tip-over terminal + margin obs in `RoverSimEnv`; RASSOR dig adds no tip moment (KSC-TOPS-7) |
 | R8 | P1 | **Sensor perception: ICP / registration; deep detection → dynamic obstacles** | ⬜⛔ gated SfM, no detector → **P17** |
 | R9 | P1 | Camera / stereo / depth + calibration | 🟡⛔ `obs_map_producer` render-gated; Brown-Conrady stub (area F) |
 | R10 | P2 | **Force / impedance control of the dig + Tier-3 contact dynamics** | ⬜⛔ energy-model dig; force = gated Chrono (P7) → **P18** |
@@ -549,10 +553,18 @@ routing+scheduling, **time-optimal velocity profiling**, and a **pure-pursuit / 
 so the drive follows a dynamically-feasible reference (today: fixed-speed `route_least_cost` + a cmd_vel
 integrator with no tracker).
 
-**P15 — Localization + SLAM [P0] (R6).** ⬜ The #1 live-loop gap (both reviews). Promote the scalar Kalman
-belief to a real recursive estimator (EKF/UKF), add Monte-Carlo localization, and stand up the gated rtabmap
-graph-SLAM (`slam_bringup.launch.py`) on a real multi-frame egress so the rover localizes continuously instead
-of dead-reckoning + a gated AprilTag fix.
+**P15 — Localization + SLAM [P0] (R6). Pipeline scoped from `docs/slam_pipeline_analysis.md` (Gao Xiang,
+*SLAM in Autonomous Driving*).** ⬜ The #1 live-loop gap (both reviews). Key insight: dustgym already HAS the
+prior map (the LOLA DEM), so the target is the book's **Ch10 map-relative fusion-positioning ("overlay")**,
+not full SLAM-from-scratch (Ch6-9). Concrete build, in order: (1) **scan-to-DEM registration** — KD-tree NN +
+**ICP / point-to-plane / NDT** registering the observed heightfield/point-cloud onto the prior DEM (the
+"overlay"), giving an absolute map-relative pose; pure-numpy/scipy, testable now against the conserved truth
+(register a noised observed patch, recover the pose). (2) **SE(3) ESKF** — promote the scalar `autonomy.Belief`
+KF to an error-state filter fusing IMU preintegration + the unicycle odometry + the registration fix + the
+existing AprilTag fix, swapped into the `execute_leg` seam in place of self-simulated truth. (3) pose/factor
+back-end + loop closure are OPTIONAL (every scan is map-anchored). The registration + ESKF math is non-gated;
+only the live scan that feeds it (Godot render → stereo/COLMAP) is render/CUDA-gated (P6/P17). The rtabmap
+full-SLAM container (`slam_bringup.launch.py`) is the heavy alternative, only needed off a prior map.
 
 **P16 — Reactive obstacle avoidance [P1] (R7).** ⬜ A local/reactive layer (VFH / dynamic-window / potential
 fields) under the global plan that reacts to *discovered* obstacles between re-plans, feeding dynamic keep-outs
@@ -616,7 +628,8 @@ authority.)
 `simcityspace_concept.png` (**site plan over the REAL LOLA Haworth DEM** — the L8 map view, concept overlay).
 Reviews: `docs/architecture_review_2026-06-05.md` + `docs/architecture_review_2026-06-05_realworld.md`
 (run-verified deep reviews + real-world-mission gap analysis); `docs/robotics_curriculum_diff.md` (coverage vs
-the standard robotics curriculum, the source for area R + P13-P19).
+the standard robotics curriculum, the source for area R + P13-P19); `docs/slam_pipeline_analysis.md`
+(SLAM-in-autonomous-driving pipeline → the concrete P15 build: scan-to-DEM ICP/NDT overlay + SE(3) ESKF).
 
 ## 14. Status rollup
 **Done/shippable (M0+M1):** conserved Tier-2 physics + closed loop + sensor render + env_checker-clean RL
