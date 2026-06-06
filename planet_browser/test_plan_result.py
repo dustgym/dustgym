@@ -63,6 +63,36 @@ def test_provenance_hash_is_deterministic_and_input_sensitive():
     assert h3 != h1
 
 
+def _fleet_mission():
+    # four distinct sites so the site-exclusive allocator can split them across two rovers
+    return MP.mission_from_dict({
+        "name": "FLEET", "body": "moon", "charger": [0, 0],
+        "orders": [
+            {"action": "pad A", "kind": "cut", "x": 40, "y": 30, "footprint_m2": 30, "depth_m": 0.04},
+            {"action": "pad B", "kind": "cut", "x": -35, "y": 25, "footprint_m2": 30, "depth_m": 0.04},
+            {"action": "pad C", "kind": "cut", "x": 30, "y": -40, "footprint_m2": 30, "depth_m": 0.04},
+            {"action": "pad D", "kind": "cut", "x": -30, "y": -30, "footprint_m2": 30, "depth_m": 0.04},
+        ],
+    })
+
+
+def test_plan_ir_per_vehicle_no_position_leak():
+    # RB-04: each rover's FIRST GoTo must measure from the charger, not from the previous rover's last
+    # position. The old single-`prev` code leaked position across vehicles in the flat trip list.
+    m = _fleet_mission()
+    ir = MP.plan_ir(m, vehicles=2)
+    assert ir["vehicles"] == 2
+    charger = tuple(m.charger)
+    first_goto = {}
+    for a in ir["actions"]:
+        if a["op"] == "GoTo" and a["vehicle"] not in first_goto:
+            first_goto[a["vehicle"]] = a
+    assert len(first_goto) >= 2                                # both rovers actually have trips
+    for veh, a in first_goto.items():
+        expected = round(MP._d(charger, tuple(a["to"])), 2)
+        assert a["expect"]["distance_m"] == pytest.approx(expected, abs=0.02)   # starts at the charger
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

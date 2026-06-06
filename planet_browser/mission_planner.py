@@ -924,11 +924,16 @@ def plan_ir(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_s
     reserve_J = round(RESERVE_FRAC * BATTERY_J, 1)
     actions = []
     trip_work_aid = {}                                 # trip index -> its work-action id (precedence lowering)
-    prev = tuple(mission.charger)
+    # RB-04: track the previous position PER VEHICLE. Each rover starts at the charger and advances along
+    # its OWN trips; a single shared `prev` would make a fleet rover's first GoTo measure from the previous
+    # rover's last position (a cross-vehicle position leak) and overstate its drive distance/energy.
+    prev_by_vehicle: dict = {}
+    charger = tuple(mission.charger)
     aid = 0
     for ti, tr in enumerate(trips):
         site = tuple(tr["site"])
         veh = int(tr.get("vehicle", 0))
+        prev = prev_by_vehicle.get(veh, charger)
         d = _d(prev, site)
         actions.append({
             "id": aid, "op": "GoTo", "vehicle": veh, "to": [round(site[0], 3), round(site[1], 3)],
@@ -956,7 +961,7 @@ def plan_ir(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_s
         actions.append(act)
         trip_work_aid[ti] = aid
         aid += 1
-        prev = tuple(tr.get("dest", site))
+        prev_by_vehicle[veh] = tuple(tr.get("dest", site))   # RB-04: advance only THIS vehicle's position
     precedence = sorted({(trip_work_aid[i], trip_work_aid[j])
                          for i, j in trip_precedence(trips, mission)
                          if i in trip_work_aid and j in trip_work_aid})
