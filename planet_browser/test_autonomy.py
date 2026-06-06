@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from . import mission_planner as MP
 
 
@@ -149,3 +151,31 @@ def test_perception_in_the_loop_bounds_pose_uncertainty():
     assert on["belief"].pos_sigma_m <= 0.20 + 1e-6                                 # below the dig-ready gate
     assert on["perception_fixes"] >= 1 and on["observe_more"] >= 0
     assert on["completed"] is True
+
+
+def test_pose_fix_corrects_the_mean_not_just_sigma():
+    # Bug #2 fix: with an INDEPENDENT true-pose fix the corrected belief MEAN moves toward truth -- the old
+    # code fused the estimate against itself (measurement == estimate -> mean unchanged, only sigma shrank).
+    # Use a tiny mission that completes WITHOUT a recharge (a recharge would teleport the belief to charger).
+    from . import autonomy as A
+    dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
+    m = MP.mission_from_dict({"name": "t", "body": "moon", "charger": [0, 0],
+                              "orders": [{"action": "c", "kind": "cut", "x": 6, "y": 0,
+                                          "footprint_m2": 9, "depth_m": 0.02}]})
+    off = A.run_closed_loop(m, dem=dem, dem_origin=o)
+    on = A.run_closed_loop(m, dem=dem, dem_origin=o, perception_sigma_m=0.05)
+    assert off["recharges"] == 0 and on["recharges"] == 0                          # no teleport-to-charger
+    assert (on["belief"].x, on["belief"].y) != (off["belief"].x, off["belief"].y)  # the fix moved the mean
+    assert abs(on["belief"].x - 6.0) < abs(off["belief"].x - 6.0)                  # ...toward the true site
+
+
+def test_map_channel_gate_is_an_action_not_just_a_counter():
+    # Bug #1 fix: an under-mapped dig triggers a survey dwell that COSTS real mission time (not only a
+    # counter). survey_time_s == map_observe_more * OBSERVE_DWELL_S, and it is > 0 on a spread mission.
+    from . import autonomy as A
+    from . import map_channel as MC
+    dem = MP.load_haworth_dem(); o = MP.flattest_anchor(dem)
+    r = A.run_closed_loop(_spread(), dem=dem, dem_origin=o, algorithm="nearest", objective="time")
+    assert r["map_observe_more"] >= 1                                              # under-mapped digs surveyed
+    assert r["survey_time_s"] == pytest.approx(r["map_observe_more"] * MC.OBSERVE_DWELL_S)
+    assert r["survey_time_s"] > 0.0

@@ -173,6 +173,7 @@ def _autonomy_perception(mission, dem, origin, algorithm, objective):
         "map_coverage": round(mc.get("coverage", 0.0), 3),
         "map_uncertainty_m": round(mc.get("mean_uncertainty_m", 0.0), 2),
         "map_observe_more_before_dig": cl.get("map_observe_more", 0),
+        "map_survey_time_s": round(cl.get("survey_time_s", 0.0), 1),   # the survey-before-dig gate's real time cost
         "note": ("perception-in-the-loop: a map/landmark pose fix per leg bounds dead-reckoning drift; the "
                  "dig-ready gate observes more before digging when the pose is uncertain OR the dig site's "
                  "local map coverage is low. map_coverage is the onboard-observability tier (what the route "

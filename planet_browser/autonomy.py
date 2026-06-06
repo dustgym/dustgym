@@ -23,6 +23,8 @@ from . import map_channel as MC
 from . import mission_planner as MP
 from .mission_planner import BATTERY_J
 
+ODOM_DRIFT_FRAC = 0.05   # [ASSUMPTION] along-track odometry drift per metre; an independent pose fix corrects it
+
 
 @dataclasses.dataclass
 class Belief:
@@ -157,6 +159,7 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
     recharges = replans = 0
     perception_fixes = observe_more = 0
     map_observe_more = 0                                   # P6: digs gated on local map coverage
+    survey_time_s = 0.0                                    # P6: real time the survey-before-dig gate costs
     stations = [tuple(mission.charger)]                   # P6: where the rover has observed the worksite from
     legs = []
 
@@ -177,23 +180,31 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
             while belief.pos_sigma_m > dig_sigma_gate_m:
                 belief = update_pose(belief, (belief.x, belief.y), perception_sigma_m)
                 observe_more += 1
-        # MAP-CHANNEL-IN-THE-LOOP (P6 / LAC section 10): don't commit to digging terrain the route hasn't
-        # mapped well enough yet. If the dig site's local observed-coverage (from stations visited so far) is
-        # below the gate, survey from the approach first (count an observe-more; arriving then adds coverage).
-        if leg.get("dig_e", 0.0) > 0.0:
-            if MC.local_coverage(stations, leg["site"]) < MC.COVERAGE_DIG_GATE:
-                map_observe_more += 1
-        stations.append(tuple(leg["site"]))               # the rover observes the worksite from each station
+        # MAP-CHANNEL-IN-THE-LOOP gate (P6 / LAC section 10): a dig commits only on terrain the route has
+        # mapped. If the dig site's local coverage from PRIOR stations is below the gate, the rover SURVEYS
+        # the approach first -- a real observe dwell (MC.OBSERVE_DWELL_S [ASSUMPTION]) that ADDS to mission
+        # time -- before the (irreversible) excavation; the survey observation then raises coverage. This is
+        # an action with a measurable cost, not just a counter.
+        site = tuple(leg["site"])
+        if leg.get("dig_e", 0.0) > 0.0 and MC.local_coverage(stations, site) < MC.COVERAGE_DIG_GATE:
+            survey_time_s += MC.OBSERVE_DWELL_S
+            map_observe_more += 1
+        stations.append(site)                             # the rover observes the worksite from each station
         nominal_J = nominal_leg_energy_J((belief.x, belief.y), leg)
         telem = execute_leg(belief, leg, dem=dem, dem_origin=dem_origin, g=g, body=mission.body,
                             params=MP.mission_soil_params(mission))
-        # ESTIMATE: move (pose uncertainty grows with distance), and grow the energy uncertainty by the
-        # leg's model error (a priori the plan can't see the slip truth -> carry it as 1-sigma).
-        belief = predict(belief, moved_to=telem["new_pose"], drive_m=telem["drive_m"], energy_spent_J=0.0)
-        # PERCEPTION MEASUREMENT: fuse a map/landmark pose fix (the map channel / AprilTag SLAM egress),
-        # bounding the dead-reckoning drift. Without it pose sigma only grows; with it the loop is corrected.
+        # ESTIMATE -- DEAD-RECKON: the believed pose accumulates a deterministic along-track odometry drift
+        # (ODOM_DRIFT_FRAC per metre); without an independent fix it compounds leg-over-leg. (pose sigma also
+        # grows; energy sigma is grown below by the leg's a-priori model error.)
+        true_pose = telem["new_pose"]
+        odo = ODOM_DRIFT_FRAC * telem["drive_m"]
+        belief = predict(belief, moved_to=(true_pose[0] + odo, true_pose[1]), drive_m=telem["drive_m"],
+                         odom_drift_frac=ODOM_DRIFT_FRAC, energy_spent_J=0.0)
+        # PERCEPTION MEASUREMENT: fuse the INDEPENDENT true pose (the SLAM / AprilTag map fix). The
+        # measurement is the truth, NOT the belief's own estimate, so the Kalman update CORRECTS the
+        # dead-reckoned drift (moves the mean back), not merely shrinks sigma.
         if perception_sigma_m is not None:
-            belief = update_pose(belief, (telem["new_pose"][0], telem["new_pose"][1]), perception_sigma_m)
+            belief = update_pose(belief, true_pose, perception_sigma_m)
             perception_fixes += 1
         e_sig = math.sqrt(belief.energy_sigma_J ** 2 + (0.12 * nominal_J) ** 2)
         belief = dataclasses.replace(belief, energy_sigma_J=e_sig)
@@ -223,4 +234,4 @@ def run_closed_loop(mission, *, dem=None, dem_origin=(0.0, 0.0), algorithm="auto
     return {"belief": belief, "completed": belief.tasks_done == len(trips), "n_trips": len(trips),
             "recharges": recharges, "replans": replans, "legs": legs,
             "perception_fixes": perception_fixes, "observe_more": observe_more,
-            "map_observe_more": map_observe_more, "map_channel": map_channel}
+            "map_observe_more": map_observe_more, "survey_time_s": survey_time_s, "map_channel": map_channel}

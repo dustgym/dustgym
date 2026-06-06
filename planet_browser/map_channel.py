@@ -26,6 +26,8 @@ ONBOARD_STEREO_SIGMA_M = 0.32   # [CALIB] onboard rover-stereo height RMSE (the 
 PRIOR_SIGMA_M = 5.0             # an unobserved cell's prior height uncertainty (no map there yet)
 SENSOR_RADIUS_M = 8.0          # [CALIB] usable onboard-stereo mapping radius per station
 COVERAGE_DIG_GATE = 0.6        # observe-more before digging a site whose local coverage is below this
+OBSERVE_DWELL_S = 60.0         # [ASSUMPTION] survey-dwell the rover spends mapping an under-covered dig
+#                               site before committing the (irreversible) excavation -- adds real mission time
 
 
 def worksite_bbox(mission, *, margin_m=10.0):
