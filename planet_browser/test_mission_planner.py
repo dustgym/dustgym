@@ -660,6 +660,30 @@ def test_single_vehicle_still_has_uniform_fleet_schema():
     assert T["makespan_s"] == pytest.approx(T["time_s"]) and T["vehicles_detail"] == []
 
 
+# ---- negative-obstacle (hole / cliff) detection + avoidance ("don't fall in a hole") -----------
+def test_negative_obstacle_flags_the_flat_lip_a_slope_cap_misses():
+    import numpy as np
+    # a flat plateau that drops off a cliff: the lip cell is FLAT (passable by slope) but overlooks a 5 m
+    # drop -> the drop-off detector flags it while the slope cap does not. (Real-terrain crater rims are
+    # this pattern; this is a controlled cliff to assert the additive value, not fabricated survey data.)
+    Z = np.zeros((5, 6), dtype=float)
+    Z[:, 3:] = -4.0                                            # a 4 m drop at col 2->3; over 5 m cells the
+    #                                                           centered-gradient lip slope is ~21.8 deg (< 25 cap)
+    drop = MP.negative_obstacle_mask(Z, max_drop_m=2.0)
+    _, passable = MP.slope_costmap(Z, 5.0, max_slope_deg=25.0)            # slope cap only
+    assert drop[0, 2]                                          # the lip (col 2) overlooks a 4 m drop -> flagged
+    assert passable[0, 2]                                      # ...yet the slope cap (21.8 deg there) calls it passable
+    _, passable_drop = MP.slope_costmap(Z, 5.0, max_slope_deg=25.0, max_drop_m=2.0)
+    assert not passable_drop[0, 2]                             # with the drop layer the lip is impassable (kept off)
+
+
+def test_negative_obstacle_present_on_real_haworth():
+    dem = MP.load_haworth_dem(); Z, _cell = dem
+    mask = MP.negative_obstacle_mask(Z, max_drop_m=MP.MAX_DROP_M)
+    assert mask.any()                                         # the real DEM has crater-rim / scarp drop-offs
+    assert mask.mean() < 0.5                                  # but they are localized hazards, not most of the map
+
+
 # ---- the executable Plan IR (how plans are OUTPUT for a rover / ROS executive) ------------------
 def test_plan_ir_is_a_versioned_executable_artifact():
     m = MP.mission_from_dict(_payload())

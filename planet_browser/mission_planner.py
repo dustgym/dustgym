@@ -1126,12 +1126,33 @@ _ROUTE_NB = [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
              (-1, -1, math.sqrt(2)), (-1, 1, math.sqrt(2)), (1, -1, math.sqrt(2)), (1, 1, math.sqrt(2))]
 
 
-def slope_costmap(Z, cell_m, *, max_slope_deg=25.0, slip_alpha=2.0):
+MAX_DROP_M = 2.0   # [ASSUMPTION] a per-cell downward step the rover must not drive off (cliff / crater-rim / pit edge)
+
+
+def negative_obstacle_mask(Z, *, max_drop_m=MAX_DROP_M):
+    """The "don't fall in a hole" hazard: cells overlooking a DROP-OFF — a 3x3-neighbourhood downward step
+    greater than ``max_drop_m`` (a cliff / crater-rim / pit edge). OR'd into the costmap as impassable so
+    routes keep OFF the edge. The distinct value over the slope cap is the **flat lip** at the top of a drop:
+    that cell can be gentle (passable by slope) yet sit at the edge of a fall — this flags it. (On a coarse
+    DEM a steep wall is also a drop, so the two overlap there; the sensor / sub-cell + enclosed-sink versions
+    are PRD P16/P17.) Returns a boolean mask the size of ``Z``."""
+    from scipy.ndimage import minimum_filter
+    if max_drop_m is None or max_drop_m <= 0:
+        return np.zeros(Z.shape, dtype=bool)
+    nbr_min = minimum_filter(Z, size=3, mode="nearest")   # lowest height in the 3x3 neighbourhood
+    return (Z - nbr_min) > float(max_drop_m)
+
+
+def slope_costmap(Z, cell_m, *, max_slope_deg=25.0, slip_alpha=2.0, max_drop_m=None):
     """I10: per-cell traversal cost from terrain slope. cost = 1 + slip_alpha*tan(slope) (a slip-weighted
     per-meter multiplier — slope drives wheel slip, which costs energy/time); cells steeper than
-    max_slope_deg are impassable hazards a rover can't safely traverse. Returns (cost[H,W], passable bool)."""
+    max_slope_deg are impassable hazards a rover can't safely traverse. When ``max_drop_m`` is set, cells
+    overlooking a drop-off (negative_obstacle_mask) are ALSO impassable (the don't-fall-in-a-hole hazard,
+    incl. the flat lip a slope cap misses). Returns (cost[H,W], passable bool)."""
     smap = slope_deg_map(Z, cell_m)
     passable = smap <= max_slope_deg
+    if max_drop_m is not None:
+        passable = passable & ~negative_obstacle_mask(Z, max_drop_m=max_drop_m)
     cost = 1.0 + slip_alpha * np.tan(np.radians(np.minimum(smap, 89.0)))
     return cost, passable
 
@@ -1219,7 +1240,8 @@ def routed_distance(dem, dem_origin, a_xy, b_xy, *, max_slope_deg=25.0, slip_alp
     if c1 - c0 < 2 or r1 - r0 < 2:                       # sites off the DEM -> can't route
         return straight, straight, False
     crop = Z[r0:r1, c0:c1]
-    cost, passable = slope_costmap(crop, cell, max_slope_deg=max_slope_deg, slip_alpha=slip_alpha)
+    cost, passable = slope_costmap(crop, cell, max_slope_deg=max_slope_deg, slip_alpha=slip_alpha,
+                                   max_drop_m=MAX_DROP_M)   # routes also keep off drop-offs (don't fall in a hole)
     _apply_keepouts(passable, cell, r0, c0, dem_origin, keepouts)   # discrete obstacles -> impassable cells
     hc, wc = crop.shape
     start = (min(max(int(ay / cell) - r0, 0), hc - 1), min(max(int(ax / cell) - c0, 0), wc - 1))
