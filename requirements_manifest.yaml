@@ -50,17 +50,17 @@ requirements:
   title: One immutable fleet-aware PlanResult consumed by all outputs
   priority: P0
   blocks_release: true
-  I: N
-  X: N
-  V: N
+  I: P
+  X: P
+  V: P
   Q: NA
-  owner: unassigned
-  source: planet_browser/mission_planner.py (PlanResult, planned)
-  acceptance: ''
-  evidence: ''
+  owner: active
+  source: planet_browser/mission_planner.py (PlanResult, plan), planet_browser/server.py
+  acceptance: planet_browser/test_plan_result.py
+  evidence: 54fabb4
   blocked_by:
   - RB-01
-  last_verified: 2026-06-06
+  last_verified: '2026-06-06'
 - id: RB-04
   title: Per-vehicle Plan IR state ledger (no cross-vehicle position leak)
   priority: P0
@@ -191,15 +191,15 @@ requirements:
   priority: P1
   I: P
   X: P
-  V: N
+  V: P
   Q: NA
   owner: unassigned
-  source: planet_browser/mission_planner.py
-  acceptance: ''
-  evidence: ''
+  source: planet_browser/mission_planner.py (PlanResult.provenance)
+  acceptance: planet_browser/test_plan_result.py
+  evidence: 54fabb4
   blocked_by:
   - RB-03
-  last_verified: 2026-06-06
+  last_verified: '2026-06-06'
 - id: VT-01
   title: Typed VehicleModel supplies mass/geometry/CG/battery/drum/sensors/render
   priority: P0
