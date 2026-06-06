@@ -660,6 +660,41 @@ def test_single_vehicle_still_has_uniform_fleet_schema():
     assert T["makespan_s"] == pytest.approx(T["time_s"]) and T["vehicles_detail"] == []
 
 
+# ---- the executable Plan IR (how plans are OUTPUT for a rover / ROS executive) ------------------
+def test_plan_ir_is_a_versioned_executable_artifact():
+    m = MP.mission_from_dict(_payload())
+    ir = MP.plan_ir(m, algorithm="auto", objective="time")
+    assert ir["schema_version"] == MP.PLAN_IR_VERSION and len(ir["plan_id"]) == 16
+    assert ir["actions"] and all({"op", "expect", "pre"} <= set(a) for a in ir["actions"])
+    ops = {a["op"] for a in ir["actions"]}
+    assert ops <= {"GoTo", "Excavate", "CutHaulFill", "Import", "Sinter", "Work"} and "GoTo" in ops
+    ids = [a["id"] for a in ir["actions"]]
+    assert ids == list(range(len(ids)))                                   # sequential, executable order
+    assert all(0 <= i < len(ids) and 0 <= j < len(ids) for i, j in ir["precedence"])
+    for a in ir["actions"]:                                                # digs carry the real preconditions
+        if a["op"] in ("Excavate", "CutHaulFill"):
+            assert "map_coverage_min" in a["pre"] and "drum_kg_max" in a["pre"]
+        assert a["pre"]["battery_J_min"] > 0
+    assert ir["expect"]["energy_J"] > 0 and ir["expect"]["duration_s"] > 0
+    assert ir["acceptance"]["recharge_is_precondition_driven"] is True     # recharges aren't positional
+    assert MP.plan_ir(m, algorithm="auto", objective="time")["plan_id"] == ir["plan_id"]   # deterministic
+
+
+def test_plan_ir_lowers_precedence_to_action_ids():
+    m = _pairs_mission([(40, 0), (-40, 5), (80, 0)], precedence=[["fill0", "fill1"]])
+    ir = MP.plan_ir(m, algorithm="nearest", objective="distance")
+    assert ir["precedence"]                                                # order-level precedence lifted
+    work_ids = {a["id"] for a in ir["actions"] if a["op"] != "GoTo"}
+    assert all(i in work_ids and j in work_ids for i, j in ir["precedence"])   # over WORK actions
+
+
+def test_plan_ir_emitted_for_multi_vehicle():
+    m = _pairs_mission([(40, 0), (-40, 5), (80, 0), (0, 90)])
+    ir = MP.plan_ir(m, vehicles=2)
+    assert ir["vehicles"] == 2
+    assert {a["vehicle"] for a in ir["actions"]} == {0, 1}                 # actions tagged per rover
+
+
 def test_compare_with_weighted_objective_marks_pareto():
     res = MP.compare_algorithms(_spread_mission(), objective="time:0.5,distance:0.5")
     vals = [r["objective_value"] for r in res["rows"] if "objective_value" in r]
@@ -859,6 +894,15 @@ def test_plan_endpoint_returns_fetchable_pdf(base):
     pr = base.get(body["pdf"])                                          # the report is actually served back
     assert pr.status_code == 200 and pr.content[:5] == b"%PDF-"
     assert body["validation"]["mass_conserved"] is True                 # I8: plan validated on the authority
+
+
+def test_plan_endpoint_returns_executable_plan_ir(base):
+    code, body = _post(base, "/plan", _payload())
+    assert code == 200 and body["ok"] is True
+    ir = body["plan_ir"]
+    assert ir["schema_version"] and len(ir["plan_id"]) == 16
+    assert ir["actions"] and {"op", "expect", "pre"} <= set(ir["actions"][0])
+    assert ir["expect"]["energy_J"] > 0
 
 
 def test_plan_endpoint_includes_autonomy_and_perception(base):

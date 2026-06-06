@@ -469,6 +469,8 @@ def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
                                      algorithm=req.algorithm, objective=req.objective)
         endurance = MP.endurance(mission, dem=dem, dem_origin=origin)
         autonomy, perception = _autonomy_perception(mission, dem, origin, req.algorithm, req.objective)
+        plan_ir = MP.plan_ir(mission, dem=dem, dem_origin=origin,                # the machine-executable plan
+                             algorithm=req.algorithm, objective=req.objective, vehicles=req.vehicles)
     except (ValueError, RuntimeError) as e:             # bad input / sinter-gated -> honest 400
         return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
     return {
@@ -481,6 +483,7 @@ def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
         "endurance": endurance,
         "autonomy": autonomy,
         "perception": perception,
+        "plan_ir": plan_ir,                             # versioned typed-action plan a rover/ROS executive runs
     }
 
 

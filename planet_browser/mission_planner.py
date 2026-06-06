@@ -20,6 +20,7 @@ Run:  python3 mission_planner.py
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import heapq
 import itertools
 import json
@@ -844,6 +845,86 @@ def plan_and_simulate(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_
         objective=str(objective), vehicles=1,
         makespan_s=float(core["time_s"]), vehicle_conflicts=0, vehicles_detail=[])   # uniform fleet schema
     return trips, flows, per_trip, tl, totals
+
+
+# ---- executable Plan IR: the machine-consumable plan a rover / ROS executive runs (vs the human PDF) ----
+PLAN_IR_VERSION = "1.0"
+_IR_OP = {"cutfill": "CutHaulFill", "dig": "Excavate", "import": "Import", "sinter": "Sinter"}
+_IR_DIG_OPS = ("Excavate", "CutHaulFill")
+_IR_MODEL_ERR_FRAC = 0.12   # per-action energy/time tolerance band (the plan's a-priori model error, 1-sigma)
+
+
+def plan_ir(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
+            algorithm="nearest", objective="time", vehicles=1, plan_id=None):
+    """Emit a versioned, machine-EXECUTABLE plan IR -- the artifact a rover / ROS executive consumes, as
+    opposed to the human PDF. An ordered list of typed actions (GoTo / Excavate / CutHaulFill / Import /
+    Sinter), each with expected duration/energy/distance, a model-error tolerance band, and preconditions
+    (battery reserve; for digs the drum cap + the map-coverage gate); plus the precedence DAG over action
+    ids, the headline expectations, and a DETERMINISTIC content-hash plan_id (no wall clock). Recharges are
+    not positional actions -- they are precondition-driven (an executive recharges when `battery_J_min` is
+    violated), so the IR stays valid under the real battery draw. Built by lowering the simulated plan."""
+    from .map_channel import COVERAGE_DIG_GATE
+    trips, _flows, _per_trip, _tl, totals = plan_and_simulate(
+        mission, dem=dem, dem_origin=dem_origin, max_traverse_slope_deg=max_traverse_slope_deg,
+        algorithm=algorithm, objective=objective, vehicles=vehicles)
+    reserve_J = round(RESERVE_FRAC * BATTERY_J, 1)
+    actions = []
+    trip_work_aid = {}                                 # trip index -> its work-action id (precedence lowering)
+    prev = tuple(mission.charger)
+    aid = 0
+    for ti, tr in enumerate(trips):
+        site = tuple(tr["site"])
+        veh = int(tr.get("vehicle", 0))
+        d = _d(prev, site)
+        actions.append({
+            "id": aid, "op": "GoTo", "vehicle": veh, "to": [round(site[0], 3), round(site[1], 3)],
+            "expect": {"distance_m": round(d, 2), "duration_s": round(d / DRIVE_SPEED_MS, 1),
+                       "energy_J": round(d * DRIVE_J_PER_M, 1)},
+            "tol": {"energy_frac": _IR_MODEL_ERR_FRAC}, "pre": {"battery_J_min": reserve_J}})
+        aid += 1
+        op = _IR_OP.get(tr["kind"], "Work")
+        work_e = (tr.get("dig_e", 0.0) + tr.get("sinter_e", 0.0) + tr.get("haul_e", 0.0) + tr.get("lift_e", 0.0))
+        work_t = (tr.get("dig_t", 0.0) + tr.get("sinter_t", 0.0) + tr.get("haul_m", 0.0) / DRIVE_SPEED_MS)
+        pre = {"battery_J_min": reserve_J}
+        if op in _IR_DIG_OPS:
+            pre["drum_kg_max"] = round(DRUM_KG, 1)
+            pre["map_coverage_min"] = COVERAGE_DIG_GATE      # the survey-before-dig gate, as a precondition
+        act = {
+            "id": aid, "op": op, "vehicle": veh,
+            "site": [round(site[0], 3), round(site[1], 3)],
+            "dest": [round(tr["dest"][0], 3), round(tr["dest"][1], 3)],
+            "mass_kg": round(float(tr.get("mass", 0.0)), 1),
+            "loads": (max(1, math.ceil(tr.get("mass", 0.0) / DRUM_KG)) if op == "CutHaulFill" else 0),
+            "haul_m": round(tr.get("haul_m", 0.0), 1),
+            "actions": sorted(tr.get("actions", [])),
+            "expect": {"energy_J": round(work_e, 1), "duration_s": round(work_t, 1)},
+            "tol": {"energy_frac": _IR_MODEL_ERR_FRAC}, "pre": pre}
+        actions.append(act)
+        trip_work_aid[ti] = aid
+        aid += 1
+        prev = tuple(tr.get("dest", site))
+    precedence = sorted({(trip_work_aid[i], trip_work_aid[j])
+                         for i, j in trip_precedence(trips, mission)
+                         if i in trip_work_aid and j in trip_work_aid})
+    if plan_id is None:                                # deterministic content hash (no wall clock)
+        key = json.dumps({
+            "body": mission.body, "algorithm": algorithm, "objective": str(objective), "vehicles": vehicles,
+            "orders": [(o.action, o.kind, o.x, o.y, o.footprint_m2, o.depth_m) for o in mission.orders],
+            "ops": [(a["op"], a.get("site"), a.get("to")) for a in actions]}, sort_keys=True)
+        plan_id = hashlib.sha1(key.encode()).hexdigest()[:16]
+    crs = "IAU_2015:30135" if (dem is not None and mission.body == "moon") else "local"
+    return {
+        "schema_version": PLAN_IR_VERSION, "plan_id": plan_id, "body": mission.body,
+        "vehicles": int(totals.get("vehicles", 1)), "objective": str(objective),
+        "algorithm": totals.get("resolved_algorithm", algorithm),
+        "frame": {"origin_m": [round(dem_origin[0], 3), round(dem_origin[1], 3)],
+                  "charger": [float(mission.charger[0]), float(mission.charger[1])], "crs": crs},
+        "actions": actions, "precedence": [list(p) for p in precedence],
+        "expect": {"duration_s": round(totals["time_s"], 1), "energy_J": round(totals["energy_J"], 1),
+                   "distance_m": round(totals["distance_m"], 1), "charges": int(totals["charges"]),
+                   "makespan_s": round(totals.get("makespan_s", totals["time_s"]), 1)},
+        "acceptance": {"as_built_tol_m": 0.02, "recharge_is_precondition_driven": True},
+    }
 
 
 # the min-objective metric columns used for Pareto non-domination across algorithms

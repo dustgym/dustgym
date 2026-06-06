@@ -208,6 +208,7 @@
       <button id="qexec" class="go" disabled>▶ Execute + watch</button>
       <div class="ctl" style="margin-top:7px">
         <button id="qexport" class="go">⤓ Export plan</button>
+        <button id="qplanir" class="go" title="download the machine-executable plan IR (typed actions + DAG)">⤓ Plan IR</button>
         <button id="qimport" class="go">⤒ Import plan</button>
         <input id="qfile" type="file" accept=".json,application/json" style="display:none" />
       </div>
@@ -671,6 +672,7 @@ qel("qplan").onclick = async () => {
     setQ(`report ready · cut ${(t.cut_kg / 1000).toFixed(1)}t → fill ${(t.fill_kg / 1000).toFixed(1)}t · `
          + `${(t.energy_J / 1e6).toFixed(1)} MJ · ${t.charges} recharges${ftag}${etag}${atag}${rtag}${ktag}${stag}${vtag}${autag}${ptag}${mtag}`);
     LAST_TIMELINE = j.timeline || null;                    // P5: enable execute + watch
+    LAST_PLAN_IR = j.plan_ir || null;                      // the executable plan IR (download via ⤓ Plan IR)
     LAST_ORDERS = ORDERS.slice(); LAST_KEEPOUTS = KEEPOUTS.slice();
     qel("qexec").disabled = !LAST_TIMELINE;
     qel("reportframe").src = j.pdf;                        // embed the mission-control PDF in the Report pane
@@ -714,6 +716,15 @@ qel("qexport").onclick = () => {
   a.click(); URL.revokeObjectURL(a.href);
   setQ(`exported ${ORDERS.length} orders`);
 };
+qel("qplanir").onclick = () => {                         // download the machine-executable plan IR
+  if (!LAST_PLAN_IR) { setQ("plan a mission first — the Plan IR comes from /plan"); return; }
+  const blob = new Blob([JSON.stringify(LAST_PLAN_IR, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `plan_${LAST_PLAN_IR.plan_id || "ir"}.json`;
+  a.click(); URL.revokeObjectURL(a.href);
+  setQ(`exported plan IR ${LAST_PLAN_IR.plan_id} (${LAST_PLAN_IR.actions.length} actions)`);
+};
 qel("qimport").onclick = () => qel("qfile").click();
 qel("qfile").onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
@@ -747,7 +758,7 @@ qel("profloadbtn").onclick = async () => {
 };
 
 // ---- P5: execute + watch — animate the planned timeline top-down with a telemetry HUD ----------
-let LAST_TIMELINE = null, LAST_ORDERS = [], LAST_KEEPOUTS = [], EXEC_RAF = 0;
+let LAST_TIMELINE = null, LAST_ORDERS = [], LAST_KEEPOUTS = [], LAST_PLAN_IR = null, EXEC_RAF = 0;
 const EXEC_SPEEDUP = 60;                                   // sim seconds per wall-clock second (shown in cap)
 function execExtent(tl, orders) {
   // world bounds covering the charger, every order site, and every route waypoint -> canvas transform
