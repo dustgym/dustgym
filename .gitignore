@@ -147,3 +147,5 @@ coverage.xml
 
 # live UI eval screenshots (regenerable via scripts/ui_eval.py)
 validation/ui/
+# IPEx body preview (regenerable via scripts/gen_ipex_mesh.py)
+validation/ipex/

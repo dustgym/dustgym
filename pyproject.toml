@@ -65,7 +65,7 @@ target-version = "py310"
 select = ["F"]
 
 [tool.pytest.ini_options]
-testpaths = ["terrain_authority", "planet_browser"]
+testpaths = ["terrain_authority", "planet_browser", "scripts"]
 addopts = "-q"
 markers = [
     "gpu: needs a GPU (Vulkan/CUDA)",
