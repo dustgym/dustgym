@@ -630,7 +630,11 @@ authority.)
 Reviews: `docs/architecture_review_2026-06-05.md` + `docs/architecture_review_2026-06-05_realworld.md`
 (run-verified deep reviews + real-world-mission gap analysis); `docs/robotics_curriculum_diff.md` (coverage vs
 the standard robotics curriculum, the source for area R + P13-P19); `docs/slam_pipeline_analysis.md`
-(SLAM-in-autonomous-driving pipeline → the concrete P15 build: scan-to-DEM ICP/NDT overlay + SE(3) ESKF).
+(SLAM-in-autonomous-driving pipeline → the concrete P15 build: scan-to-DEM ICP/NDT overlay + SE(3) ESKF);
+`docs/ui_eval_2026-06-06.md` (live cockpit screenshot eval, 8/8 panes) + `docs/ui_ux_assessment_2026-06-06.md`
+(honest "production-worthy for NASA?" review: YES for a basic single-rover plan end-to-end, NO for an
+operational ground system — gaps in draw-on-map authoring, operational constraints, live execution, and
+ground-system UX/process; maps to J4/AL4-5, K8/K9, P13/P15, M2-M8).
 
 ## 14. Status rollup
 **Done/shippable (M0+M1):** conserved Tier-2 physics + closed loop + sensor render + env_checker-clean RL
