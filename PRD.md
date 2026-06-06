@@ -39,6 +39,14 @@ science), (b) the visual front-end (planet browser, build-order queue, the repor
 exposes a reusable Gymnasium suite (`dustgym`) and an authorable benchmark, but the headline product is
 the planner and its report.
 
+**Scope vs the robotics curriculum (`docs/robotics_curriculum_diff.md`):** dustgym is a wheeled,
+mass-conserving **construction earthmover**, not a manipulator. It is strong in its vertical (terramechanics,
+mass-conserved earthmoving, energy, mobile kinematics, RL-where-it-helps, the elevation map) and deliberately
+does NOT cover the manipulation/humanoid half of the standard curriculum (grasping, dexterous hands, arm
+dynamics, legged gait — §12). The general mobile-autonomy stack it still needs to "conduct a real mission"
+(SLAM/localization, continuous + sampling motion planning, reactive obstacle avoidance, sensor perception,
+live command/telemetry I/O) is tracked in area **R** + forward stages **P13-P19**.
+
 ## 2. The layer stack (build bottom-up; each area maps to a layer)
 
 ```
@@ -238,6 +246,35 @@ monolithic learned latent world model. The five layers and their status:
 > which already does the Hapke render → likely **hybrid: web UI/authoring/leaderboard + Godot 3D view**,
 > both consuming the seam. **Electron is the weaker choice** (per-OS packaging friction, no upside for a
 > shareable research tool); reconsider only if heavy local-FS/offline desktop use is later required.
+
+### R. Robotics-autonomy stack — coverage vs the standard curriculum (`docs/robotics_curriculum_diff.md`)
+Benchmarked (2026-06-05) against Tedrake's *Robotic Manipulation* course + the classic texts (Siegwart
+*Introduction to Autonomous Mobile Robots*, Lynch & Park *Modern Robotics*, Siciliano *Modelling/Planning/
+Control* + Springer Handbook, Murray-Li-Sastry, Craig, Spong, Corke). dustgym is strong in the
+construction-earthmover vertical and **missing much of the general mobile-autonomy stack**; the ⬜/🟡 rows
+drive forward stages P13-P19. Manipulation/humanoid-specific topics are a different machine → out of scope (§12).
+
+| ID | P | Standard-curriculum topic | Status / where |
+|---|---|---|---|
+| R1 | P0 | Mobile-robot kinematics (diff-drive, nonholonomic) | ✅ area B (`step_pose`/`drive_step`) |
+| R2 | P1 | Time-varying elevation / occupancy map representation | ✅ `io_fields` state-field map + map channel (D/E/P6) |
+| R3 | P0 | Global path planning over a costmap | ✅ `route_least_cost` 8-conn Dijkstra (I10) |
+| R4 | P1 | **Sampling-based + continuous motion planning** (RRT/PRM, A*, GCS) | ⬜ grid-Dijkstra + discrete TSP only → **P14** |
+| R5 | P1 | **Time-optimal trajectory + path-tracking control** (pure-pursuit / MPC) | ⬜ fixed-speed timeline; cmd_vel integrator, no tracker → **P14** |
+| R6 | P0 | **Recursive localization + SLAM** (EKF/UKF, MCL, graph-SLAM) | 🟡 scalar Kalman belief (`autonomy`); AprilTag ⛔; no SLAM → **P15** |
+| R7 | P1 | **Reactive / local obstacle avoidance** (VFH / DWA / potential fields) | 🟡 global static keep-out costmap only → **P16** |
+| R8 | P1 | **Sensor perception: ICP / registration; deep detection → dynamic obstacles** | ⬜⛔ gated SfM, no detector → **P17** |
+| R9 | P1 | Camera / stereo / depth + calibration | 🟡⛔ `obs_map_producer` render-gated; Brown-Conrady stub (area F) |
+| R10 | P2 | **Force / impedance control of the dig + Tier-3 contact dynamics** | ⬜⛔ energy-model dig; force = gated Chrono (P7) → **P18** |
+| R11 | P1 | RL (policy-grad / value / model-based) + imitation | ✅+ areas G/L (PPO/CEM/beam/distill, honest finding) |
+| R12 | P2 | SE(3) / screw kinematics for articulated tooling (drum-arm FK/IK) | ⬜ arm-raise energy only (`rassor_mass_model`) → **P19** |
+| R13 | P1 | **Machine-executable plan output (typed-action IR) + TAMP / behavior-tree executive** | 🟡 Plan IR ✅ (`mission_planner.plan_ir`); executive ⬜ → **P13** |
+| R14 | P0 | **Real-time command / telemetry I/O** (cmd_vel in, streaming out) | ⬜ batch-only FastAPI server → **P13** |
+
+> dustgym's own contribution, largely absent from the corpus: deep **terramechanics** (Bekker/Janosi-Hanamoto/
+> Lyasko per body), **mass-conserved earthmoving** as the state transition, **IPEx-grounded energy/endurance**,
+> **planetary regolith + illumination/PSR + Hapke photometry**, the **conserved-vs-learned** reward design, and
+> **multi-vehicle construction scheduling**. The vertical is dustgym's; the general autonomy stack is the gap.
 
 ## 6. Non-functional (N)
 | N1 | P0 | Mass conservation by construction (agents command; authority mutates) | ✅ |
@@ -491,6 +528,49 @@ vehicles>1 is refused, not silently mis-ordered). The earlier "scheduler shows l
 multi-vehicle" note was **overstated** (that 24-vs-28-leg result is single-rover ordering); a 2-rover EXACT
 fleet baseline is still required before any "learned ≫ greedy multi-vehicle" claim ships (MV7).
 
+### Forward plan — robotics-autonomy stack (from the curriculum diff `docs/robotics_curriculum_diff.md`; P13-P19)
+These close the general mobile-autonomy gaps area R surfaces, in leverage order. The construction-earthmover
+science (physics / energy / earthmoving / RL) is real; this is the execution + perception + planning plumbing
+that turns it into "a vehicle that conducts a real mission." The forward review (`docs/architecture_review_
+2026-06-05_realworld.md`) and the curriculum diff converge on the same gap set (SLAM, continuous planning,
+reactive avoidance, sensor perception, live I/O).
+
+**P13 — Executable output + real-time I/O [P0] (R13/R14). 🟡 Plan IR DONE 2026-06-05.** The machine-executable
+Plan IR (`mission_planner.plan_ir`: versioned typed actions GoTo/Excavate/CutHaulFill/Import/Sinter +
+preconditions + precedence DAG + deterministic `plan_id`) ships in `/plan` + a browser "⤓ Plan IR" download.
+⬜ remaining: a **ROS lowering** (Plan IR → `nav_msgs/Path` + per-leg `Twist` + dig/dump action goals); a
+**streaming server seam** (SSE/WebSocket telemetry out + `POST /cmd_vel`/`/step` in + `POST /replan {plan_id,
+state}`) wiring the already-built `drive.py` integrator + `poll_cmd_vel`; and a **behavior-tree / TAMP
+executive** that consumes the IR, monitors preconditions, and triggers re-plan on breach.
+
+**P14 — Continuous motion planning + path tracking [P1] (R4/R5).** ⬜ A sampling-based / continuous layer above
+the grid router: RRT/PRM or A*-with-heuristic over the config space, optional **GCS** for combined
+routing+scheduling, **time-optimal velocity profiling**, and a **pure-pursuit / MPC** path-tracking controller
+so the drive follows a dynamically-feasible reference (today: fixed-speed `route_least_cost` + a cmd_vel
+integrator with no tracker).
+
+**P15 — Localization + SLAM [P0] (R6).** ⬜ The #1 live-loop gap (both reviews). Promote the scalar Kalman
+belief to a real recursive estimator (EKF/UKF), add Monte-Carlo localization, and stand up the gated rtabmap
+graph-SLAM (`slam_bringup.launch.py`) on a real multi-frame egress so the rover localizes continuously instead
+of dead-reckoning + a gated AprilTag fix.
+
+**P16 — Reactive obstacle avoidance [P1] (R7).** ⬜ A local/reactive layer (VFH / dynamic-window / potential
+fields) under the global plan that reacts to *discovered* obstacles between re-plans, feeding dynamic keep-outs
+into the costmap (today: only operator-supplied static keep-out circles `_apply_keepouts`).
+
+**P17 — Sensor-based perception → dynamic obstacles [P1] (R8/R9).** ⬜ Turn camera/depth into a rock/obstacle
+**detector** (deep detection/segmentation or geometric) producing `observed_rocks` → dynamic keep-outs (P16),
+plus **ICP / point-cloud registration** for pose tracking. Extends the gated `obs_map_producer` / COLMAP tiers
+(P6) from coverage-scoring to detection.
+
+**P18 — Force-controlled excavation [P2] (R10).** ⬜⛔ Sensing-while-digging / force-impedance control of the
+dig interface, on the gated Chrono SCM oracle (P7). Today digging is conserved-mass + a fixed-energy model,
+not a force interaction.
+
+**P19 — SE(3) tooling kinematics [P2] (R12).** ⬜ FK/IK/Jacobians for the articulated drum arm (or a future
+tool) if a task needs end-effector placement beyond the current arm-raise energy model. Lowest priority for a
+drum excavator.
+
 > Dependency: **P1 (round-trip) + P2 (structure authoring) have landed** — the product *flow* is real.
 > **P8 is the keystone for realism**: today the plan is an abstract footprint+TSP estimate decoupled from
 > the DEM and the conserved authority, so P8 (terrain-aware + authority-validated, with bulking + slope/slip
@@ -522,10 +602,21 @@ equatorial.)
 Flight autonomy; granular DEM at scale; tool-wear/thermal-power; camera-RL/perception track; multi-agent;
 the full game UX (M7/M8). Post-v1 or research-bet.
 
+**A different machine (from the curriculum diff `docs/robotics_curriculum_diff.md`, permanently out of scope
+for a wheeled mass-conserving earthmover):** grasp synthesis / grasp-wrench cones / antipodal grasps,
+dexterous & soft hands, peg-in-hole assembly, end-effector visual servoing, manipulator dynamics
+(Lagrange/Newton-Euler for an arm), tactile *gripping*, and humanoid/legged modelling & control (ZMP, gait).
+These are arm/humanoid topics in the corpus, not gaps in dustgym. (The construction analogs — excavate/haul/
+dump for pick-and-place, the drum for a gripper, terramechanics for contact — are covered by the conserved
+authority.)
+
 ## 13. Visual artifacts (evidence)
 `docs/foss_ipex_weekend.pdf` (deck); `live_run.png` (real-terrain drive, slip); `policy_training.png` +
 `ppo_training.png` (CEM/PPO learning); `challenges.png` (the 3 M1 challenges: map→target→agent);
 `simcityspace_concept.png` (**site plan over the REAL LOLA Haworth DEM** — the L8 map view, concept overlay).
+Reviews: `docs/architecture_review_2026-06-05.md` + `docs/architecture_review_2026-06-05_realworld.md`
+(run-verified deep reviews + real-world-mission gap analysis); `docs/robotics_curriculum_diff.md` (coverage vs
+the standard robotics curriculum, the source for area R + P13-P19).
 
 ## 14. Status rollup
 **Done/shippable (M0+M1):** conserved Tier-2 physics + closed loop + sensor render + env_checker-clean RL
