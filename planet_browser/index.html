@@ -67,6 +67,9 @@
   #qlist li .g { flex: 1; font-variant-numeric: tabular-nums; }
   #qlist li button { padding: 1px 6px; }
   #qstatus { color: var(--muted); font-size: 12px; min-height: 16px; margin-top: 6px; }
+  #plancanvas { width: 100%; height: auto; aspect-ratio: 324 / 220; display: block; cursor: crosshair;
+    border: 1px solid var(--field-bd); border-radius: 6px; background: #05060c; margin-top: 4px; }
+  .cap small { color: var(--dim); font-weight: 400; }
   #drumout { color: var(--txt); font-variant-numeric: tabular-nums; font-size: 13px; min-height: 17px; margin-top: 4px; }
   /* PLAN pane: real LOLA work-area DEM inset (Haworth 5 m); auto-shown on Moon, over the globe */
   #workarea { position: absolute; z-index: 9; right: 12px; bottom: 12px; width: 240px; display: none;
@@ -219,6 +222,8 @@
         <button id="profloadbtn" class="go">↻ Load</button>
       </div>
       <button id="qcompare" class="go">Compare algorithms ⇅</button>
+      <div class="cap" style="margin-top:8px">PLAN VIEW <small>(local site frame, top-down) · click to set x,y</small></div>
+      <canvas id="plancanvas" width="324" height="220" title="click to set the build x,y"></canvas>
       <div id="qstatus">queue empty</div>
       <table id="cmptable" style="display:none;width:100%;font-size:11px;border-collapse:collapse;margin-top:6px"></table>
     </section>
@@ -569,6 +574,7 @@ function renderKeepouts() {
     li.appendChild(mkbtn("✕", () => { KEEPOUTS.splice(i, 1); renderKeepouts(); }));
     ol.appendChild(li);
   });
+  drawPlan();
 }
 qel("koadd").onclick = () => {
   const x = +qel("kox").value, y = +qel("koy").value, r = +qel("kor").value;
@@ -591,8 +597,63 @@ function renderQueue() {
     ol.appendChild(li);
   });
   setQ(ORDERS.length ? `${ORDERS.length} order(s) queued` : "queue empty");
+  drawPlan();
 }
 function addOrder(o) { ORDERS.push(o); renderQueue(); }
+
+// ---- PLAN VIEW: a top-down local-frame view of the queue (orders + keep-outs + charger) + click-to-place ----
+let _placeXY = null;                                       // last click-to-place marker (local metres)
+function _planExtent() {
+  const xs = [0], ys = [0];                                // include the charger at (0,0)
+  ORDERS.forEach((o) => { const h = Math.sqrt(o.footprint_m2) / 2; xs.push(o.x - h, o.x + h); ys.push(o.y - h, o.y + h); });
+  KEEPOUTS.forEach((k) => { xs.push(k.x - k.r, k.x + k.r); ys.push(k.y - k.r, k.y + k.r); });
+  if (_placeXY) { xs.push(_placeXY.x); ys.push(_placeXY.y); }
+  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (x1 - x0 < 1) { x0 -= 10; x1 += 10; } if (y1 - y0 < 1) { y0 -= 10; y1 += 10; }
+  const px = Math.max(5, (x1 - x0) * 0.15), py = Math.max(5, (y1 - y0) * 0.15);
+  return { x0: x0 - px, x1: x1 + px, y0: y0 - py, y1: y1 + py };
+}
+function _planXform(cv, ext) {
+  const W = cv.width, H = cv.height;
+  const s = Math.min(W / (ext.x1 - ext.x0), H / (ext.y1 - ext.y0));
+  const ox = (W - s * (ext.x1 - ext.x0)) / 2, oy = (H - s * (ext.y1 - ext.y0)) / 2;
+  return { s, ox, oy, X: (wx) => ox + (wx - ext.x0) * s, Y: (wy) => H - (oy + (wy - ext.y0) * s) };
+}
+function drawPlan() {
+  const cv = qel("plancanvas"); if (!cv) return;
+  const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#05060c"; ctx.fillRect(0, 0, W, H);
+  const ext = _planExtent(), tf = _planXform(cv, ext), X = tf.X, Y = tf.Y, s = tf.s;
+  KEEPOUTS.forEach((k) => {                                // keep-outs = red discs
+    ctx.fillStyle = "rgba(224,86,75,.22)"; ctx.strokeStyle = "#e0564b"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(X(k.x), Y(k.y), Math.max(2, k.r * s), 0, 7); ctx.fill(); ctx.stroke();
+  });
+  ORDERS.forEach((o, i) => {                               // orders = cut (blue) / fill (orange) squares by footprint
+    const half = Math.max(2, Math.sqrt(o.footprint_m2) / 2 * s);
+    ctx.fillStyle = o.kind === "cut" ? "rgba(79,156,255,.30)" : "rgba(224,123,57,.30)";
+    ctx.strokeStyle = o.kind === "cut" ? "#4f9cff" : "#e07b39"; ctx.lineWidth = 1;
+    ctx.fillRect(X(o.x) - half, Y(o.y) - half, half * 2, half * 2);
+    ctx.strokeRect(X(o.x) - half, Y(o.y) - half, half * 2, half * 2);
+    ctx.fillStyle = "#c7d2e3"; ctx.font = "9px system-ui"; ctx.textAlign = "center";
+    ctx.fillText(String(i + 1), X(o.x), Y(o.y) + 3);
+  });
+  ctx.fillStyle = "#3fa34d"; ctx.fillRect(X(0) - 3, Y(0) - 3, 6, 6);   // charger
+  if (_placeXY) {                                          // the click-to-place crosshair
+    ctx.strokeStyle = "#4f9cff"; ctx.lineWidth = 1; const cx = X(_placeXY.x), cy = Y(_placeXY.y);
+    ctx.beginPath(); ctx.arc(cx, cy, 5, 0, 7); ctx.moveTo(cx - 8, cy); ctx.lineTo(cx + 8, cy);
+    ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8); ctx.stroke();
+  }
+}
+qel("plancanvas").onclick = (e) => {                       // canvas px -> local metres -> the x,y inputs
+  const cv = qel("plancanvas"), r = cv.getBoundingClientRect();
+  const px = (e.clientX - r.left) / r.width * cv.width, py = (e.clientY - r.top) / r.height * cv.height;
+  const ext = _planExtent(), tf = _planXform(cv, ext);
+  const wx = ext.x0 + (px - tf.ox) / tf.s, wy = ext.y0 + ((cv.height - py) - tf.oy) / tf.s;
+  _placeXY = { x: Math.round(wx), y: Math.round(wy) };
+  qel("qx").value = _placeXY.x; qel("qy").value = _placeXY.y;
+  setQ(`placed ${_placeXY.x}, ${_placeXY.y} m — pick a kind/structure + Add to queue it`);
+  drawPlan();
+};
 qel("qadd").onclick = () => addOrder({
   action: qel("qlabel").value || (qel("qkind").value === "cut" ? "Cut" : "Fill"),
   kind: qel("qkind").value, x: +qel("qx").value, y: +qel("qy").value,
