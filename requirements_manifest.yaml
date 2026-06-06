@@ -1,240 +1,242 @@
-# DustGym requirement status manifest — the machine-readable status source for PRD v6.0.
-#
-# Per the gap analysis: status is GENERATED from this checked-in manifest, not hand-duplicated as
-# checkmarks across the PRD. Each row carries the four PRD §3 columns (I/X/V/Q), an owner, the source
-# module/API, the acceptance test id, the evidence commit, blocking deps, and a last-verified date.
-#
-# Status values (PRD §3): D done · P partial · N not done · G externally gated · NA not applicable.
-# Columns: I implementation · X integration (product path uses it) · V verification (automated
-# acceptance) · Q qualification (real data/hardware/deploy evidence).
-#
-# This manifest is populated INCREMENTALLY: a requirement row is added the first time it is actively
-# tracked (release blockers + Phase-0 + the rows under current work first). It is not yet exhaustive
-# over all of PRD §7; rows are added as their work packages start. `owner: unassigned` and
-# `evidence: ""` are truthful states, not placeholders.
 schema_version: 1
-prd_version: "6.0"
-status_values: [D, P, N, G, NA]
-priorities: [P0, P1, P2, P3]
-columns: [I, X, V, Q]
-
+prd_version: '6.0'
+status_values:
+- D
+- P
+- N
+- G
+- NA
+priorities:
+- P0
+- P1
+- P2
+- P3
+columns:
+- I
+- X
+- V
+- Q
 requirements:
-  # ---- Release blockers (PRD §4.2). blocks_release: no DustGym release while any is open. ----
-  - id: RB-01
-    title: Reject non-finite/negative physical inputs; enforce authority-state invariants
-    priority: P0
-    blocks_release: true
-    I: P
-    X: P
-    V: P
-    Q: NA
-    owner: active
-    source: terrain_authority/validation.py, terrain_authority/column_state.py
-    acceptance: terrain_authority/test_validation.py
-    evidence: ""
-    blocked_by: [RB-02]
-    last_verified: 2026-06-06
-  - id: RB-02
-    title: CI runs the configured suite; declared dependency/marker policy
-    priority: P0
-    blocks_release: true
-    I: P
-    X: P
-    V: P
-    Q: NA
-    owner: active
-    source: pyproject.toml, .github/workflows/ci.yml, scripts/test_requirements_manifest.py
-    acceptance: scripts/test_requirements_manifest.py
-    evidence: ""
-    blocked_by: []
-    last_verified: 2026-06-06
-  - id: RB-03
-    title: One immutable fleet-aware PlanResult consumed by all outputs
-    priority: P0
-    blocks_release: true
-    I: N
-    X: N
-    V: N
-    Q: NA
-    owner: unassigned
-    source: planet_browser/mission_planner.py (PlanResult, planned)
-    acceptance: ""
-    evidence: ""
-    blocked_by: [RB-01]
-    last_verified: 2026-06-06
-  - id: RB-04
-    title: Per-vehicle Plan IR state ledger (no cross-vehicle position leak)
-    priority: P0
-    blocks_release: true
-    I: P
-    X: P
-    V: N
-    Q: NA
-    owner: unassigned
-    source: planet_browser/mission_planner.py (plan_ir)
-    acceptance: ""
-    evidence: ""
-    blocked_by: [RB-03]
-    last_verified: 2026-06-06
-  - id: RB-05
-    title: Typed VehicleModel threaded through authority/planner/IR/rendering
-    priority: P0
-    blocks_release: true
-    I: P
-    X: P
-    V: N
-    Q: P
-    owner: unassigned
-    source: terrain_authority/vehicles.py, terrain_authority/rover_env.py
-    acceptance: terrain_authority/test_vehicles.py (geometry only so far)
-    evidence: "0473312"
-    blocked_by: [RB-03]
-    last_verified: 2026-06-06
-  - id: RB-06
-    title: Fresh-wheel server smoke; externalized data dirs; explicit asset mode
-    priority: P0
-    blocks_release: true
-    I: P
-    X: P
-    V: N
-    Q: N
-    owner: unassigned
-    source: planet_browser/server.py, pyproject.toml
-    acceptance: ""
-    evidence: ""
-    blocked_by: [RB-02]
-    last_verified: 2026-06-06
-
-  # ---- Contracts and conserved authority (PRD §7.1) ----
-  - id: CT-01
-    title: Public numeric inputs enforce units, finiteness, physical domains
-    priority: P0
-    I: P
-    X: P
-    V: P
-    Q: NA
-    owner: active
-    source: terrain_authority/validation.py
-    acceptance: terrain_authority/test_validation.py
-    evidence: ""
-    blocked_by: []
-    last_verified: 2026-06-06
-  - id: CT-02
-    title: ColumnState validates dims/shapes/dtypes/domains at construction
-    priority: P0
-    I: P
-    X: N
-    V: P
-    Q: NA
-    owner: active
-    source: terrain_authority/column_state.py
-    acceptance: terrain_authority/test_column_state_invariants.py
-    evidence: ""
-    blocked_by: []
-    last_verified: 2026-06-06
-  - id: CT-03
-    title: Every authority mutation transactional, mass-conserving, invariant-valid
-    priority: P0
-    I: P
-    X: P
-    V: P
-    Q: NA
-    owner: unassigned
-    source: terrain_authority/column_state.py
-    acceptance: terrain_authority/test_column_state_invariants.py
-    evidence: ""
-    blocked_by: []
-    last_verified: 2026-06-06
-  - id: CT-04
-    title: Scene publication writes rasters atomically, metadata last as commit marker
-    priority: P0
-    I: N
-    X: N
-    V: N
-    Q: NA
-    owner: unassigned
-    source: terrain_authority/io_fields.py
-    acceptance: ""
-    evidence: ""
-    blocked_by: [RB-01]
-    last_verified: 2026-06-06
-  - id: CT-05
-    title: Python/Godot/ROS share a versioned, strictly-validated schema
-    priority: P0
-    I: P
-    X: P
-    V: P
-    Q: NA
-    owner: unassigned
-    source: terrain_authority/io_fields.py, godot_sidecar/state_fields.gd
-    acceptance: terrain_authority/test_io_fields.py
-    evidence: ""
-    blocked_by: []
-    last_verified: 2026-06-06
-  - id: CT-06
-    title: Contract checks use explicit exceptions, never removable asserts
-    priority: P0
-    I: P
-    X: P
-    V: N
-    Q: NA
-    owner: active
-    source: terrain_authority/validation.py
-    acceptance: ""
-    evidence: ""
-    blocked_by: [RB-01]
-    last_verified: 2026-06-06
-  - id: CT-07
-    title: Every artifact records commit, config, mode, seed, schema version, input hashes
-    priority: P1
-    I: P
-    X: P
-    V: N
-    Q: NA
-    owner: unassigned
-    source: planet_browser/mission_planner.py
-    acceptance: ""
-    evidence: ""
-    blocked_by: [RB-03]
-    last_verified: 2026-06-06
-
-  # ---- Vehicle/posture (PRD §7.3) — advanced by the 2026-06-06 two-body work ----
-  - id: VT-01
-    title: Typed VehicleModel supplies mass/geometry/CG/battery/drum/sensors/render
-    priority: P0
-    I: P
-    X: P
-    V: P
-    Q: P
-    owner: unassigned
-    source: terrain_authority/vehicles.py
-    acceptance: terrain_authority/test_vehicles.py
-    evidence: "0473312"
-    blocked_by: []
-    last_verified: 2026-06-06
-  - id: VT-02
-    title: Selecting a vehicle changes all applicable authority/planner numbers
-    priority: P0
-    I: N
-    X: N
-    V: N
-    Q: N
-    owner: unassigned
-    source: terrain_authority/vehicles.py, planet_browser/mission_planner.py
-    acceptance: terrain_authority/test_vehicles.py (cross-vehicle diff planned)
-    evidence: ""
-    blocked_by: [RB-05]
-    last_verified: 2026-06-06
-  - id: VT-06
-    title: Posture-dependent support polygon and static stability margin each step
-    priority: P1
-    I: P
-    X: N
-    V: P
-    Q: G
-    owner: unassigned
-    source: terrain_authority/stability.py
-    acceptance: terrain_authority/test_stability.py
-    evidence: "e4c2b48"
-    blocked_by: []
-    last_verified: 2026-06-06
+- id: RB-01
+  title: Reject non-finite/negative physical inputs; enforce authority-state invariants
+  priority: P0
+  blocks_release: true
+  I: P
+  X: P
+  V: P
+  Q: NA
+  owner: active
+  source: terrain_authority/validation.py, terrain_authority/column_state.py
+  acceptance: terrain_authority/test_validation.py
+  evidence: 3004a1e
+  blocked_by:
+  - RB-02
+  last_verified: '2026-06-06'
+- id: RB-02
+  title: CI runs the configured suite; declared dependency/marker policy
+  priority: P0
+  blocks_release: true
+  I: D
+  X: D
+  V: D
+  Q: NA
+  owner: active
+  source: pyproject.toml, .github/workflows/ci.yml, scripts/test_requirements_manifest.py
+  acceptance: scripts/test_requirements_manifest.py
+  evidence: 3004a1e
+  blocked_by: []
+  last_verified: '2026-06-06'
+- id: RB-03
+  title: One immutable fleet-aware PlanResult consumed by all outputs
+  priority: P0
+  blocks_release: true
+  I: N
+  X: N
+  V: N
+  Q: NA
+  owner: unassigned
+  source: planet_browser/mission_planner.py (PlanResult, planned)
+  acceptance: ''
+  evidence: ''
+  blocked_by:
+  - RB-01
+  last_verified: 2026-06-06
+- id: RB-04
+  title: Per-vehicle Plan IR state ledger (no cross-vehicle position leak)
+  priority: P0
+  blocks_release: true
+  I: P
+  X: P
+  V: N
+  Q: NA
+  owner: unassigned
+  source: planet_browser/mission_planner.py (plan_ir)
+  acceptance: ''
+  evidence: ''
+  blocked_by:
+  - RB-03
+  last_verified: 2026-06-06
+- id: RB-05
+  title: Typed VehicleModel threaded through authority/planner/IR/rendering
+  priority: P0
+  blocks_release: true
+  I: P
+  X: P
+  V: N
+  Q: P
+  owner: unassigned
+  source: terrain_authority/vehicles.py, terrain_authority/rover_env.py
+  acceptance: terrain_authority/test_vehicles.py (geometry only so far)
+  evidence: '0473312'
+  blocked_by:
+  - RB-03
+  last_verified: 2026-06-06
+- id: RB-06
+  title: Fresh-wheel server smoke; externalized data dirs; explicit asset mode
+  priority: P0
+  blocks_release: true
+  I: P
+  X: P
+  V: N
+  Q: N
+  owner: unassigned
+  source: planet_browser/server.py, pyproject.toml
+  acceptance: ''
+  evidence: ''
+  blocked_by:
+  - RB-02
+  last_verified: 2026-06-06
+- id: CT-01
+  title: Public numeric inputs enforce units, finiteness, physical domains
+  priority: P0
+  I: P
+  X: P
+  V: D
+  Q: NA
+  owner: active
+  source: terrain_authority/validation.py
+  acceptance: terrain_authority/test_validation.py
+  evidence: 3004a1e
+  blocked_by: []
+  last_verified: '2026-06-06'
+- id: CT-02
+  title: ColumnState validates dims/shapes/dtypes/domains at construction
+  priority: P0
+  I: D
+  X: N
+  V: D
+  Q: NA
+  owner: active
+  source: terrain_authority/column_state.py
+  acceptance: terrain_authority/test_column_state_invariants.py
+  evidence: 3004a1e
+  blocked_by: []
+  last_verified: '2026-06-06'
+- id: CT-03
+  title: Every authority mutation transactional, mass-conserving, invariant-valid
+  priority: P0
+  I: P
+  X: P
+  V: D
+  Q: NA
+  owner: unassigned
+  source: terrain_authority/column_state.py
+  acceptance: terrain_authority/test_column_state_invariants.py
+  evidence: 3004a1e
+  blocked_by: []
+  last_verified: '2026-06-06'
+- id: CT-04
+  title: Scene publication writes rasters atomically, metadata last as commit marker
+  priority: P0
+  I: N
+  X: N
+  V: N
+  Q: NA
+  owner: unassigned
+  source: terrain_authority/io_fields.py
+  acceptance: ''
+  evidence: ''
+  blocked_by:
+  - RB-01
+  last_verified: 2026-06-06
+- id: CT-05
+  title: Python/Godot/ROS share a versioned, strictly-validated schema
+  priority: P0
+  I: P
+  X: P
+  V: P
+  Q: NA
+  owner: unassigned
+  source: terrain_authority/io_fields.py, godot_sidecar/state_fields.gd
+  acceptance: terrain_authority/test_io_fields.py
+  evidence: ''
+  blocked_by: []
+  last_verified: 2026-06-06
+- id: CT-06
+  title: Contract checks use explicit exceptions, never removable asserts
+  priority: P0
+  I: D
+  X: P
+  V: D
+  Q: NA
+  owner: active
+  source: terrain_authority/validation.py
+  acceptance: ''
+  evidence: 3004a1e
+  blocked_by:
+  - RB-01
+  last_verified: '2026-06-06'
+- id: CT-07
+  title: Every artifact records commit, config, mode, seed, schema version, input hashes
+  priority: P1
+  I: P
+  X: P
+  V: N
+  Q: NA
+  owner: unassigned
+  source: planet_browser/mission_planner.py
+  acceptance: ''
+  evidence: ''
+  blocked_by:
+  - RB-03
+  last_verified: 2026-06-06
+- id: VT-01
+  title: Typed VehicleModel supplies mass/geometry/CG/battery/drum/sensors/render
+  priority: P0
+  I: P
+  X: P
+  V: P
+  Q: P
+  owner: unassigned
+  source: terrain_authority/vehicles.py
+  acceptance: terrain_authority/test_vehicles.py
+  evidence: '0473312'
+  blocked_by: []
+  last_verified: 2026-06-06
+- id: VT-02
+  title: Selecting a vehicle changes all applicable authority/planner numbers
+  priority: P0
+  I: N
+  X: N
+  V: N
+  Q: N
+  owner: unassigned
+  source: terrain_authority/vehicles.py, planet_browser/mission_planner.py
+  acceptance: terrain_authority/test_vehicles.py (cross-vehicle diff planned)
+  evidence: ''
+  blocked_by:
+  - RB-05
+  last_verified: 2026-06-06
+- id: VT-06
+  title: Posture-dependent support polygon and static stability margin each step
+  priority: P1
+  I: P
+  X: N
+  V: P
+  Q: G
+  owner: unassigned
+  source: terrain_authority/stability.py
+  acceptance: terrain_authority/test_stability.py
+  evidence: e4c2b48
+  blocked_by: []
+  last_verified: 2026-06-06
