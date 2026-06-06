@@ -21,6 +21,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
       - name: Install (core + dev)
         run: |
           python -m pip install --upgrade pip
@@ -29,8 +30,8 @@ jobs:
         run: ruff check --select F terrain_authority planet_browser dustgym scripts viz
       - name: Type check (mypy)
         run: mypy
-      - name: Test + coverage gate
-        run: pytest terrain_authority planet_browser --cov --cov-report=term-missing
+      - name: Test + coverage gate (the CONFIGURED suite; testpaths = core + planner + scripts)
+        run: pytest --cov --cov-report=term-missing
 
   build:
     name: Build sdist + wheel

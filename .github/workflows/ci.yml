@@ -1,25 +1,24 @@
 name: CI
 
-# PRD N9: the test + lint gate. Runs on every push and PR; the publish workflow should depend on this.
-# GPU / Godot / COLMAP / Chrono tests skip cleanly (importorskip / skip-if-no-artifact) on the CPU runner.
+# PRD N9/PO-04: the test + lint gate. Runs on every push and PR; the publish workflow depends on the
+# same gate. GPU / Godot / COLMAP / Chrono / ROS tests skip cleanly (importorskip / skip-if-no-artifact)
+# on the CPU runner. Structured as: lint + type + the coverage gate ONCE (py3.11), and the configured
+# test suite across the remaining supported Python versions in parallel (faster wall-clock, pip-cached).
 
 on:
   push:
   pull_request:
 
 jobs:
-  test:
-    name: lint + test (py${{ matrix.python-version }})
+  lint-type-cov:
+    name: lint + type + coverage gate (py3.11)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
+          cache: pip
       - name: Install (core + dev)
         run: |
           python -m pip install --upgrade pip
@@ -28,5 +27,25 @@ jobs:
         run: ruff check --select F terrain_authority planet_browser dustgym scripts viz
       - name: Type check (mypy; mission-planner + core enforced, sim modules ratcheted in pyproject)
         run: mypy
-      - name: Test + coverage gate (the CONFIGURED suite; testpaths = core + planner + scripts; gated tiers skip)
+      - name: Test + coverage gate (the CONFIGURED suite; testpaths = core + planner + scripts)
         run: pytest --cov --cov-report=term-missing
+
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]   # 3.11 is covered by the lint-type-cov job
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (core + dev)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Test (the CONFIGURED suite; gated tiers skip)
+        run: pytest -p no:cacheprovider
