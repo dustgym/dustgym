@@ -327,3 +327,18 @@ def test_module_self_test_passes():
     # _self_test() encodes the author's REAL acceptance assertions (density range, datum
     # round-trip, depth-monotonicity) and returns 0 on all-pass.
     assert _self_test() == 0
+
+
+def test_geotiff_rational_tag_parses(tmp_path):
+    # Regression: a GeoTIFF carrying type-5 RATIONAL tags (XResolution/YResolution, which GDAL/tifffile
+    # emit by DEFAULT) must parse. Before the fix the IFD reader over-read the RATIONAL field (16 B vs 8)
+    # and raised struct.error -> any real survey GeoTIFF with those tags crashed ingest. Real Haworth
+    # pixels, written through tifffile to a real classic TIFF.
+    tifffile = pytest.importorskip("tifffile")
+    _require_dem()
+    from terrain_authority.dem_import import _read_tiff_ifd0
+    Z = np.fromfile(_HEIGHTMAP, dtype="<f4", count=64).reshape(8, 8).copy()   # a real Haworth crop
+    p = str(tmp_path / "crop_rational.tif")
+    tifffile.imwrite(p, Z, resolution=(200.0, 200.0))      # -> 282/283 XResolution/YResolution RATIONAL (type 5)
+    tags, _bo = _read_tiff_ifd0(p)                          # must NOT raise (was struct.error on type-5)
+    assert 282 in tags and tags[282][0] == pytest.approx(200.0)   # RATIONAL decoded num/den, not crashed

@@ -10,8 +10,9 @@ Why no GDAL: the validated Haworth tile (``Haworth_final_adj_5mpp_surf.tif``,
 GeoTIFF tags (33550 ModelPixelScale, 33922 ModelTiepoint, 34735/34736 GeoKeys)
 parse directly from the IFD. A same-frame 10 km crop is a pixel-window slice — the
 product is ALREADY south-polar stereographic (IAU_2015:30135), so NO reprojection
-is required (eval addendum §4.3). This environment has no gdal/rasterio/osgeo/pyproj
-and may not pip install.
+is required here (eval addendum §4.3). (`pyproj` IS available in the product runtime
+and `planet_browser/dem_import.py` uses it for the non-polar / equatorial reproject
+path; this module deliberately stays GDAL/rasterio-free for the polar same-frame lane.)
 
 Vertical datum (load-bearing, eval addendum §4.2): the LOLA ``*_surf`` Z is a
 HEIGHT-ABOVE-SPHERE in metres (Haworth range ~-1643..+2842 m), NOT an absolute
@@ -139,7 +140,7 @@ def _read_tiff_ifd0(path) -> tuple[dict, str]:
             if typ not in _TIFF_TYPE:
                 continue  # type we never consume
             code, size = _TIFF_TYPE[typ]
-            total = size * (count * 2 if typ == 5 else count)
+            total = size * count   # size already covers a whole element (RATIONAL=8 B = the num+den pair)
             value_field = entry[8:12]
             if total <= 4:
                 blob = value_field[:total]
