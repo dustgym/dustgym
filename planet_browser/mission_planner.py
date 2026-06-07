@@ -49,6 +49,7 @@ from terrain_authority import constants as C            # materials + the SINTER
 from terrain_authority import rassor_mass_model as RM   # ICE-RASSOR drum-fill sensing (NTRS 20210022781)
 from terrain_authority import slip as TMS               # conserved slip ladder — weight-aware leg slip
 from terrain_authority import terramechanics as TM      # TerramechanicsParams for the slip solve
+from terrain_authority import validation as VAL         # RB-01: physical-domain validation at this input boundary
 from terrain_authority import vehicles as V             # vehicle/tool capability registry (gate order kinds)
 from terrain_authority.bodies import get_body as _get_body, params_for_body  # soil model (soil override)
 from terrain_authority.column_state import ColumnState  # conserved authority — for I8 plan validation
@@ -196,13 +197,20 @@ def mission_from_dict(payload):
             raise ValueError(
                 f"order {i}: kind {o['kind']!r} needs the {need!r} capability, which the fleet "
                 f"({veh!r} + tools {list(tools)}) lacks.")
-        orders.append(BuildOrder(action=str(o["action"]), kind=str(o["kind"]),
-                                 x=float(o["x"]), y=float(o["y"]),
-                                 footprint_m2=float(o["footprint_m2"]), depth_m=float(o["depth_m"]),
-                                 note=str(o.get("note", ""))))
+        # RB-01: reject NaN/Inf coords and non-positive footprint/depth at this public boundary
+        # (float() alone accepts float("nan"); a negative depth or zero area is physically meaningless).
+        orders.append(BuildOrder(
+            action=str(o["action"]), kind=str(o["kind"]),
+            x=VAL.ensure_finite_scalar(o["x"], f"order {i} x"),
+            y=VAL.ensure_finite_scalar(o["y"], f"order {i} y"),
+            footprint_m2=VAL.ensure_positive_scalar(o["footprint_m2"], f"order {i} footprint_m2"),
+            depth_m=VAL.ensure_positive_scalar(o["depth_m"], f"order {i} depth_m"),
+            note=str(o.get("note", ""))))
     c = payload.get("charger", (0.0, 0.0))
     kwargs = dict(name=str(payload.get("name", "Build Mission")), body=body, orders=orders,
-                  charger=(float(c[0]), float(c[1])), vehicle=veh, tools=tools, soil=soil)
+                  charger=(VAL.ensure_finite_scalar(c[0], "charger x"),
+                           VAL.ensure_finite_scalar(c[1], "charger y")),
+                  vehicle=veh, tools=tools, soil=soil)
     if "date" in payload:
         kwargs["date"] = str(payload["date"])
     prec = payload.get("precedence")                       # I9: [[before_action, after_action], ...]
@@ -225,10 +233,9 @@ def mission_from_dict(payload):
         for j, k in enumerate(kos):
             if not isinstance(k, dict) or not all(f in k for f in ("x", "y", "r")):
                 raise ValueError(f"keepout {j} must be an object with x, y, r")
-            r = float(k["r"])
-            if r <= 0:
-                raise ValueError(f"keepout {j} radius must be > 0 (got {r})")
-            clean.append({"x": float(k["x"]), "y": float(k["y"]), "r": r})
+            clean.append({"x": VAL.ensure_finite_scalar(k["x"], f"keepout {j} x"),
+                          "y": VAL.ensure_finite_scalar(k["y"], f"keepout {j} y"),
+                          "r": VAL.ensure_positive_scalar(k["r"], f"keepout {j} r")})
         kwargs["keepouts"] = tuple(clean)
     return Mission(**kwargs)
 

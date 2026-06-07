@@ -60,6 +60,21 @@ def test_mission_from_dict_requires_orders():
         MP.mission_from_dict({"name": "x", "body": "moon", "orders": []})
 
 
+def test_mission_from_dict_rejects_bad_physical_domains():
+    # RB-01: this public input boundary rejects NaN/Inf coords and non-positive footprint/depth
+    # (float() alone accepts NaN/Inf; a negative depth or zero area is physically meaningless).
+    def _o(**kw):
+        base = {"action": "x", "kind": "cut", "x": 1.0, "y": 1.0, "footprint_m2": 10.0, "depth_m": 0.1}
+        base.update(kw)
+        return [base]
+    for bad in (_o(x=float("nan")), _o(y=float("inf")), _o(depth_m=-0.1),
+                _o(depth_m=0.0), _o(footprint_m2=0.0), _o(footprint_m2=-5.0)):
+        with pytest.raises(ValueError):
+            MP.mission_from_dict(_payload(orders=bad))
+    with pytest.raises(ValueError):                       # NaN charger coordinate
+        MP.mission_from_dict({**_payload(), "charger": [float("nan"), 0.0]})
+
+
 # ---- run() on a queued mission writes a REAL pdf + md, balanced ----------------------------------
 def test_queued_mission_balances_and_writes_pdf():
     m = MP.mission_from_dict(_payload())
