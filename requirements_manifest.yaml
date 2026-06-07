@@ -80,17 +80,17 @@ requirements:
   title: Typed VehicleModel threaded through authority/planner/IR/rendering
   priority: P0
   blocks_release: true
-  I: P
-  X: P
-  V: N
+  I: D
+  X: D
+  V: D
   Q: P
-  owner: unassigned
-  source: terrain_authority/vehicles.py, terrain_authority/rover_env.py
-  acceptance: terrain_authority/test_vehicles.py (geometry only so far)
-  evidence: '0473312'
+  owner: active
+  source: terrain_authority/vehicles.py (rassor2), planet_browser/mission_planner.py (_drum_kg)
+  acceptance: terrain_authority/test_vehicles.py, planet_browser/test_plan_result.py
+  evidence: aa79574
   blocked_by:
   - RB-03
-  last_verified: 2026-06-06
+  last_verified: '2026-06-06'
 - id: RB-06
   title: Fresh-wheel server smoke; externalized data dirs; explicit asset mode
   priority: P0
@@ -216,17 +216,17 @@ requirements:
 - id: VT-02
   title: Selecting a vehicle changes all applicable authority/planner numbers
   priority: P0
-  I: N
-  X: N
-  V: N
+  I: D
+  X: D
+  V: D
   Q: N
-  owner: unassigned
+  owner: active
   source: terrain_authority/vehicles.py, planet_browser/mission_planner.py
-  acceptance: terrain_authority/test_vehicles.py (cross-vehicle diff planned)
-  evidence: ''
+  acceptance: planet_browser/test_plan_result.py
+  evidence: aa79574
   blocked_by:
   - RB-05
-  last_verified: 2026-06-06
+  last_verified: '2026-06-06'
 - id: VT-06
   title: Posture-dependent support polygon and static stability margin each step
   priority: P1
