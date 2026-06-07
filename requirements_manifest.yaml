@@ -189,14 +189,14 @@ requirements:
 - id: CT-07
   title: Every artifact records commit, config, mode, seed, schema version, input hashes
   priority: P1
-  I: P
-  X: P
-  V: P
+  I: D
+  X: D
+  V: D
   Q: NA
-  owner: unassigned
-  source: planet_browser/mission_planner.py (PlanResult.provenance)
+  owner: active
+  source: planet_browser/mission_planner.py (PlanResult.provenance, plan_ir, build_timeline)
   acceptance: planet_browser/test_plan_result.py
-  evidence: 54fabb4
+  evidence: af49f60
   blocked_by:
   - RB-03
   last_verified: '2026-06-06'
