@@ -30,7 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 rl = ["torch<3", "stable-baselines3>=2.0,<3"]          # PPO / model-free baselines
 planner = ["matplotlib", "pyproj"]                     # the mission-planner product: report figures + non-polar DEM reproject
-server = ["fastapi>=0.110,<1", "uvicorn>=0.20,<1"]     # the ASGI planner server (dustgym-serve; PRD N7/N8)
+server = ["fastapi>=0.110,<1", "uvicorn>=0.20,<1", "matplotlib", "pyproj"]   # the ASGI planner server (dustgym-serve; PRD N7/N8). MUST carry the planner's import-time deps (mission_planner imports matplotlib at module load; latlon site-pick uses pyproj) so `pip install dustgym[server]` yields a working server (RB-06).
 render = ["trimesh>=4,<5"]                             # render-asset tooling (scripts/gen_ipex_mesh.py: the CC0 IPEx body)
 # CI installs .[dev]; it MUST cover every import-time dep of the CONFIGURED test suite (testpaths =
 # terrain_authority + planet_browser + scripts), hence trimesh (scripts/) + pyyaml (requirement manifest test).

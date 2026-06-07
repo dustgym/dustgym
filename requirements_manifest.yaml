@@ -65,17 +65,17 @@ requirements:
   title: Per-vehicle Plan IR state ledger (no cross-vehicle position leak)
   priority: P0
   blocks_release: true
-  I: P
+  I: D
   X: P
-  V: N
+  V: P
   Q: NA
-  owner: unassigned
-  source: planet_browser/mission_planner.py (plan_ir)
-  acceptance: ''
-  evidence: ''
+  owner: active
+  source: planet_browser/mission_planner.py (plan_ir prev_by_vehicle)
+  acceptance: planet_browser/test_plan_result.py
+  evidence: aa766d6
   blocked_by:
   - RB-03
-  last_verified: 2026-06-06
+  last_verified: '2026-06-06'
 - id: RB-05
   title: Typed VehicleModel threaded through authority/planner/IR/rendering
   priority: P0
@@ -97,15 +97,15 @@ requirements:
   blocks_release: true
   I: P
   X: P
-  V: N
+  V: P
   Q: N
-  owner: unassigned
-  source: planet_browser/server.py, pyproject.toml
-  acceptance: ''
+  owner: active
+  source: pyproject.toml (server extra), planet_browser/server.py
+  acceptance: planet_browser/test_server_install.py
   evidence: ''
   blocked_by:
   - RB-02
-  last_verified: 2026-06-06
+  last_verified: '2026-06-06'
 - id: CT-01
   title: Public numeric inputs enforce units, finiteness, physical domains
   priority: P0
