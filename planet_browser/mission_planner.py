@@ -872,6 +872,8 @@ class PlanResult:
     tl: list
     totals: dict
     provenance: dict
+    validation: dict | None = None     # RB-03: as-built acceptance, attached when computed with_acceptance
+    endurance: dict | None = None      # RB-03: single-sortie reachability, attached likewise
 
     def as_tuple(self):
         """The legacy (trips, flows, per_trip, tl, totals) shape older call sites consume."""
@@ -893,18 +895,24 @@ def _plan_provenance(mission, *, algorithm, objective, vehicles, dem_origin):
 
 
 def plan(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_slope_deg=25.0,
-         algorithm="nearest", objective="time", vehicles=1) -> PlanResult:
+         algorithm="nearest", objective="time", vehicles=1, with_acceptance=False) -> PlanResult:
     """RB-03 keystone: compute the canonical plan ONCE and package it as an immutable PlanResult. Pass the
     result to ``run`` / ``build_timeline`` / ``plan_ir`` so they do NOT each re-run the planner (the server
     does this), guaranteeing totals/report/timeline/IR/playback describe one and the same plan. Wraps
-    plan_and_simulate (single-vehicle or, for vehicles>1, the fleet planner)."""
+    plan_and_simulate (single-vehicle or, for vehicles>1, the fleet planner).
+
+    ``with_acceptance`` also computes the as-built validation + single-sortie endurance and attaches them,
+    so the server's plan response is wholly a view of ONE result (RB-03: validation/acceptance live here)."""
     trips, flows, per_trip, tl, totals = plan_and_simulate(
         mission, dem=dem, dem_origin=dem_origin, max_traverse_slope_deg=max_traverse_slope_deg,
         algorithm=algorithm, objective=objective, vehicles=vehicles)
     prov = _plan_provenance(mission, algorithm=algorithm, objective=objective,
                             vehicles=vehicles, dem_origin=dem_origin)
+    validation = validate_plan(mission, dem=dem, dem_origin=dem_origin) if with_acceptance else None
+    endu = endurance(mission, dem=dem, dem_origin=dem_origin) if with_acceptance else None
     return PlanResult(mission=mission, dem_origin=tuple(dem_origin), trips=trips, flows=flows,
-                      per_trip=per_trip, tl=tl, totals=totals, provenance=prov)
+                      per_trip=per_trip, tl=tl, totals=totals, provenance=prov,
+                      validation=validation, endurance=endu)
 
 
 # ---- executable Plan IR: the machine-consumable plan a rover / ROS executive runs (vs the human PDF) ----

@@ -75,6 +75,17 @@ def test_plan_ir_and_timeline_carry_the_plan_provenance():
     assert ir["provenance"]["schema_version"] == MP.PLAN_RESULT_VERSION
 
 
+def test_plan_with_acceptance_carries_validation_and_endurance():
+    # RB-03: validation + acceptance LIVE in the one PlanResult (the server reads them from here, not a
+    # recompute); they equal the standalone computations, and the cheap default omits them.
+    m = _mission()
+    r = MP.plan(m, with_acceptance=True)
+    assert r.validation is not None and r.endurance is not None
+    assert r.validation == MP.validate_plan(m)
+    assert r.endurance["range_flat_reserve_km"] == MP.endurance(m)["range_flat_reserve_km"]
+    assert MP.plan(m).validation is None and MP.plan(m).endurance is None   # not computed unless asked
+
+
 def _fleet_mission():
     # four distinct sites so the site-exclusive allocator can split them across two rovers
     return MP.mission_from_dict({
@@ -103,6 +114,15 @@ def test_plan_ir_per_vehicle_no_position_leak():
     for veh, a in first_goto.items():
         expected = round(MP._d(charger, tuple(a["to"])), 2)
         assert a["expect"]["distance_m"] == pytest.approx(expected, abs=0.02)   # starts at the charger
+
+
+def test_fleet_per_vehicle_energy_sums_to_the_fleet_total():
+    # RB-04: the per-vehicle energy ledger sums to the fleet total -- no cross-vehicle double-count/leak
+    # (default IDLE_POWER_W=0, so the headline energy is exactly the sum of per-vehicle active energy).
+    r = MP.plan(_fleet_mission(), vehicles=2)
+    detail = r.totals["vehicles_detail"]
+    assert len(detail) >= 2
+    assert r.totals["energy_J"] == pytest.approx(sum(d["energy_J"] for d in detail))
 
 
 def _run_all():

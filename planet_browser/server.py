@@ -465,18 +465,19 @@ def post_plan(req: PlanRequest, _auth: None = Depends(require_auth)):
                     return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
         else:
             dem, origin = None, (0.0, 0.0)
-        # RB-03: compute the plan ONCE; report/timeline/IR are views of this single result (no recompute).
-        result = MP.plan(mission, dem=dem, dem_origin=origin,
-                         algorithm=req.algorithm, objective=req.objective, vehicles=req.vehicles)
+        # RB-03: compute the plan ONCE (incl. as-built validation + endurance); report/timeline/IR and the
+        # validation/endurance fields are all VIEWS of this single result (no independent recompute).
+        result = MP.plan(mission, dem=dem, dem_origin=origin, algorithm=req.algorithm,
+                         objective=req.objective, vehicles=req.vehicles, with_acceptance=True)
         # I10: hauls routed around hazards on the real DEM; I8 + I6/M11 slope-feasible siting.
         with _REPORT_LOCK:                              # serialize the thread-unsafe matplotlib report path
             pdf, md, totals = MP.run(mission, stem=_plan_stem(payload), dem=dem, dem_origin=origin,
                                      algorithm=req.algorithm, objective=req.objective,
                                      vehicles=req.vehicles, result=result)
-        validation = MP.validate_plan(mission, dem=dem, dem_origin=origin)
+        validation = result.validation                  # RB-03: from the one result, not a recompute
         timeline = MP.build_timeline(mission, dem=dem, dem_origin=origin,
                                      algorithm=req.algorithm, objective=req.objective, result=result)
-        endurance = MP.endurance(mission, dem=dem, dem_origin=origin)
+        endurance = result.endurance
         autonomy, perception = _autonomy_perception(mission, dem, origin, req.algorithm, req.objective)
         plan_ir = MP.plan_ir(mission, dem=dem, dem_origin=origin,                # the machine-executable plan
                              algorithm=req.algorithm, objective=req.objective,
