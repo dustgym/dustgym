@@ -35,6 +35,17 @@ def test_ez_rassor_geometry_equals_the_render_globals():
     assert v.render_assets == ""                                    # "" -> the default godot_sidecar/assets/
 
 
+def test_rassor2_registered_with_sourced_specs_differing_from_ipex():
+    # RB-05/VT-02: a second vehicle with genuinely SOURCED specs (not fabricated) so vehicle selection
+    # drives the planner numbers. RASSOR 2.0: 65 kg, 2 large bucket drums x 24.98 kg, 43 cm wheels.
+    v = V.get_vehicle("rassor2")
+    assert v.dry_mass_kg == 65.0
+    assert math.isclose(v.drum_capacity_kg, round(2 * 24.98, 2))
+    assert math.isclose(v.wheel_radius_m, 0.215)         # 43 cm dia
+    assert math.isclose(v.gauge_m, 0.5207)               # sourced skid-steer track
+    assert v.drum_capacity_kg != V.get_vehicle("ipex").drum_capacity_kg   # a real cross-vehicle difference
+
+
 def test_ipex_geometry_is_flight_scale():
     v = V.get_vehicle("ipex")
     assert math.isclose(v.wheel_radius_m, S.WHEEL_RADIUS_M)         # 0.1524 m, sourced (30.5 cm dia)

@@ -60,7 +60,14 @@ DIG_RATE_KG_S   = S.DIG_RATE_KG_PER_HR / 3600.0         # 42 kg/hr
 DIG_J_PER_KG    = S.dig_energy_per_kg()                  # ~4151 J/kg (derived)
 DRIVE_J_PER_M   = S.drive_energy_per_m()                 # ~135 J/m (derived)
 BATTERY_J       = S.battery_energy_j()                   # ~4.79 MJ (12S/30Ah)
-DRUM_KG         = S.REGOLITH_PER_CYCLE_KG                # 30 kg/cycle
+DRUM_KG         = S.REGOLITH_PER_CYCLE_KG                # 30 kg/cycle (the ipex default; see _drum_kg)
+
+
+def _drum_kg(mission):
+    """RB-05: the per-cycle drum capacity [kg] of the mission's SELECTED vehicle (VehicleModel-driven),
+    so vehicle choice changes the planner numbers (loads / drum cycles / haul energy). The default
+    vehicle 'ipex' has drum_capacity_kg == DRUM_KG == 30, so an unspecified mission is byte-identical."""
+    return float(V.get_vehicle(mission.vehicle).drum_capacity_kg)
 SINTER_J_PER_KG = C.SINTER_ENERGY_J_PER_KG              # 0.92 MJ/kg [CALIB]
 SINTER_POWER_W  = S.SINTER_HEAD_POWER_W                  # 1000 W [CALIB]
 CHARGE_W        = S.RECHARGE_POWER_W                     # 700 W [CALIB]
@@ -305,6 +312,7 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
     rho = mission.density
     g = body_gravity(mission.body)                          # for haul lift energy (exact m*g*dh)
     _soil = mission_soil_params(mission)                    # soil model for the haul slip (soil override)
+    drum_kg = _drum_kg(mission)                             # RB-05: the selected vehicle's per-cycle drum
     flows, surplus_kg = balance(mission)
     sinters = [o for o in mission.orders if o.kind == "sinter"]
     if sinters and not C.SINTER_ENABLED:
@@ -329,7 +337,7 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
                               haul_m=0.0, haul_e=0.0, lift_e=0.0, dest=(co.x, co.y),
                               actions=frozenset({co.action})))
         else:
-            loads = max(1, math.ceil(mass / DRUM_KG))
+            loads = max(1, math.ceil(mass / drum_kg))
             leg = base = dist                           # one-way cut<->fill distance (straight line)
             if dem is not None:
                 leg, base, reached = routed_distance(dem, dem_origin, (co.x, co.y), (fo.x, fo.y),
@@ -346,7 +354,7 @@ def _build_trips(mission, dem, dem_origin, max_traverse_slope_deg):
             # weight-coupled: the loaded outbound leg (carrying ~DRUM_KG) slips more than the empty
             # return; each pays 1/(1-slip) per ground metre. (haul_m = out + back = 2*leg*loads.)
             out_m = back_m = leg * loads
-            slip_loaded = slip_alpha_to_slip(slope_haul, payload_kg=DRUM_KG, g=g, params=_soil)
+            slip_loaded = slip_alpha_to_slip(slope_haul, payload_kg=drum_kg, g=g, params=_soil)
             slip_empty = slip_alpha_to_slip(slope_haul, payload_kg=0.0, g=g, params=_soil)
             haul_e = (out_m * DRIVE_J_PER_M / (1.0 - slip_loaded)
                       + back_m * DRIVE_J_PER_M / (1.0 - slip_empty))
@@ -693,7 +701,7 @@ def _mission_totals(mission, trips, flows, surplus_kg, meta, core):
         sinter_kg=sum(o.mass_kg(mission.density) for o in mission.orders if o.kind == "sinter"),
         surplus_kg=surplus_kg,
         deficit_kg=sum(m for c, f, m, d in flows if c is None),
-        drum_cycles=sum(max(1, math.ceil(tr["mass"] / DRUM_KG)) for tr in trips if tr["kind"] == "cutfill"),
+        drum_cycles=sum(max(1, math.ceil(tr["mass"] / _drum_kg(mission))) for tr in trips if tr["kind"] == "cutfill"),
         lift_energy_J=float(sum(tr.get("lift_e", 0.0) for tr in trips)),
         routed_haul=meta["routed"], blocked_legs=meta["blocked_legs"], traverse_cap_deg=meta["traverse_cap_deg"],
         haul_detour_frac=(meta["routed_haul_m"] / meta["straight_haul_m"] - 1.0)
@@ -962,14 +970,14 @@ def plan_ir(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_s
         work_t = (tr.get("dig_t", 0.0) + tr.get("sinter_t", 0.0) + tr.get("haul_m", 0.0) / DRIVE_SPEED_MS)
         pre = {"battery_J_min": reserve_J}
         if op in _IR_DIG_OPS:
-            pre["drum_kg_max"] = round(DRUM_KG, 1)
+            pre["drum_kg_max"] = round(_drum_kg(mission), 1)
             pre["map_coverage_min"] = COVERAGE_DIG_GATE      # the survey-before-dig gate, as a precondition
         act = {
             "id": aid, "op": op, "vehicle": veh,
             "site": [round(site[0], 3), round(site[1], 3)],
             "dest": [round(tr["dest"][0], 3), round(tr["dest"][1], 3)],
             "mass_kg": round(float(tr.get("mass", 0.0)), 1),
-            "loads": (max(1, math.ceil(tr.get("mass", 0.0) / DRUM_KG)) if op == "CutHaulFill" else 0),
+            "loads": (max(1, math.ceil(tr.get("mass", 0.0) / _drum_kg(mission))) if op == "CutHaulFill" else 0),
             "haul_m": round(tr.get("haul_m", 0.0), 1),
             "actions": sorted(tr.get("actions", [])),
             "expect": {"energy_J": round(work_e, 1), "duration_s": round(work_t, 1)},
@@ -1666,7 +1674,7 @@ def report(mission, trips, flows, per_trip, tl, totals, out_pdf, out_md, endu=No
                f"  ·  surplus(spoil) {totals['surplus_kg']/1000:.1f} t  ·  deficit(import) {totals['deficit_kg']/1000:.1f} t"
                f"  ·  sinter {totals['sinter_kg']/1000:.2f} t")
         tot = (f"TOTALS   project {_dur(totals['time_s'])} ({th:.0f} h)   moved {totals['mass_kg']/1000:.1f} t"
-               f" ({totals['mass_kg']/DRUM_KG:.0f} drum loads)\n"
+               f" ({totals['mass_kg']/_drum_kg(mission):.0f} drum loads)\n"
                f"         energy {totals['energy_J']/1e6:.1f} MJ ({totals['energy_J']/BATTERY_J:.1f} charges,"
                f" {totals['charges']} recharge stops)   drive {totals['distance_m']/1000:.2f} km\n"
                f"         {totals['drum_cycles']} drum cycles; fill SENSED from motor current "
@@ -1752,7 +1760,7 @@ def report(mission, trips, flows, per_trip, tl, totals, out_pdf, out_md, endu=No
            f"surplus(spoil) {totals['surplus_kg']/1000:.1f} t · deficit(import) {totals['deficit_kg']/1000:.1f} t · "
            f"sinter {totals['sinter_kg']/1000:.2f} t", "", "## Totals",
            f"- Project time **{_dur(totals['time_s'])}** ({th:.0f} h) · moved **{totals['mass_kg']/1000:.1f} t** "
-           f"({totals['mass_kg']/DRUM_KG:.0f} drum loads)",
+           f"({totals['mass_kg']/_drum_kg(mission):.0f} drum loads)",
            f"- Energy **{totals['energy_J']/1e6:.1f} MJ** = {totals['energy_J']/BATTERY_J:.1f} charges "
            f"({totals['charges']} recharge stops) · drive {totals['distance_m']/1000:.2f} km"
            + (f" · incl. **{totals['lift_energy_J']/1e6:.2f} MJ** lifting regolith uphill (exact m·g·Δh, real DEM)"

@@ -116,6 +116,22 @@ def test_plan_ir_per_vehicle_no_position_leak():
         assert a["expect"]["distance_m"] == pytest.approx(expected, abs=0.02)   # starts at the charger
 
 
+def test_vehicle_selection_changes_the_planner_numbers():
+    # RB-05/VT-02: selecting a vehicle drives the planner numbers end to end. rassor2's larger sourced
+    # per-cycle drum (2 x 24.98 kg) vs ipex's 30 kg -> FEWER drum cycles + different haul energy for the
+    # same earthmoving. (No fabrication: rassor2's mass/drum/wheel/track are all sourced.)
+    orders = [{"action": "berm", "kind": "fill", "x": 50, "y": 40, "footprint_m2": 50, "depth_m": 0.3},
+              {"action": "cut", "kind": "cut", "x": 46, "y": 44, "footprint_m2": 50, "depth_m": 0.3}]
+
+    def _m(veh):
+        return MP.mission_from_dict({"name": "v", "body": "moon", "charger": [0, 0],
+                                     "vehicle": veh, "orders": orders})
+    ipex = MP.plan(_m("ipex")).totals
+    rassor2 = MP.plan(_m("rassor2")).totals
+    assert rassor2["drum_cycles"] < ipex["drum_cycles"]      # bigger drum -> fewer cycles
+    assert rassor2["energy_J"] != ipex["energy_J"]           # fewer haul loads -> different energy
+
+
 def test_fleet_per_vehicle_energy_sums_to_the_fleet_total():
     # RB-04: the per-vehicle energy ledger sums to the fleet total -- no cross-vehicle double-count/leak
     # (default IDLE_POWER_W=0, so the headline energy is exactly the sum of per-vehicle active energy).

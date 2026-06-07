@@ -135,6 +135,23 @@ VEHICLES = {
                    "the default Godot mesh + the rover.py globals describe. Energy/drum REUSE the "
                    "IPEx-grounded model -- EZ-RASSOR's own mass/power are not separately sourced and are NOT "
                    "fabricated here. Mirrors rover.WHEEL_GAUGE_M/WHEEL_BASE_M/WHEEL_RADIUS_M + CG_HEIGHT_M."),
+    "rassor2": Vehicle(
+        "rassor2", "RASSOR 2.0 (TRL-4 breadboard precursor)",
+        dry_mass_kg=65.0, n_wheels=4,                       # 65 kg dry mass [SCHULER22 BD-scaling]
+        wheel_width_m=0.18, contact_len_m=0.10,
+        # 2 counter-rotating LARGE bucket drums x 24.98 kg/drum (BD-scaling Table 3, the "RASSOR 2.0 drum")
+        # = ~50 kg/cycle, larger per-cycle than IPEx's 30 -> a genuinely SOURCED cross-vehicle difference.
+        drum_capacity_kg=round(2 * 24.98, 2),
+        drive_power_w=S.drive_power_w(), dig_energy_j_per_kg=S.dig_energy_per_kg(),   # energy reuses IPEx model
+        capabilities=frozenset({"drive", "excavate", "haul", "dump", "compact"}),
+        # 43 cm wheels (r 0.215) + 0.5207 m skid-steer track (Zhang wheel testing); wheelbase/CG [CALIB].
+        gauge_m=0.5207, wheelbase_m=0.45, wheel_radius_m=0.215, cg_height_m=0.34, render_assets="",
+        onboard_power=("ipex_battery",),
+        provenance="RASSOR 2.0 breadboard (Mueller 2016 / Schuler 2022 BD-scaling): dry mass 65 kg, large "
+                   "bucket drum 24.98 kg/drum x2, 43 cm wheels (r 0.215), 0.5207 m skid-steer track -- all "
+                   "SOURCED. wheelbase/CG [CALIB]. Energy reuses the IPEx model (RASSOR-2's own power not "
+                   "separately sourced; not fabricated). The TRL-4 precursor, registered so vehicle selection "
+                   "drives the planner numbers (its bigger per-cycle drum -> fewer drum cycles than IPEx)."),
 }
 
 DEFAULT_VEHICLE = "ipex"
