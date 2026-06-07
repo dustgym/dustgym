@@ -50,14 +50,14 @@ requirements:
   title: One immutable fleet-aware PlanResult consumed by all outputs
   priority: P0
   blocks_release: true
-  I: P
-  X: P
-  V: P
+  I: D
+  X: D
+  V: D
   Q: NA
   owner: active
   source: planet_browser/mission_planner.py (PlanResult, plan), planet_browser/server.py
   acceptance: planet_browser/test_plan_result.py
-  evidence: 54fabb4
+  evidence: 5b4c7e2
   blocked_by:
   - RB-01
   last_verified: '2026-06-06'
@@ -66,13 +66,13 @@ requirements:
   priority: P0
   blocks_release: true
   I: D
-  X: P
-  V: P
+  X: D
+  V: D
   Q: NA
   owner: active
   source: planet_browser/mission_planner.py (plan_ir prev_by_vehicle)
   acceptance: planet_browser/test_plan_result.py
-  evidence: aa766d6
+  evidence: 5b4c7e2
   blocked_by:
   - RB-03
   last_verified: '2026-06-06'
