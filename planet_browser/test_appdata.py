@@ -58,6 +58,22 @@ def test_profile_save_is_atomic_and_uses_the_data_dir(monkeypatch, tmp_path):
     assert leftovers == [], f"profile write left temp files: {leftovers}"   # atomic
 
 
+def test_dem_dir_env_locates_the_asset_explicitly(monkeypatch, tmp_path):
+    # RB-06 explicit asset mode: the (unpackaged) DEM bundle location is configurable.
+    monkeypatch.setenv("DUSTGYM_DEM_DIR", str(tmp_path / "haworth"))
+    assert MP._haworth_bundle() == str(tmp_path / "haworth")
+    monkeypatch.delenv("DUSTGYM_DEM_DIR", raising=False)
+    assert MP._haworth_bundle().endswith(os.path.join("samples", "lunar_dem", "haworth_10km_5m"))
+
+
+def test_moon_dem_degrades_cleanly_when_asset_absent(monkeypatch):
+    # a fresh wheel has no DEM bundle: _moon_dem degrades to a flat slope-check, it does NOT crash.
+    monkeypatch.setenv("DUSTGYM_DEM_DIR", "/nonexistent/dem/bundle")
+    monkeypatch.setattr(SRV, "_MOON_DEM", None)          # reset the cache
+    dem, origin = SRV._moon_dem()
+    assert dem is None and origin == (0.0, 0.0)
+
+
 def _run_all():
     print("run under pytest (uses fixtures)")
 
