@@ -95,14 +95,14 @@ requirements:
   title: Fresh-wheel server smoke; externalized data dirs; explicit asset mode
   priority: P0
   blocks_release: true
-  I: P
-  X: P
-  V: P
+  I: D
+  X: D
+  V: D
   Q: N
   owner: active
-  source: pyproject.toml (server extra), planet_browser/server.py
-  acceptance: planet_browser/test_server_install.py
-  evidence: d80cfdc
+  source: pyproject.toml (server extra), planet_browser/server.py, mission_planner.py (_haworth_bundle)
+  acceptance: planet_browser/test_server_install.py, test_appdata.py, test_fresh_wheel.py
+  evidence: 416cd1f
   blocked_by:
   - RB-02
   last_verified: '2026-06-06'
