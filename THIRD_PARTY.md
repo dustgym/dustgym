@@ -49,6 +49,25 @@ SOFTWARE.
 
 ---
 
+## NASA RASSOR rover mesh (3D Resources)
+
+- **Files:** `godot_sidecar/assets/rassor_nasa/rassor.glb` (the original NASA download, Draco-compressed)
+  and `rassor_godot.glb` (a decoded + decimated derivative for the vendored Godot, which lacks a Draco
+  plugin). The original is a single static `rassor_shrinkwrap` visual mesh (~0.85 × 0.94 × 1.66 m, real
+  RASSOR scale per the glTF POSITION accessor), not articulated parts.
+- **Source:** NASA Science 3D Resources — [science.nasa.gov/3d-resources/regolith-advanced-surface-systems-operations-robot-rassor](https://science.nasa.gov/3d-resources/regolith-advanced-surface-systems-operations-robot-rassor/).
+  Credit: **NASA/Dewey L. Smith; NASA/Jason M. Schuler** (the KSC Swamp Works / IPEx team).
+- **Status:** NASA's 3D Resources are published as **"free and without copyright"**
+  ([github.com/nasa/NASA-3D-Resources](https://github.com/nasa/NASA-3D-Resources)), subject to NASA's
+  media-usage guidelines (attribution; no implied NASA endorsement). A work of the U.S. Government,
+  treated as public-domain / CC0-compatible for this CC0-1.0 repo. The credit + no-endorsement notice
+  ride along here per those guidelines.
+- **Use:** RASSOR is the precursor to the modelled IPEx; this mesh is a static visual body for the
+  `rassor2` vehicle (the RASSOR-2.0 entry in `terrain_authority/vehicles.py`), not the articulated
+  per-part assembly the IPEx/EZ-RASSOR render path uses.
+
+---
+
 ## LOLA south-pole DEM tile (PGDA Product 78)
 
 - **File (committed):** the cropped 10 km @ 5 m Haworth sample tile under `samples/lunar_dem/` (a pixel-window crop of `Haworth_final_adj_5mpp_surf.tif`). The full 30 km source raster is **not** committed (lives gitignored under `.vendor/lola_raw/`).
