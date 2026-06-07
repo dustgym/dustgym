@@ -34,6 +34,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from terrain_authority import config as CFG               # PO-02: configurable application-data dirs
+from terrain_authority.io_fields import atomic_write_bytes  # PO-02/CT-04: atomic writes for profiles
 from . import adaptive_planner as ADP
 from . import autonomy as AUT
 from . import mission_planner as MP
@@ -66,8 +68,11 @@ except Exception as _prp_exc:   # noqa: BLE001 -- /render just becomes unavailab
 _HAWORTH = os.path.join(MP._REPO_ROOT, "samples", "lunar_dem", "haworth_10km_5m")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPORTS = os.path.join(HERE, "reports")
-PROFILES = os.path.join(HERE, "profiles")          # saved planning profiles (config snapshots), like reports/
+# PO-02/RB-06: reports + profiles live in the configurable application-data dir ($DUSTGYM_DATA_DIR,
+# else ~/.local/share/dustgym) -- NOT inside the (possibly read-only) installed package. Tests
+# monkeypatch these module-level vars to a tmp dir; run() writes reports to the same CFG.reports_dir().
+REPORTS = CFG.reports_dir()
+PROFILES = CFG.profiles_dir()                      # saved planning profiles (config snapshots), like reports/
 
 _CTYPE = {".html": "text/html; charset=utf-8", ".json": "application/json",
           ".pdf": "application/pdf", ".md": "text/markdown; charset=utf-8",
@@ -417,8 +422,8 @@ def post_profile(req: ProfileRequest, _auth: None = Depends(require_auth)):
     """Save a planning profile (the full config snapshot) under a slug of its name, to profiles/."""
     os.makedirs(PROFILES, exist_ok=True)
     slug = _profile_slug(req.name)
-    with open(os.path.join(PROFILES, slug + ".json"), "w") as fh:
-        json.dump({"name": req.name, "profile": req.profile}, fh, indent=2)
+    atomic_write_bytes(os.path.join(PROFILES, slug + ".json"),            # PO-02: atomic, no partial profile
+                       json.dumps({"name": req.name, "profile": req.profile}, indent=2).encode("utf-8"))
     return {"ok": True, "name": slug}
 
 

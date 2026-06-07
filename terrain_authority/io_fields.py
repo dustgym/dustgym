@@ -36,9 +36,10 @@ _FIELD_SPEC: dict[str, tuple[str, str]] = {
 }
 
 
-def _atomic_write_bytes(path: str, data: bytes) -> None:
+def atomic_write_bytes(path: str, data: bytes) -> None:
     """Write ``data`` to ``path`` atomically: a fsync'd ``.tmp`` sibling then an atomic os.replace
-    (CT-04). A reader never observes a partially written file."""
+    (CT-04 / PO-02). A reader never observes a partially written file. Shared utility (scene rasters,
+    metadata commit marker, and the server's reports/profiles)."""
     tmp = path + ".tmp"
     with open(tmp, "wb") as fh:
         fh.write(data)
@@ -76,8 +77,8 @@ def save_scene(scene_dir: str, fields: dict[str, np.ndarray], metadata: dict[str
         if name not in _FIELD_SPEC:
             continue  # ignore non-contract extras
         dtype, fname = _FIELD_SPEC[name]
-        _atomic_write_bytes(os.path.join(scene_dir, fname), arr.astype(dtype).tobytes())
-    _atomic_write_bytes(os.path.join(scene_dir, "metadata.json"),
+        atomic_write_bytes(os.path.join(scene_dir, fname), arr.astype(dtype).tobytes())
+    atomic_write_bytes(os.path.join(scene_dir, "metadata.json"),
                         json.dumps(metadata, indent=2).encode("utf-8"))
 
 

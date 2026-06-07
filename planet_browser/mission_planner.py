@@ -44,6 +44,7 @@ _REPO_ROOT = os.path.dirname(HERE)
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 import numpy as np                                      # for validate_plan (executes orders on the authority)
+from terrain_authority import config                    # PO-02: configurable application-data (reports) dir
 from terrain_authority import ipex_specs as S          # IPEx energy/battery (NTRS 20240008162) + planner knobs
 from terrain_authority import constants as C            # materials + the SINTER_ENABLED gate
 from terrain_authority import rassor_mass_model as RM   # ICE-RASSOR drum-fill sensing (NTRS 20210022781)
@@ -1826,10 +1827,11 @@ def run(mission: Mission, stem=None, *, dem=None, dem_origin=(0.0, 0.0), max_tra
                       max_traverse_slope_deg=max_traverse_slope_deg,
                       algorithm=algorithm, objective=objective, vehicles=vehicles)
     trips, flows, per_trip, tl, totals = result.as_tuple()
-    os.makedirs(os.path.join(HERE, "reports"), exist_ok=True)
+    rdir = config.reports_dir()                         # PO-02: configurable app-data dir (where the server serves from)
+    os.makedirs(rdir, exist_ok=True)
     stem = stem or f"{mission.date}_mission_plan"
-    pdf = os.path.join(HERE, "reports", f"{stem}.pdf")
-    md = os.path.join(HERE, "reports", f"{stem}.md")
+    pdf = os.path.join(rdir, f"{stem}.pdf")
+    md = os.path.join(rdir, f"{stem}.md")
     report(mission, trips, flows, per_trip, tl, totals, pdf, md,
            endu=endurance(mission, dem=dem, dem_origin=dem_origin))
     return pdf, md, totals

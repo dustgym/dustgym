@@ -120,4 +120,29 @@ def describe() -> dict:
         "config_file": os.environ.get(_CONFIG_ENV),
         "overrides": get_overrides(),
         "applied": {k: dict(v) for k, v in _APPLIED.items()},
+        "data_dir": data_dir(),
     }
+
+
+# ---- application-data directories (PRD PO-02 / RB-06) --------------------------------------
+# Reports, profiles, caches, and renders MUST live in a writable, configurable location -- NOT
+# inside the installed package (a wheel in site-packages is typically read-only). Resolved at call
+# time so a test (or deployment) can point $DUSTGYM_DATA_DIR at a scratch directory.
+def data_dir() -> str:
+    """The writable application-data root: ``$DUSTGYM_DATA_DIR``, else the XDG user-data dir
+    (``$XDG_DATA_HOME/dustgym`` or ``~/.local/share/dustgym``)."""
+    d = os.environ.get("DUSTGYM_DATA_DIR")
+    if d:
+        return d
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "dustgym")
+
+
+def reports_dir() -> str:
+    """Where mission-control reports (PDF/md) are written + served from (PO-02)."""
+    return os.path.join(data_dir(), "reports")
+
+
+def profiles_dir() -> str:
+    """Where saved planning profiles (config snapshots) live (PO-02)."""
+    return os.path.join(data_dir(), "profiles")
