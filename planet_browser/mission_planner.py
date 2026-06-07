@@ -991,6 +991,7 @@ def plan_ir(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_traverse_s
                    "distance_m": round(totals["distance_m"], 1), "charges": int(totals["charges"]),
                    "makespan_s": round(totals.get("makespan_s", totals["time_s"]), 1)},
         "acceptance": {"as_built_tol_m": 0.02, "recharge_is_precondition_driven": True},
+        "provenance": result.provenance,                # CT-07: schema/mode/config + input hash of the one plan
     }
 
 
@@ -1069,7 +1070,8 @@ def build_timeline(mission: Mission, *, dem=None, dem_origin=(0.0, 0.0), max_tra
             phase=s["kind"], batt0_frac=s["batt0"] / BATTERY_J, batt1_frac=s["batt1"] / BATTERY_J,
             cum_mass_kg=round(cum, 1)))
     return dict(duration_s=round(totals["time_s"], 3), battery_J=float(BATTERY_J),
-                charger=list(mission.charger), frames=frames)
+                charger=list(mission.charger), frames=frames,
+                provenance=result.provenance)            # CT-07: ties this playback to the one plan
 
 
 def _haworth_bundle(bundle_dir=None):

@@ -63,6 +63,18 @@ def test_provenance_hash_is_deterministic_and_input_sensitive():
     assert h3 != h1
 
 
+def test_plan_ir_and_timeline_carry_the_plan_provenance():
+    # CT-07: the machine-consumable Plan IR + the timeline playback both embed the one plan's provenance
+    # (schema/mode/config + input hash), so any emitted artifact is traceable to exactly its inputs.
+    m = _mission()
+    r = MP.plan(m)
+    ir = MP.plan_ir(m, result=r)
+    tl = MP.build_timeline(m, result=r)
+    assert ir["provenance"] == r.provenance
+    assert tl["provenance"]["input_sha256"] == r.provenance["input_sha256"]
+    assert ir["provenance"]["schema_version"] == MP.PLAN_RESULT_VERSION
+
+
 def _fleet_mission():
     # four distinct sites so the site-exclusive allocator can split them across two rovers
     return MP.mission_from_dict({
