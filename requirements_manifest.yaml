@@ -21,14 +21,14 @@ requirements:
   title: Reject non-finite/negative physical inputs; enforce authority-state invariants
   priority: P0
   blocks_release: true
-  I: P
-  X: P
-  V: P
+  I: D
+  X: D
+  V: D
   Q: NA
   owner: active
-  source: terrain_authority/validation.py, terrain_authority/column_state.py
-  acceptance: terrain_authority/test_validation.py
-  evidence: 3004a1e
+  source: terrain_authority/validation.py, terrain_authority/column_state.py, planet_browser/mission_planner.py
+  acceptance: terrain_authority/test_validation.py, planet_browser/test_mission_planner.py
+  evidence: 71ab6de
   blocked_by:
   - RB-02
   last_verified: '2026-06-06'
@@ -109,14 +109,14 @@ requirements:
 - id: CT-01
   title: Public numeric inputs enforce units, finiteness, physical domains
   priority: P0
-  I: P
-  X: P
+  I: D
+  X: D
   V: D
   Q: NA
   owner: active
   source: terrain_authority/validation.py
   acceptance: terrain_authority/test_validation.py
-  evidence: 3004a1e
+  evidence: 71ab6de
   blocked_by: []
   last_verified: '2026-06-06'
 - id: CT-02
