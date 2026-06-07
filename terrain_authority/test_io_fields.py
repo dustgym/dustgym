@@ -98,8 +98,8 @@ def test_roundtrip_raw_bytes_match_source(tmp_path, real_scene):
             assert fa.read() == fb.read(), f"{name} bytes differ from committed source"
 
 
-def test_metadata_written_first(tmp_path, real_scene):
-    """metadata.json is emitted (INTERFACE.md §6 "metadata first") and parses to the input."""
+def test_metadata_is_the_commit_marker(tmp_path, real_scene):
+    """metadata.json is emitted (the CT-04 commit marker) and parses back to the input."""
     fields, meta = real_scene
     out = str(tmp_path / "meta")
     save_scene(out, fields, meta)
@@ -108,6 +108,27 @@ def test_metadata_written_first(tmp_path, real_scene):
     with open(mpath) as fh:
         written = json.load(fh)
     assert written == meta
+
+
+def test_save_is_atomic_no_tmp_left(tmp_path, real_scene):
+    """CT-04: atomic publication leaves no `.tmp` siblings behind (each was os.replace'd into place)."""
+    fields, meta = real_scene
+    out = str(tmp_path / "atomic")
+    save_scene(out, fields, meta)
+    leftovers = [f for f in os.listdir(out) if f.endswith(".tmp")]
+    assert leftovers == [], f"atomic write left temp files: {leftovers}"
+
+
+def test_metadata_absence_means_incomplete_scene(tmp_path, real_scene):
+    """CT-04: with rasters present but the metadata commit marker missing (a crash mid-publish),
+    load_scene does NOT load a half-written snapshot -- it fails because the commit marker is absent."""
+    fields, meta = real_scene
+    out = str(tmp_path / "partial")
+    save_scene(out, fields, meta)
+    os.remove(os.path.join(out, "metadata.json"))         # simulate a crash before the commit marker
+    assert os.path.exists(os.path.join(out, "heightmap.rf32"))   # rasters are there...
+    with pytest.raises(FileNotFoundError):                # ...but no scene loads without the marker
+        load_scene(out)
 
 
 def test_save_missing_required_field_raises(tmp_path, real_scene):

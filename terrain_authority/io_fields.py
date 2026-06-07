@@ -9,8 +9,12 @@ Format (INTERFACE.md §2):
     .r8    unsigned 8-bit                  (numpy dtype 'u1'),  row-major C, no header.
     element k = row*width + col.
 
-metadata.json is written FIRST (INTERFACE.md §6 "Emit metadata.json first / atomically")
-so a consumer that sees it can trust the rasters it then opens.
+Publication is ATOMIC and crash-safe (PRD CT-04): every file is written to a ``.tmp`` sibling,
+fsync'd, then ``os.replace``'d into place (an atomic rename on POSIX), and metadata.json is the
+LAST file written -- the COMMIT MARKER. Its presence therefore guarantees every raster beside it
+is complete and valid; a crash mid-write leaves rasters without metadata, which load_scene treats
+as no scene (it never loads a half-written snapshot). The on-disk FORMAT and the read order are
+unchanged (load_scene still reads metadata then the rasters); only the write is now metadata-last.
 """
 
 from __future__ import annotations
@@ -32,12 +36,23 @@ _FIELD_SPEC: dict[str, tuple[str, str]] = {
 }
 
 
-def save_scene(scene_dir: str, fields: dict[str, np.ndarray], metadata: dict[str, Any]) -> None:
-    """Write one scene snapshot to ``scene_dir`` per INTERFACE.md §1.
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    """Write ``data`` to ``path`` atomically: a fsync'd ``.tmp`` sibling then an atomic os.replace
+    (CT-04). A reader never observes a partially written file."""
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)                              # atomic rename on POSIX (same directory)
 
-    metadata.json is written first; then each field is dumped as raw row-major bytes via
-    ``arr.astype(dtype).tofile(path)`` (already C-order from NumPy). REQUIRED fields
-    (INTERFACE.md §1): heightmap, mass_areal, density, disturbance, state_label.
+
+def save_scene(scene_dir: str, fields: dict[str, np.ndarray], metadata: dict[str, Any]) -> None:
+    """Publish one scene snapshot to ``scene_dir`` ATOMICALLY (PRD CT-04 / INTERFACE.md §1).
+
+    Each raster is written first (atomically), then metadata.json LAST as the commit marker, so its
+    presence guarantees every raster is complete. REQUIRED fields (INTERFACE.md §1): heightmap,
+    mass_areal, density, disturbance, state_label.
     """
     os.makedirs(scene_dir, exist_ok=True)
 
@@ -46,7 +61,8 @@ def save_scene(scene_dir: str, fields: dict[str, np.ndarray], metadata: dict[str
     if missing:
         raise ValueError(f"save_scene: missing REQUIRED fields {missing} (INTERFACE.md §1)")
 
-    # Validate every raster matches the grid dims from metadata (INTERFACE.md §6).
+    # Validate every raster matches the grid dims from metadata (INTERFACE.md §6) BEFORE any write,
+    # so a bad input never leaves a partial scene on disk.
     w = metadata["grid"]["width"]
     h = metadata["grid"]["height"]
     for name, arr in fields.items():
@@ -55,15 +71,14 @@ def save_scene(scene_dir: str, fields: dict[str, np.ndarray], metadata: dict[str
                 f"save_scene: field '{name}' shape {arr.shape} != (height,width)=({h},{w})"
             )
 
-    # metadata.json FIRST (INTERFACE.md §6).
-    with open(os.path.join(scene_dir, "metadata.json"), "w") as fh:
-        json.dump(metadata, fh, indent=2)
-
+    # Rasters FIRST (each atomic), metadata.json LAST = the atomic commit marker (CT-04).
     for name, arr in fields.items():
         if name not in _FIELD_SPEC:
             continue  # ignore non-contract extras
         dtype, fname = _FIELD_SPEC[name]
-        arr.astype(dtype).tofile(os.path.join(scene_dir, fname))
+        _atomic_write_bytes(os.path.join(scene_dir, fname), arr.astype(dtype).tobytes())
+    _atomic_write_bytes(os.path.join(scene_dir, "metadata.json"),
+                        json.dumps(metadata, indent=2).encode("utf-8"))
 
 
 def load_scene(scene_dir: str) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
