@@ -102,7 +102,7 @@ requirements:
   owner: active
   source: pyproject.toml (server extra), planet_browser/server.py
   acceptance: planet_browser/test_server_install.py
-  evidence: ''
+  evidence: d80cfdc
   blocked_by:
   - RB-02
   last_verified: '2026-06-06'
@@ -240,3 +240,16 @@ requirements:
   evidence: e4c2b48
   blocked_by: []
   last_verified: 2026-06-06
+- id: PO-02
+  title: Reports/profiles/caches use configurable app-data dirs + atomic writes
+  priority: P0
+  I: D
+  X: D
+  V: D
+  Q: NA
+  owner: active
+  source: terrain_authority/config.py (data_dir), planet_browser/server.py, planet_browser/mission_planner.py
+  acceptance: planet_browser/test_appdata.py
+  evidence: d80cfdc
+  blocked_by: []
+  last_verified: '2026-06-06'
