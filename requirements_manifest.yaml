@@ -148,17 +148,17 @@ requirements:
 - id: CT-04
   title: Scene publication writes rasters atomically, metadata last as commit marker
   priority: P0
-  I: N
-  X: N
-  V: N
+  I: D
+  X: P
+  V: D
   Q: NA
-  owner: unassigned
-  source: terrain_authority/io_fields.py
-  acceptance: ''
-  evidence: ''
+  owner: active
+  source: terrain_authority/io_fields.py (save_scene atomic)
+  acceptance: terrain_authority/test_io_fields.py
+  evidence: 9a8903d
   blocked_by:
   - RB-01
-  last_verified: 2026-06-06
+  last_verified: '2026-06-06'
 - id: CT-05
   title: Python/Godot/ROS share a versioned, strictly-validated schema
   priority: P0
