@@ -1,0 +1,42 @@
+# docker-compose v1 (this host: `docker-compose`, NOT `docker compose`).
+#   docker-compose build
+#   docker-compose up                 # BATCH demo: flight stack + ground station run the Haworth traverse
+#   docker-compose up flight          # HITL: just the rover stack; run the operator console on the HOST:
+#                                     #   python scripts/ccsds_ros_nav/console_server.py --port 8080
+#   docker-compose run --rm flight bash     # interactive
+#
+# host networking so the CCSDS/UDP link (52000/52001) and ROS 2 DDS share the loopback without NAT.
+# The GPU work (stereo egress, the HITL console's camera render) runs on the HOST (Godot+Vulkan), same
+# split as scripts/ros2_bridge; the container is the rover, the host is Earth. For HITL the console owns
+# the adjustable latency, so the bridge runs delay-free (light_time_s=0).
+version: "3.8"
+
+services:
+  flight:
+    build: .
+    image: foss_ipex/ccsds_ros_nav:jazzy
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=7
+      - MPLBACKEND=Agg
+    volumes:
+      - ../../:/work:ro                       # repo: terrain_authority, samples, scripts (read-only)
+      - ../../out:/work/out:rw                # telemetry + artifacts (writable, nested over the ro mount)
+    command: ["ros2", "launch", "/work/scripts/ccsds_ros_nav/nodes/nav_bringup.launch.py",
+              "body:=moon", "win:=160", "light_time_s:=0.0", "time_factor:=1.0"]
+
+  ground:
+    build: .
+    image: foss_ipex/ccsds_ros_nav:jazzy
+    network_mode: host
+    depends_on:
+      - flight
+    environment:
+      - ROS_DOMAIN_ID=7
+      - MPLBACKEND=Agg
+    volumes:
+      - ../../:/work:ro
+      - ../../out:/work/out:rw
+    command: ["python3", "/work/scripts/ccsds_ros_nav/ground_station_main.py",
+              "--bridge-host", "127.0.0.1", "--light-time-s", "1.28", "--out", "/work/out/ccsds_nav",
+              "--start", "47,56", "--goal", "95,95", "--waypoints", "4"]

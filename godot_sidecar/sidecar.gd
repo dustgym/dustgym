@@ -191,6 +191,14 @@ var _seq_stride := 2
 # of the static demo offset, so single-frame rover renders stay unchanged.
 var _rover_rc_override := Vector2i(-1, -1)
 var _rover_yaw := 0.0
+# --lander-rc r,c (single-frame --cameras): place the AprilTag lander at a FIXED grid cell (a stationary
+# world landmark the rover drives away from) instead of glued standoff-ahead of the rover. (-1,-1) = off.
+var _lander_rc := Vector2i(-1, -1)
+# --chase-cam (single-frame --cameras): instead of the 8-camera rover rig, render ONE trailing
+# third-person ("coach") view of the rover from behind+above+side and save chase.png. This is the
+# external sim-manager vantage (the rover's own cameras cannot see themselves), so it shows the rover
+# sitting on the terrain, its heading, and its tracks. Operationally "cheating" — opt-in, off here.
+var _chase_cam := false
 # Terrain-conform tilt (rover-physics pass): the surface normal the rover's local +Y is
 # tilted onto in _build_rover. Vector3.UP (the default) = flat -> non-conform paths render
 # byte-identically. Set per frame by the spiral drivers from the drive_spiral.py pose track.
@@ -568,6 +576,15 @@ func _parse_args() -> void:
 				i += 1; _rover_wheelbase = float(args[i])
 			"--cam-pitch":
 				i += 1; _cam_pitch_deg = float(args[i])
+			"--rover-yaw":
+				i += 1; _rover_yaw = float(args[i])
+			"--chase-cam":
+				_chase_cam = true
+			"--lander-rc":
+				i += 1
+				var lrc := String(args[i]).split(",")
+				if lrc.size() == 2:
+					_lander_rc = Vector2i(int(lrc[0]), int(lrc[1]))
 			_:
 				push_warning("sidecar: unknown arg '%s'" % a)
 		i += 1
@@ -773,11 +790,35 @@ func _cameras_capture() -> void:
 	# Delegate the procedural lander build into the shared sink (SensorsEmit). Pass the
 	# sidecar's live --lander-standoff / --lander-yaw tuning + the preloaded AprilTagGen
 	# so the behavior is unchanged from the in-sidecar _build_lander it replaced.
-	var lander_root := SensorsEmitScript.build_lander(
-		self, sf, AprilTagGenScript, rover_xf.origin, fwd, _lander_standoff, _lander_yaw_deg)
+	# Lander placement: a FIXED world cell (a landmark the rover drives away from) when --lander-rc is
+	# given, else the legacy standoff-ahead placement (the AprilTag-localization default). Fixed makes
+	# the camera feed move WITH the rover instead of looking pinned to a glued-ahead lander.
+	var lander_root: Node3D
+	if _lander_rc.x >= 0:
+		var lu: float = float(_lander_rc.y) / float(max(1, sf.width - 1))
+		var lv: float = float(_lander_rc.x) / float(max(1, sf.height - 1))
+		var lx: float = sf.world_min.x + lu * sf.extent_m().x
+		var lz: float = sf.world_min.y + lv * sf.extent_m().y
+		var to_l: Vector3 = Vector3(lx, 0.0, lz) - Vector3(rover_xf.origin.x, 0.0, rover_xf.origin.z)
+		var sd: float = maxf(to_l.length(), 0.01)
+		var lfwd: Vector3 = to_l.normalized() if to_l.length() > 1e-5 else fwd
+		lander_root = SensorsEmitScript.build_lander(
+			self, sf, AprilTagGenScript, rover_xf.origin, lfwd, sd, _lander_yaw_deg)
+	else:
+		lander_root = SensorsEmitScript.build_lander(
+			self, sf, AprilTagGenScript, rover_xf.origin, fwd, _lander_standoff, _lander_yaw_deg)
+
+	var world := get_viewport().world_3d
+
+	# --chase-cam: render ONE trailing third-person "coach" view of the rover and stop. The rover's
+	# own rig cameras cannot see the rover; this external vantage (behind+above+side, looking at the
+	# rover) shows it sitting on the terrain with its heading + tracks. Reuses the sequence-mode
+	# trailing-camera framing (TRAIL_* consts). Writes chase.png only (no sensors.json).
+	if _chase_cam:
+		await _chase_capture(rover_xf.origin, fwd)
+		return
 
 	# Build the front-stereo cameras (shared World3D SubViewports riding the rover).
-	var world := get_viewport().world_3d
 	var cams: Array = CameraRigScript.build(self, rover_root, world, _viewport_size, _cam_pitch_deg)
 
 	# Let the subviewports render a few times (first frame can sample a stale buffer).
@@ -818,6 +859,50 @@ func _cameras_capture() -> void:
 	jf.close()
 	print("sidecar: --cameras wrote %s (baseline_m=%.4f)" % [
 		ProjectSettings.globalize_path(json_path), doc["stereo"]["baseline_m"]])
+
+# Trailing third-person "coach" camera (--chase-cam): one SubViewport view from behind+above+side
+# of the rover, looking just past it, so the sim manager sees the rover on the terrain (heading +
+# tracks). Same shared-World3D SubViewport mechanism as the rig; same TRAIL_* framing as the
+# sequence-mode chase. Writes out/cam/<scene>/000/chase.png. No sensors.json (external view, not a
+# rover sensor — it never feeds COLMAP).
+func _chase_capture(rover_pos: Vector3, fwd: Vector3) -> void:
+	var world := get_viewport().world_3d
+	# Coach view is an EXTERNAL sim-manager vantage (the rover's own cams cannot see it). It shares the
+	# SAME faithful lighting as the rover sensors — single hard sun, real cast shadows — so the manager
+	# sees the rover casting its shadow on lit regolith. (No fill light: terrain now lights correctly
+	# in the local render frame; a fill would only wash out the rover's shadow the operator wants.)
+	var side := Vector3(-fwd.z, 0.0, fwd.x)                              # perpendicular in XZ
+	var cam_pos: Vector3 = rover_pos - fwd * TRAIL_M + side * TRAIL_SIDE_M \
+		+ Vector3(0.0, TRAIL_HEIGHT_M, 0.0)
+	var look_at: Vector3 = rover_pos + fwd * 0.10 + Vector3(0.0, 0.25, 0.0)
+
+	var sv := SubViewport.new()
+	sv.size = _viewport_size
+	sv.world_3d = world
+	sv.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	sv.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	add_child(sv)
+	var cam := Camera3D.new()
+	cam.fov = TRAIL_FOV
+	cam.near = 0.02
+	cam.far = 100.0
+	sv.add_child(cam)
+	cam.look_at_from_position(cam_pos, look_at, Vector3.UP)
+	cam.current = true
+
+	for _w in range(3):
+		await RenderingServer.frame_post_draw
+
+	var out_dir := "res://out/cam/%s/000" % sf.scene_name
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out_dir))
+	var img: Image = sv.get_texture().get_image()
+	var path := "%s/chase.png" % out_dir
+	var err := img.save_png(path)
+	if err != OK:
+		push_error("sidecar: --chase-cam save_png failed (%d) for %s" % [err, path])
+	else:
+		print("sidecar: --chase-cam wrote %s (%dx%d)" % [
+			ProjectSettings.globalize_path(path), img.get_width(), img.get_height()])
 
 # Find the rover root added by _build_rover(): the articulated path names it
 # "RASSOR". The chassis-only fallback adds an unnamed glTF scene root directly to
