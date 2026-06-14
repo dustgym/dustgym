@@ -1,3 +1,12 @@
+> # This project has moved and is archived
+>
+> **dustgym is retired.** Active development continues as **STEWIE**:
+> **https://github.com/stewie-sw/stewie** (docs: https://stewie-sw.github.io/stewie/).
+> This repository is archived and read-only; its full commit history was imported into the
+> STEWIE monorepo. The old documentation site (dustgym.github.io/dustgym) has been turned off.
+
+---
+
 # dustgym
 
 [![CI](https://github.com/dustgym/dustgym/actions/workflows/ci.yml/badge.svg)](https://github.com/dustgym/dustgym/actions/workflows/ci.yml)
